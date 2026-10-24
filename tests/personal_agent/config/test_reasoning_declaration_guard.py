@@ -299,7 +299,8 @@ class TestOpenSelectionWalksEverySelectableEntry:
         study deployments, raising it to eight. FRE-1517 stage 2 added the Gemma
         study deployment, raising it to nine. FRE-1625 added gpt-6-luna,
         gpt-6.1-sol and claude_haiku_5_5, raising it to twelve. FRE-1631 added
-        claude_sonnet_5_5, raising it to thirteen.
+        claude_sonnet_5_5, raising it to thirteen. FRE-1680 added glm-5.3-scaleway
+        and deepseek-v4.1-flash-scaleway, raising it to fifteen.
         """
         catalog = _load_yaml(_REPO_ROOT / "config" / "models.yaml")
         bindings = load_matrix(_REPO_ROOT).get("bindings")
@@ -319,6 +320,8 @@ class TestOpenSelectionWalksEverySelectableEntry:
             "gpt-6.1-sol",
             "claude_haiku_5_5",
             "claude_sonnet_5_5",
+            "glm-5.3-scaleway",
+            "deepseek-v4.1-flash-scaleway",
         }
 
     def test_an_open_selectable_unbound_model_is_walked_and_clean(self) -> None:

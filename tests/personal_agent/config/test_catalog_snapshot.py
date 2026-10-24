@@ -268,6 +268,13 @@ the FRE-1640 study, F4: Sol was not worse than Sonnet on 20 of 20 blind pairs (b
 role binding, resolved key, existing concurrency cell or price changed.**
 ``test_fre1646_captains_log_binding.py`` asserts the binding.
 
+**Rebaselined a sixteenth time, deliberately, for FRE-1680.** Hand-edited, not regenerated, for the
+same reasons as the fourteenth. Five cells are added and none changes: the ``scaleway`` provider
+concurrency cell (50), the model concurrency cells for ``glm-5.3-scaleway`` and
+``deepseek-v4.1-flash-scaleway`` (10 each), and the pricing cells for ``scaleway/glm-5.3`` and
+``scaleway/deepseek-v4.1-flash``. **No resolution cell moved: no role binds either model.**
+``test_fre1680_scaleway.py`` asserts that and the prices.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

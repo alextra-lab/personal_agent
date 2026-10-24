@@ -59,7 +59,8 @@ class Dialect(str, Enum):
     :class:`ModelDefinition` that disagrees with its provider — the Anthropic case,
     where Sonnet 5 and Haiku 4.5 share a provider entry but speak different
     dialects (FRE-1430 F6). Five dialects cover every declared chat model measured
-    by FRE-1430: no two of the five agree on what they accept.
+    by FRE-1430: no two of the five agree on what they accept. ``scaleway`` (FRE-1680)
+    is a sixth, added for Scaleway Generative APIs.
     """
 
     LLAMACPP_QWEN = "llamacpp_qwen"
@@ -67,6 +68,7 @@ class Dialect(str, Enum):
     OPENAI_GPT5 = "openai_gpt5"
     ANTHROPIC_ADAPTIVE = "anthropic_adaptive"
     ANTHROPIC_BUDGET = "anthropic_budget"
+    SCALEWAY = "scaleway"
 
 
 class ModeSpec(BaseModel):
@@ -167,6 +169,13 @@ DIALECT_FIELDS: dict[Dialect, frozenset[str]] = {
     ),
     Dialect.ANTHROPIC_ADAPTIVE: frozenset({"effort"}),
     Dialect.ANTHROPIC_BUDGET: frozenset({"budget_tokens", "temperature", "top_p", "top_k"}),
+    # FRE-1680: Scaleway's documented chat parameters minus the ones it lists as
+    # unsupported (frequency_penalty, n, top_logprobs, logit_bias, user). Its thinking
+    # lever is reasoning_effort: chat_template_kwargs and thinking changed nothing in
+    # master's probe of 2026-10-24.
+    Dialect.SCALEWAY: frozenset(
+        {"reasoning_effort", "temperature", "top_p", "presence_penalty", "seed"}
+    ),
 }
 
 #: Per-dialect value restrictions narrower than the field's own type (ADR-0145
@@ -179,6 +188,10 @@ DIALECT_VALUE_DOMAINS: dict[Dialect, dict[str, frozenset[str]]] = {
     Dialect.OPENAI_GPT5: {
         "reasoning_effort": frozenset({"none", "low", "medium", "high", "xhigh"})
     },
+    # FRE-1680: no off value, because the probe found no off switch. Only `low` is
+    # measured (it cut GLM's reasoning from 26 to 6 tokens). `medium` and `high` are
+    # the OpenAI-standard values and are checked on the deployed path (AC-3).
+    Dialect.SCALEWAY: {"reasoning_effort": frozenset({"low", "medium", "high"})},
 }
 
 
@@ -201,6 +214,10 @@ DIALECT_VALUE_DOMAINS: dict[Dialect, dict[str, frozenset[str]]] = {
 #:   latency: 0.85 s retained against 5.90 s dropped, the same direction and
 #:   magnitude. Both emitted no tool call under ``tool_choice="none"``.
 #:
+#: - ``SCALEWAY`` — ``False``, not probed (FRE-1680). Scaleway documents ``tool_choice``
+#:   as supported, but ``"none"`` beside a retained ``tools`` array was not tried. The
+#:   drop-tools form costs a cache miss on the synthesis call. Flip it with a measurement.
+#:
 #: A dialect declared ``False`` gets the drop-tools form with the miss logged. A
 #: provider that rejects ``tool_choice="none"`` at runtime despite a ``True``
 #: declaration is a configuration defect, not a reason to retry without tools.
@@ -210,6 +227,7 @@ SYNTHESIS_RETAINS_TOOLS: Mapping[Dialect, bool] = {
     Dialect.OPENAI_GPT5: True,
     Dialect.ANTHROPIC_ADAPTIVE: True,
     Dialect.ANTHROPIC_BUDGET: True,
+    Dialect.SCALEWAY: False,
 }
 
 
@@ -257,6 +275,8 @@ def synthesis_retains_tools(dialect: Dialect | None) -> bool:
 #: - ``ANTHROPIC_ADAPTIVE`` / ``ANTHROPIC_BUDGET`` — ``False`` until probed.
 #:   Anthropic's structured outputs use ``output_config.format``, and whether
 #:   litellm translates ``response_format`` for that dialect is not known.
+#: - ``SCALEWAY`` — ``False`` until probed (FRE-1680). Scaleway documents
+#:   ``response_format`` as supported, but not with ``tools`` and ``tool_choice="none"``.
 #:
 #: A ``False`` dialect gets the prose landing (``report = None``,
 #: ``report_schema = None``) with a WARNING naming the provider.
@@ -266,6 +286,7 @@ LANDING_ACCEPTS_JSON_SCHEMA: Mapping[Dialect, bool] = {
     Dialect.OPENAI_GPT5: True,
     Dialect.ANTHROPIC_ADAPTIVE: False,
     Dialect.ANTHROPIC_BUDGET: False,
+    Dialect.SCALEWAY: False,
 }
 
 
@@ -307,8 +328,8 @@ def landing_accepts_json_schema(dialect: Dialect | None) -> bool:
 #:   appended message did not break the cache.
 #: - ``LLAMACPP_QWEN`` / ``OVH_QWEN`` — ``False`` by construction, not probed: the schema
 #:   becomes a sampling grammar and the prompt tokens do not change.
-#: - ``ANTHROPIC_ADAPTIVE`` / ``ANTHROPIC_BUDGET`` — ``False``: they take the prose
-#:   landing (:data:`LANDING_ACCEPTS_JSON_SCHEMA`), so no schema is sent.
+#: - ``ANTHROPIC_ADAPTIVE`` / ``ANTHROPIC_BUDGET`` / ``SCALEWAY`` — ``False``: they take
+#:   the prose landing (:data:`LANDING_ACCEPTS_JSON_SCHEMA`), so no schema is sent.
 #:
 #: A ``True`` dialect sends the schema as text in a trailing user message instead, and
 #: the landing's reply is scored by the same parse and validate backstop.
@@ -318,6 +339,7 @@ LANDING_SCHEMA_BREAKS_PREFIX_CACHE: Mapping[Dialect, bool] = {
     Dialect.OPENAI_GPT5: True,
     Dialect.ANTHROPIC_ADAPTIVE: False,
     Dialect.ANTHROPIC_BUDGET: False,
+    Dialect.SCALEWAY: False,
 }
 
 

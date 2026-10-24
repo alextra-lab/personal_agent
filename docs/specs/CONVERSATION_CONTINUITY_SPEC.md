@@ -171,6 +171,12 @@ log.info(
 )
 ```
 
+As built, `total_messages_in_db` counts the history after the service's window cut
+(`conversation_max_history_messages`), so it never exceeds the window. The event also carries
+`stored_messages_before_window` (the stored count before the cut) and `messages_dropped_by_window`
+(the cut, on every path). `messages_truncated` counts only `step_init`'s own
+`apply_context_window` call (FRE-1673).
+
 ---
 
 ## Files to create/modify

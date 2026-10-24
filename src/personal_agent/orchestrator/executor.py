@@ -3145,6 +3145,8 @@ def _emit_conversation_context_loaded(
     messages_loaded: int,
     messages_truncated: int,
     estimated_tokens: int,
+    stored_messages_before_window: int,
+    messages_dropped_by_window: int,
 ) -> None:
     """Log the per-turn record of what history ``step_init`` loaded (FRE-945).
 
@@ -3154,9 +3156,11 @@ def _emit_conversation_context_loaded(
 
     Args:
         ctx: Execution context for the turn.
-        total_messages_in_db: Message count from the persisted session, before this turn's
-            message is appended (``0`` when there is no persisted session, e.g. the
-            gateway-driven path with no prior session load).
+        total_messages_in_db: Message count from the session ``step_init`` loaded, before this
+            turn's message is appended. That session already went through the service's
+            history window, so this count never exceeds the window — read
+            ``stored_messages_before_window`` for the stored count. ``0`` when there is no
+            persisted session, e.g. the gateway-driven path with no prior session load.
         messages_loaded: ``len(ctx.messages)`` at the point of the call — includes this
             turn's just-appended user message, so it is one more than
             ``total_messages_in_db`` for a persisted session with no truncation.
@@ -3167,6 +3171,11 @@ def _emit_conversation_context_loaded(
             ``apply_context_window`` never runs report this as ``0`` — a real structural
             fact (nothing to truncate), not a placeholder standing in for missing data.
         estimated_tokens: Estimated token count of ``ctx.messages`` at the point of the call.
+        stored_messages_before_window: Messages stored for the session before the service cut
+            them to ``conversation_max_history_messages`` (FRE-1673). ``0`` when there is no
+            persisted session.
+        messages_dropped_by_window: Messages that history window cut (FRE-1673). Unlike
+            ``messages_truncated``, this is measured on every path.
     """
     log.info(
         "conversation_context_loaded",
@@ -3176,6 +3185,8 @@ def _emit_conversation_context_loaded(
         messages_loaded=messages_loaded,
         messages_truncated=messages_truncated,
         estimated_tokens=estimated_tokens,
+        stored_messages_before_window=stored_messages_before_window,
+        messages_dropped_by_window=messages_dropped_by_window,
     )
 
 
@@ -5498,10 +5509,12 @@ async def step_init(
     """
     # Load session and build message history
     session_message_count = 0
+    messages_dropped_by_window = 0
     session = session_manager.get_session(ctx.session_id)
     if session:
         ctx.messages = list(session.messages)
         session_message_count = len(ctx.messages)
+        messages_dropped_by_window = session.messages_dropped_by_window
 
     # ADR-0156 A5.4 (FRE-1595): the skill-provided tools this session revealed, read once
     # per turn. A reveal in a concurrent turn of the session shows at the next turn.
@@ -5720,6 +5733,8 @@ async def step_init(
             messages_loaded=len(ctx.messages),
             messages_truncated=0,
             estimated_tokens=estimate_messages_tokens(ctx.messages),
+            stored_messages_before_window=session_message_count + messages_dropped_by_window,
+            messages_dropped_by_window=messages_dropped_by_window,
         )
         # Use pre-assembled memory context.
         # FRE-1004: candidates are taken unconditionally — when Stage 7 dropped the
@@ -6151,6 +6166,8 @@ async def step_init(
         messages_loaded=len(ctx.messages),
         messages_truncated=max(0, input_messages_count - len(ctx.messages)),
         estimated_tokens=estimated_tokens,
+        stored_messages_before_window=session_message_count + messages_dropped_by_window,
+        messages_dropped_by_window=messages_dropped_by_window,
     )
 
     # Query memory graph for relevant context (Phase 2.2)

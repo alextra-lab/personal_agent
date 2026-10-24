@@ -22,6 +22,8 @@ class Session:
         mode: Operational mode for this session.
         channel: Communication channel (CHAT, CODE_TASK, SYSTEM_HEALTH).
         messages: OpenAI-style chat history (system, user, assistant, tool).
+        messages_dropped_by_window: Stored messages the history window cut before they
+            reached ``messages`` (FRE-1673). ``0`` when nothing was cut.
         metadata: Additional session metadata (user preferences, etc.).
         created_at: UTC timestamp when session was created.
         last_active_at: UTC timestamp of last activity.
@@ -31,6 +33,7 @@ class Session:
     mode: Mode
     channel: Channel
     messages: list[dict[str, Any]] = field(default_factory=list)
+    messages_dropped_by_window: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_active_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -93,13 +96,21 @@ class SessionManager:
             session.last_active_at = datetime.now(UTC)
         return session
 
-    def update_session(self, session_id: str, messages: list[dict[str, Any]] | None = None) -> None:
+    def update_session(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]] | None = None,
+        messages_dropped_by_window: int = 0,
+    ) -> None:
         """Update session conversation history.
 
         Args:
             session_id: The session identifier.
             messages: Optional new messages list to replace existing messages.
                 If None, only updates last_active_at timestamp.
+            messages_dropped_by_window: Stored messages the history window cut from
+                ``messages``. Applied only when ``messages`` is given, so a replacement
+                without a count resets it to ``0``.
 
         Raises:
             ValueError: If session_id not found.
@@ -109,6 +120,7 @@ class SessionManager:
             raise ValueError(f"Session {session_id} not found")
         if messages is not None:
             session.messages = messages
+            session.messages_dropped_by_window = messages_dropped_by_window
         session.last_active_at = datetime.now(UTC)
 
     def list_active_sessions(self) -> list[Session]:

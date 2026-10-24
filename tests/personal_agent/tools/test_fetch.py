@@ -903,7 +903,9 @@ async def test_pdf_body_returns_its_text_not_its_bytes(content_type: str) -> Non
         (b"\x1f\x8b\x08\x00" + b"\x00" * 20, "gzip data"),
         (b"\x7fELF\x02\x01\x01" + b"\x00" * 20, "ELF executable"),
         (b"MZ\x90\x00\x03\x00\x00\x00" + b"\x00" * 20, "binary data"),
-        (b"BZh91AY&SY" + b"\x00" * 20, "binary data"),
+        # No NUL byte anywhere: the signature alone must refuse these.
+        (b"BZh91AY&SY" + bytes(range(1, 60)), "bzip2 data"),
+        (b"\x28\xb5\x2f\xfd" + bytes(range(1, 60)), "Zstandard data"),
     ],
 )
 async def test_binary_body_raises_a_typed_error_that_names_the_type(
@@ -921,7 +923,7 @@ async def test_binary_body_raises_a_typed_error_that_names_the_type(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "text",
-    ["MZ-300 was a computer.", "PK is a tag.", "café ü"],
+    ["MZ-300 was a computer.", "PK is a tag.", "BZhang is a name.", "café ü"],
 )
 async def test_text_that_looks_like_a_signature_is_still_text(text: str) -> None:
     """A text page that starts with a magic-byte lookalike is not refused."""

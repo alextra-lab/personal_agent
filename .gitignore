@@ -289,3 +289,6 @@ scripts/study/snapshots/
 # calibration transcripts. Session text and per-call dumps, never committed — only
 # the curated write-up under docs/research/ and the hand-authored reference sets are.
 telemetry/fre994_curve/
+
+# FRE-1668 artifact builder side-by-side: generated pages, screenshots, ratings (real origin inside)
+telemetry/evaluation/fre1668-artifact-builder-ab/

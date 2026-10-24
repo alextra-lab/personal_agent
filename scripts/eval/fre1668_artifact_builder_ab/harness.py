@@ -41,6 +41,7 @@ import statistics
 import subprocess  # nosec B404 — fixed argv, no shell
 import sys
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -60,6 +61,7 @@ REPO = HERE.parents[2]
 OUT_DIR = Path("telemetry/evaluation/fre1668-artifact-builder-ab")
 HTML_DIR = OUT_DIR / "html"
 RENDER_JS = HERE / "render_check.mjs"
+LIB_MAP = REPO / "config/artifact_lib_substitution_map.json"
 SUITE = HERE.parent / "fre1615" / "suite.yaml"
 
 #: Arm name to catalog key. ``A2`` repeats ``A``: the gap between them is the noise band.
@@ -78,6 +80,7 @@ EVAL_DB = (
 )  # fre-375-allow: the eval Postgres, the only database this harness may use
 DB_BINDINGS = ("settings", "cost_tracker", "engine")
 PROD_PG_CONTAINER = "cloud-sim-postgres"
+EVAL_PG_CONTAINER = "cloud-sim-postgres-eval"
 PLAN_MAX_TOKENS = 6000
 WORST_CASE_USD_PER_BUILD = Decimal("0.40")  # 32,768 output tokens at $10/MTok, plus input
 WORST_CASE_USD_PER_PLAN = Decimal("0.15")
@@ -128,6 +131,7 @@ class Plan:
     summary: str
     plan: str
     cost_usd: float = 0.0
+    trace_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -240,25 +244,56 @@ union all select 'api_costs', count(*), coalesce(max(timestamp)::text, '') from 
 """
 
 
+def _psql(container: str, sql: str) -> list[list[str]]:
+    """Run one read-only statement inside a Postgres container. Credentials stay in the container."""
+    # fre-375-allow: read-only SELECT; production is read for the AC-6 proof
+    proc = subprocess.run(  # nosec B603 B607 — fixed argv, no user input
+        [
+            "docker", "exec", "-i", container, "sh", "-c",
+            'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F "|"',
+        ],
+        input=sql, capture_output=True, text=True, timeout=60, check=True,
+    )  # fmt: skip
+    return [line.split("|") for line in proc.stdout.splitlines()]
+
+
 def prod_counts() -> dict[str, dict[str, object]]:
-    """Read production row counts. Read only; the credentials stay inside the container.
+    """Read production row counts. Read only.
 
     Returns:
         Table name to ``{"count": n, "newest": timestamp}``.
     """
-    # fre-375-allow: a read-only SELECT on production is the AC-6 proof
-    proc = subprocess.run(  # nosec B603 B607 — fixed argv, no user input
-        [
-            "docker", "exec", "-i", PROD_PG_CONTAINER, "sh", "-c",
-            'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F "|"',
-        ],
-        input=_PROD_SQL, capture_output=True, text=True, timeout=60, check=True,
-    )  # fmt: skip
-    out: dict[str, dict[str, object]] = {}
-    for line in proc.stdout.splitlines():
-        table, count, newest = line.split("|")
-        out[table] = {"count": int(count), "newest": newest}
-    return out
+    return {t: {"count": int(c), "newest": n} for t, c, n in _psql(PROD_PG_CONTAINER, _PROD_SQL)}
+
+
+def trace_hits(container: str, trace_ids: Sequence[str]) -> dict[str, int]:
+    """Count the rows that carry the harness's trace ids, in one database.
+
+    ``budget_reservations`` is the positive control: the cost gate writes one row per paid call to
+    the database it is connected to. ``api_costs`` stays empty on purpose, because a call with no
+    session or user identity records no cost row.
+
+    Args:
+        container: The Postgres container to read.
+        trace_ids: Trace ids of every paid call the harness made. Each must be a UUID.
+
+    Returns:
+        Table name to row count. Production must give 0 in both (AC-6). The eval database must
+        give one ``budget_reservations`` row per trace id, which proves the query can see the rows.
+
+    Raises:
+        ValueError: A trace id is not a UUID.
+    """
+    ids = [str(uuid.UUID(t)) for t in trace_ids]  # rejects anything that is not a UUID
+    if not ids:
+        return {"budget_reservations": 0, "api_costs": 0}
+    listing = ",".join(f"'{i}'" for i in ids)
+    return {
+        table: int(
+            _psql(container, f"select count(*) from {table} where trace_id in ({listing});")[0][0]
+        )
+        for table in ("budget_reservations", "api_costs")
+    }
 
 
 # ── arms and budget ───────────────────────────────────────────────────────────
@@ -328,7 +363,12 @@ def check_headroom(
         raise BudgetShortfallError("; ".join(short))
 
 
-async def _gate_and_headroom(n_plans: int, n_builds: int) -> object:
+async def _gate_and_headroom(
+    n_plans: int,
+    n_builds: int,
+    per_plan: Decimal = WORST_CASE_USD_PER_PLAN,
+    per_build: Decimal = WORST_CASE_USD_PER_BUILD,
+) -> object:
     """Connect the cost gate to the eval Postgres and check the caps. Returns the gate."""
     from personal_agent.cost_gate import (  # noqa: PLC0415
         CostGate,
@@ -357,8 +397,8 @@ async def _gate_and_headroom(n_plans: int, n_builds: int) -> object:
                 Decimal(str(row["running_total"])) if row else Decimal(0)
             )
     projected = {
-        "artifact_builder": WORST_CASE_USD_PER_BUILD * n_builds,
-        "study": WORST_CASE_USD_PER_PLAN * n_plans,
+        "artifact_builder": per_build * n_builds,
+        "study": per_plan * n_plans,
     }
     try:
         check_headroom(caps, spent, projected)
@@ -423,13 +463,14 @@ async def make_plan(prompt: Prompt) -> Plan:
     existing = (HERE / prompt.fixture).read_text(encoding="utf-8") if prompt.fixture else None
     user = prompt.request + (f"\n\nThe existing page:\n{existing}" if existing else "")
     client = get_llm_client_for_key(PLAN_KEY, budget_role="study")
+    ctx = SystemTraceContext.new("fre1668_plan")
     resp = await client.respond(
         role=ModelRole.PRIMARY,
         messages=[{"role": "user", "content": user}],
         system_prompt=_PLAN_SYSTEM,
         tools=[draft_tool_schema()],
         max_tokens=PLAN_MAX_TOKENS,
-        trace_ctx=SystemTraceContext.new("fre1668_plan"),
+        trace_ctx=ctx,
     )
     calls = [c for c in resp.get("tool_calls") or [] if c["name"] == "artifact_draft"]
     if not calls:
@@ -445,6 +486,7 @@ async def make_plan(prompt: Prompt) -> Plan:
         summary=str(args["summary"]),
         plan=plan,
         cost_usd=float(resp.get("cost_usd") or 0.0),
+        trace_id=ctx.trace_id,
     )
 
 
@@ -463,13 +505,19 @@ def render_html(path: Path) -> JSONDict:
     origin = settings.artifacts_public_base_url or "none"
     try:
         proc = subprocess.run(  # nosec B603 B607 — fixed argv, no shell
-            ["node", str(RENDER_JS), str(path), origin],
+            ["node", str(RENDER_JS), str(path), origin, str(LIB_MAP), str(path.with_suffix(".png"))],
             capture_output=True, text=True, timeout=120, check=False,
         )  # fmt: skip
         result = cast(JSONDict, json.loads(proc.stdout.strip().splitlines()[-1]))
     except (subprocess.TimeoutExpired, OSError, IndexError, json.JSONDecodeError) as exc:
         result = {"page_errors": [f"render check crashed: {type(exc).__name__}: {exc}"[:300]]}
-    for field in ("page_errors", "console_errors", "failed_requests", "blocked_requests"):
+    for field in (
+        "page_errors",
+        "console_errors",
+        "failed_requests",
+        "blocked_requests",
+        "lib_unavailable",
+    ):
         result.setdefault(field, [])
     result.setdefault("blank", False)
     result["render_ok"] = not (
@@ -477,6 +525,27 @@ def render_html(path: Path) -> JSONDict:
         or result["blocked_requests"] or result["blank"]
     )  # fmt: skip
     return result
+
+
+def render_fields(path: Path) -> JSONDict:
+    """Run the render check and return the fields a build row stores.
+
+    Args:
+        path: The saved HTML.
+
+    Returns:
+        ``render_ok`` and the error counts.
+    """
+    check = render_html(path)
+    return {
+        "render_ok": check["render_ok"],
+        "console_errors": len(cast(list[str], check["console_errors"])),
+        "page_errors": len(cast(list[str], check["page_errors"])),
+        "failed_requests": len(cast(list[str], check["failed_requests"])),
+        "blocked_requests": len(cast(list[str], check["blocked_requests"])),
+        "lib_unavailable": len(cast(list[str], check["lib_unavailable"])),
+        "blank": check["blank"],
+    }
 
 
 async def build_one(
@@ -508,6 +577,7 @@ async def build_one(
     suffix = "" if attempt == 1 else f"-r{attempt}"
     html_path = HTML_DIR / f"{plan.prompt_id}-{arm}{suffix}.html"
     saved: dict[str, int] = {}
+    ctx = SystemTraceContext.new("fre1668_build")
 
     async def _capture_write(*, content: str, **_: object) -> dict[str, object]:
         html_path.parent.mkdir(parents=True, exist_ok=True)
@@ -527,7 +597,7 @@ async def build_one(
                 title=plan.title,
                 summary=plan.summary,
                 plan=plan.plan,
-                ctx=SystemTraceContext.new("fre1668_build"),
+                ctx=ctx,
             )
     except Exception as exc:  # noqa: BLE001 — every failure becomes a row with its reason
         failure = f"{type(exc).__name__}: {exc}"
@@ -553,6 +623,7 @@ async def build_one(
         "served_model": served,
         "effort": str(done[0].get("mode", "")) if done else "",
         "attempt": attempt,
+        "trace_id": ctx.trace_id,
         "ok": ok,
         "failure_reason": failure,
         "render_ok": None,
@@ -565,15 +636,7 @@ async def build_one(
         "html_path": str(html_path) if "bytes" in saved else "",
     }
     if ok and not skip_render:
-        check = render_html(html_path)
-        row.update(
-            render_ok=check["render_ok"],
-            console_errors=len(cast(list[str], check["console_errors"])),
-            page_errors=len(cast(list[str], check["page_errors"])),
-            failed_requests=len(cast(list[str], check["failed_requests"])),
-            blocked_requests=len(cast(list[str], check["blocked_requests"])),
-            blank=check["blank"],
-        )
+        row.update(render_fields(html_path))
     elif ok:
         row["render_ok"] = True
     return row
@@ -582,11 +645,34 @@ async def build_one(
 # ── rating pack and report ────────────────────────────────────────────────────
 
 
+def lib_to_cdn(page: str, origin: str, entries: Sequence[Mapping[str, object]]) -> str:
+    """Point ``/lib/`` script and style references at their pinned public-CDN copies.
+
+    The owner's rating pack shows each page in a sandboxed iframe, which cannot pass the artifacts
+    origin's access login. A font has no public copy, so it is left as it is and falls back to a
+    system font on every arm alike.
+
+    Args:
+        page: The generated HTML.
+        origin: The artifacts origin that the builder prompt names in ``/lib/`` references.
+        entries: The ``entries`` of ``config/artifact_lib_substitution_map.json``.
+
+    Returns:
+        The HTML with each mapped reference rewritten.
+    """
+    for entry in entries:
+        twin = entry.get("public_cdn_url")
+        if twin:
+            page = page.replace(f"{origin.rstrip('/')}/{entry['lib_path']}", str(twin))
+    return page
+
+
 def write_rating_pack(
     rows: Sequence[Mapping[str, object]],
     rating_dir: Path,
     key_path: Path,
     requests: Mapping[str, str] | None = None,
+    transform: Callable[[str], str] = lambda page: page,
 ) -> dict[str, JSONDict]:
     """Write the blind pack for the owner and the key that stays with the run.
 
@@ -595,6 +681,7 @@ def write_rating_pack(
         rating_dir: The directory handed to the owner. It receives ``index.html`` only.
         key_path: Where the label key goes. Must lie outside ``rating_dir``.
         requests: Prompt id to request text, shown beside each page.
+        transform: Applied to each page before it goes into the pack (see ``lib_to_cdn``).
 
     Returns:
         Label to ``{"arm", "prompt_id"}``. The order is shuffled with a fixed seed.
@@ -609,7 +696,7 @@ def write_rating_pack(
     for n, row in enumerate(rated, start=1):
         label = f"P{n:02d}"
         key[label] = {"arm": row["arm"], "prompt_id": row["prompt_id"]}
-        page = Path(str(row["html_path"])).read_text(encoding="utf-8")
+        page = transform(Path(str(row["html_path"])).read_text(encoding="utf-8"))
         ask = html_lib.escape((requests or {}).get(str(row["prompt_id"]), ""))
         parts.append(
             f'<section><h2>{label}</h2><p class="ask">{ask}</p>'
@@ -835,11 +922,11 @@ def _select(ids: str | None) -> list[Prompt]:
     return [p for p in load_prompts() if wanted is None or p.id in wanted]
 
 
-async def _cmd_plans(ids: str | None) -> int:
+async def _cmd_plans(ids: str | None, per_plan: Decimal) -> int:
     assert_isolated()
     done = {str(r["prompt_id"]) for r in _read_jsonl(OUT_DIR / "plans.jsonl")}
     todo = [p for p in _select(ids) if p.id not in done]
-    gate = await _gate_and_headroom(len(todo), 0)
+    gate = await _gate_and_headroom(len(todo), 0, per_plan=per_plan)
     try:
         for prompt in todo:
             plan = await make_plan(prompt)
@@ -850,7 +937,7 @@ async def _cmd_plans(ids: str | None) -> int:
     return 0
 
 
-async def _cmd_build(ids: str | None, retry_failed: bool = False) -> int:
+async def _cmd_build(ids: str | None, per_build: Decimal, retry_failed: bool = False) -> int:
     assert_isolated()
     _assert_render_tools()
     catalog = load_model_config()
@@ -880,7 +967,7 @@ async def _cmd_build(ids: str | None, retry_failed: bool = False) -> int:
         if (arm, p.id) not in tries
         or (retry_failed and not any(r["ok"] for r in tries[(arm, p.id)]))
     ]
-    gate = await _gate_and_headroom(0, len(jobs))
+    gate = await _gate_and_headroom(0, len(jobs), per_build=per_build)
     try:
         for plan, arm, attempt in jobs:
             row = await build_one(plan, arm, attempt=attempt)
@@ -895,10 +982,15 @@ async def _cmd_build(ids: str | None, retry_failed: bool = False) -> int:
 
 
 def _assert_render_tools() -> None:
-    """Stop before the first paid call if the render check cannot run."""
+    """Stop before the first paid call if the render check or the /lib/ host cannot work."""
     if shutil.which("node") is None or not (REPO / "seshat-pwa/node_modules/playwright").exists():
         raise IncompleteRunError(
             "the render check needs node and seshat-pwa/node_modules/playwright (run npm ci there)"
+        )
+    if not settings.artifacts_public_base_url:
+        raise IncompleteRunError(
+            "AGENT_ARTIFACTS_PUBLIC_BASE_URL is unset: the builder prompt would name a placeholder "
+            "/lib/ host and every chart page would fail to render on every arm"
         )
 
 
@@ -918,6 +1010,18 @@ def _scored_builds() -> list[JSONDict]:
     return list(first.values())
 
 
+def _cmd_rerender() -> int:
+    """Re-run the render check on every saved page. Free; the model output is unchanged."""
+    path = OUT_DIR / "builds.jsonl"
+    rows = _read_jsonl(path)
+    for row in rows:
+        if row.get("ok") and row.get("html_path"):
+            row.update(render_fields(Path(str(row["html_path"]))))
+            print(f"{row['prompt_id']} {ARM_LABEL[str(row['arm'])]} render_ok={row['render_ok']}")  # noqa: T201
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return 0
+
+
 def _cmd_bundle(force: bool = False) -> int:
     rows = _scored_builds()
     check_complete(rows, {}, {}, n_prompts=len(load_prompts()), need_scores=False)
@@ -927,7 +1031,15 @@ def _cmd_bundle(force: bool = False) -> int:
             "Pass --force only to start a new rating."
         )
     requests = {p.id: p.request for p in load_prompts()}
-    key = write_rating_pack(rows, OUT_DIR / "rating", OUT_DIR / "key.json", requests)
+    entries = json.loads(LIB_MAP.read_text(encoding="utf-8"))["entries"]
+    origin = settings.artifacts_public_base_url or ""
+    key = write_rating_pack(
+        rows,
+        OUT_DIR / "rating",
+        OUT_DIR / "key.json",
+        requests,
+        transform=lambda page: lib_to_cdn(page, origin, entries),
+    )
     print(f"{len(key)} pages in {OUT_DIR / 'rating'}; key.json stays in {OUT_DIR}")  # noqa: T201
     return 0
 
@@ -955,9 +1067,23 @@ def _cmd_prod_count(label: str) -> int:
     path = OUT_DIR / "prod-counts.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     data[label] = prod_counts()
+    if label == "after":
+        ids = [
+            str(r["trace_id"]) for r in _read_jsonl(OUT_DIR / "builds.jsonl") if r.get("trace_id")
+        ]
+        ids += [
+            str(r["trace_id"]) for r in _read_jsonl(OUT_DIR / "plans.jsonl") if r.get("trace_id")
+        ]
+        data["trace_ids_checked"] = len(ids)
+        data["rows_for_these_trace_ids"] = {
+            "production": trace_hits(PROD_PG_CONTAINER, ids),
+            "eval": trace_hits(EVAL_PG_CONTAINER, ids),
+        }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=1), encoding="utf-8")
     print(json.dumps(data[label]))  # noqa: T201
+    if label == "after":
+        print(json.dumps(data["rows_for_these_trace_ids"]))  # noqa: T201
     return 0
 
 
@@ -974,19 +1100,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("plans", "build"):
         sub.add_parser(name).add_argument("--ids", help="comma-separated prompt ids (default: all)")
+    sub.choices["plans"].add_argument(
+        "--usd-per-plan", type=Decimal, default=WORST_CASE_USD_PER_PLAN,
+        help="projected cost of one plan call for the budget check (default: worst case)",
+    )  # fmt: skip
+    sub.choices["build"].add_argument(
+        "--usd-per-build", type=Decimal, default=WORST_CASE_USD_PER_BUILD,
+        help="projected cost of one build for the budget check (default: worst case)",
+    )  # fmt: skip
     sub.choices["build"].add_argument(
         "--retry-failed",
         action="store_true",
         help="run again the builds with no successful attempt",
     )
+    sub.add_parser("rerender")
     sub.add_parser("bundle").add_argument("--force", action="store_true")
     sub.add_parser("report")
     sub.add_parser("prod-count").add_argument("--label", choices=("before", "after"), required=True)
     args = parser.parse_args(argv)
     if args.cmd == "plans":
-        return asyncio.run(_cmd_plans(args.ids))
+        return asyncio.run(_cmd_plans(args.ids, args.usd_per_plan))
     if args.cmd == "build":
-        return asyncio.run(_cmd_build(args.ids, args.retry_failed))
+        return asyncio.run(_cmd_build(args.ids, args.usd_per_build, args.retry_failed))
+    if args.cmd == "rerender":
+        return _cmd_rerender()
     if args.cmd == "bundle":
         return _cmd_bundle(args.force)
     if args.cmd == "report":

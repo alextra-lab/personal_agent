@@ -335,7 +335,36 @@ def test_render_html_does_not_raise_on_a_hung_check(
     def _hang(*_a: Any, **_k: Any) -> None:
         raise subprocess.TimeoutExpired(cmd="node", timeout=120)
 
-    monkeypatch.setattr(harness.subprocess, "run", _hang)
+    monkeypatch.setattr(subprocess, "run", _hang)
     result = harness.render_html(tmp_path / "p.html")
     assert result["render_ok"] is False
     assert "TimeoutExpired" in str(result["page_errors"])
+
+
+def test_trace_check_rejects_a_non_uuid_before_any_sql() -> None:
+    with pytest.raises(ValueError):
+        harness.trace_hits("no-such-container", ["x'); drop table api_costs; --"])
+
+
+def test_trace_check_with_no_ids_is_zero_without_a_query() -> None:
+    assert harness.trace_hits("no-such-container", []) == {
+        "budget_reservations": 0,
+        "api_costs": 0,
+    }
+
+
+def test_lib_to_cdn_rewrites_mapped_assets_and_leaves_fonts() -> None:
+    entries: list[Mapping[str, object]] = [
+        {
+            "lib_path": "lib/chartjs@4.4.7/chart.umd.js",
+            "public_cdn_url": "https://cdn.test/chart.js",
+        },
+        {"lib_path": "lib/fonts/f@1/f.woff2", "public_cdn_url": None},
+    ]
+    page = (
+        '<script src="https://art.test/lib/chartjs@4.4.7/chart.umd.js"></script>'
+        '<style>@font-face{src:url("https://art.test/lib/fonts/f@1/f.woff2")}</style>'
+    )
+    out = harness.lib_to_cdn(page, "https://art.test/", entries)
+    assert 'src="https://cdn.test/chart.js"' in out
+    assert "https://art.test/lib/fonts/f@1/f.woff2" in out

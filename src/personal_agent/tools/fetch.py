@@ -16,8 +16,11 @@ import html
 import ipaddress
 import re
 import socket
+from collections import OrderedDict
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from html.parser import HTMLParser
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 import pypdfium2 as pdfium
@@ -54,6 +57,106 @@ class FetchError(ToolError[FetchCode]):
 
 
 _OTHER_SOURCE = "Use web_search to find another page with the same facts."
+
+# FRE-1672: a URL that failed in a session is not fetched again by that session. A failure the
+# error marks ``retryable`` gets one more real attempt (a timeout can be a slow moment); any
+# other failure, and a second failure of any kind, is answered from the memo with no request.
+_MAX_REAL_ATTEMPTS = 2
+# The memo is process memory, so it is bounded: least recently used sessions leave first, and
+# the oldest URLs of one session leave first.
+_MEMO_MAX_SESSIONS = 256
+_MEMO_MAX_URLS = 100
+
+
+@dataclass(frozen=True)
+class _FailedFetch:
+    """The last failure of one URL in one session."""
+
+    code: FetchCode
+    message: str
+    retryable: bool
+    attempts: int
+    failed_at: datetime
+
+
+# session id -> URL -> last failure. A session id is required: without one there is no scope.
+_failed_fetches: OrderedDict[str, OrderedDict[str, _FailedFetch]] = OrderedDict()
+
+
+def _repeat_refusal(session_id: str | None, url: str, *, trace_id: str) -> FetchError | None:
+    """Build the refusal for a URL that already failed in this session, if there is one.
+
+    Args:
+        session_id: Session of the call. ``None`` turns the memo off.
+        url: The requested URL.
+        trace_id: Trace id for logging.
+
+    Returns:
+        A non-retryable ``FetchError`` that carries the stored code and message, or ``None``
+        when the URL has no stored failure or its failure still earns another real attempt.
+    """
+    if not session_id:
+        return None
+    urls = _failed_fetches.get(session_id)
+    entry = urls.get(url) if urls is not None else None
+    if entry is None or (entry.retryable and entry.attempts < _MAX_REAL_ATTEMPTS):
+        return None
+    # A session that keeps asking for failed URLs is in use: refresh it so it is not the one evicted.
+    _failed_fetches.move_to_end(session_id)
+    log.info(
+        "fetch_url_repeat_refused",
+        trace_id=trace_id,
+        session_id=session_id,
+        url=url,
+        code=entry.code,
+        attempts=entry.attempts,
+        failed_at=entry.failed_at.isoformat(),
+    )
+    return FetchError(
+        entry.code,
+        f"This URL already failed in this session: {entry.message}",
+        retryable=False,
+        next_action="Do not call fetch_url for this URL again. " + _OTHER_SOURCE,
+    )
+
+
+def _remember_failure(session_id: str | None, url: str, exc: FetchError) -> None:
+    """Store a failed fetch for the session. Does nothing when the call has no session.
+
+    Args:
+        session_id: Session of the call.
+        url: The requested URL.
+        exc: The failure the fetch raised.
+    """
+    if not session_id:
+        return
+    urls = _failed_fetches.setdefault(session_id, OrderedDict())
+    _failed_fetches.move_to_end(session_id)
+    previous = urls.pop(url, None)
+    urls[url] = _FailedFetch(
+        # ToolError holds the code as ``str``; FetchError only builds it from FetchCode.
+        code=cast("FetchCode", exc.code),
+        message=exc.message,
+        retryable=exc.retryable,
+        attempts=(previous.attempts if previous else 0) + 1,
+        failed_at=datetime.now(UTC),
+    )
+    while len(urls) > _MEMO_MAX_URLS:
+        urls.popitem(last=False)
+    while len(_failed_fetches) > _MEMO_MAX_SESSIONS:
+        _failed_fetches.popitem(last=False)
+
+
+def _forget_failure(session_id: str | None, url: str) -> None:
+    """Drop the stored failure of a URL that has now been fetched.
+
+    Args:
+        session_id: Session of the call.
+        url: The requested URL.
+    """
+    if session_id and (urls := _failed_fetches.get(session_id)) is not None:
+        urls.pop(url, None)
+
 
 # Tags whose inner content should be skipped entirely.
 #
@@ -642,8 +745,9 @@ async def fetch_url_executor(
     Raises:
         FetchError: On invalid URL, a private target, a blocked domain, connection failure,
             timeout, non-2xx HTTP response, a binary body that is not a PDF, a PDF that
-            cannot be opened, or a successful response that yields no readable text
-            content.
+            cannot be opened, a successful response that yields no readable text
+            content, or a URL that already failed in this session (FRE-1672; no request is
+            made).
     """
     url = (url or "").strip()
     if not url:
@@ -666,6 +770,12 @@ async def fetch_url_executor(
 
     log.info("fetch_url_started", trace_id=trace_id, url=url)
 
+    # FRE-1672: refuse a repeat before any I/O. A repeat is never a novel destination, so the
+    # novelty check below loses nothing by being skipped.
+    session_id = ctx.session_id
+    if (refusal := _repeat_refusal(session_id, url, trace_id=trace_id)) is not None:
+        raise refusal
+
     # FRE-1330: observe-only signal on what the model *targeted* — fires regardless of
     # whether the fetch below succeeds, is blocked, or errors. Wrapped in its own
     # try/except: a tracker I/O failure must never block or fail a fetch.
@@ -681,18 +791,23 @@ async def fetch_url_executor(
     except Exception as exc:
         log.warning("fetch_url_novelty_check_failed", trace_id=trace_id, url=url, error=str(exc))
 
-    text, status = await download_text(url, trace_id=trace_id)
+    try:
+        text, status = await download_text(url, trace_id=trace_id)
 
-    if not text.strip():
-        log.warning("fetch_url_empty_extraction", trace_id=trace_id, url=url, status=status)
-        raise FetchError(
-            "no_readable_text",
-            f"Fetched {url} (HTTP {status}) but extracted no readable text content.",
-            retryable=False,
-            next_action=(
-                "The page has no readable text (it may need JavaScript). " + _OTHER_SOURCE
-            ),
-        )
+        if not text.strip():
+            log.warning("fetch_url_empty_extraction", trace_id=trace_id, url=url, status=status)
+            raise FetchError(
+                "no_readable_text",
+                f"Fetched {url} (HTTP {status}) but extracted no readable text content.",
+                retryable=False,
+                next_action=(
+                    "The page has no readable text (it may need JavaScript). " + _OTHER_SOURCE
+                ),
+            )
+    except FetchError as exc:
+        _remember_failure(session_id, url, exc)
+        raise
+    _forget_failure(session_id, url)
 
     truncated = len(text) > cap
     output_text = text[:cap]

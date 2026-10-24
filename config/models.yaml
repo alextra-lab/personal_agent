@@ -638,8 +638,9 @@ models:
     provider: scaleway
     id: "glm-5.3"
     context_length: 262144
-    # A runaway bound, not provider truth: thinking bills as completion. Same value as the OVH entry.
-    max_tokens: 32768
+    # Provider limit (FRE-1692, 2026-10-24): Scaleway refuses max_tokens above 16384 for glm-5.3
+    # with a 400 ("max_completion_tokens is limited to 16384"). Thinking bills as completion.
+    max_tokens: 16384
     max_concurrency: 10
     # Same bound as the deepseek-v4.1-flash entry, where master's probe saw a 120 s hang.
     # The probe saw no hang on GLM.

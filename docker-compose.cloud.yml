@@ -13,8 +13,9 @@
 # - Caddy reverse proxy: 64MB RAM, 0.25 CPU
 #
 # Network: cloud-sim (isolated bridge network)
-# All services communicate via internal DNS. Debug ports are bound to 127.0.0.1
-# only (SSH tunnel to access). Only Caddy exposes 80 and 443 externally.
+# All services communicate via internal DNS. Every published port, including Caddy's
+# 80 and 443, is bound to 127.0.0.1 only (SSH tunnel to access; FRE-1664). The Cloudflare
+# tunnel reaches Caddy over this network.
 
 services:
   # PostgreSQL 17 with pgvector extension
@@ -491,8 +492,12 @@ services:
       SLM_HOST: ${SLM_HOST:-slm.example.com}
       ARTIFACTS_HOST: ${ARTIFACTS_HOST:-artifacts.example.com}
     ports:
-      - "80:80"
-      - "443:443"
+      # Inbound listeners, bound to LOOPBACK ONLY (FRE-1664). cloudflared reaches Caddy
+      # over the cloud-sim network (http://caddy:80), never through a host port. A bare
+      # "80:80" binds 0.0.0.0 and [::], which exposed the Caddyfile "localhost" site
+      # (PWA + gateway API) to the internet. Dev access: ssh -L to 127.0.0.1:443.
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
       # Outbound egress listeners (ADR-0132 D1), bound to LOOPBACK ONLY.
       # Not exposed off-box: this exists so host-side tooling (eval scripts,
       # `uv run agent`) keeps a route to the SLM. Before this change those

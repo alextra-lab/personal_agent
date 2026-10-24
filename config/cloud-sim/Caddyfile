@@ -41,9 +41,10 @@
 	}
 }
 
-# Direct-origin guard for every inbound Cloudflare-Tunnel block (FRE-1240). Caddy publishes
-# 80/443 on all host interfaces, so a request straight to the VPS IP with a forged Host header
-# would reach these blocks without passing Cloudflare Access. remote_ip tests the TCP peer
+# Direct-origin guard for every inbound Cloudflare-Tunnel block (FRE-1240). Caddy published
+# 80/443 on all host interfaces until FRE-1664, so a request straight to the VPS IP with a forged
+# Host header reached these blocks without passing Cloudflare Access. Both ports now bind
+# 127.0.0.1 only, and this guard stays as defense in depth. remote_ip tests the TCP peer
 # address, which a header cannot forge; cloudflared reaches Caddy from the cloud-sim compose
 # network (docker-compose.cloud.yml, subnet 172.25.0.0/16). Import this as the FIRST line of a
 # tunnel block: `handle` blocks run in file order, so a later handle cannot answer first.
@@ -64,7 +65,9 @@
 	}
 }
 
-# HTTPS — SSH tunnel dev access (curl -k https://localhost/...)
+# HTTPS — dev access over an SSH tunnel. Caddy publishes 443 on 127.0.0.1 only (FRE-1664), so
+# from your machine run `ssh -L 8443:127.0.0.1:443 <vps>` and then `curl -k https://localhost:8443/...`.
+# On the VPS itself: `curl -k https://localhost/...`. This site has no tunnel_only filter.
 localhost {
 	import routing
 }

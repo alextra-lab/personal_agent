@@ -33,6 +33,8 @@ _RENDER_ENV = {
     "AGENT_OWNER_EMAIL": "test@example.com",
     "GRAFANA_ADMIN_PASSWORD": "test",  # FRE-1072 — now a required var in docker-compose.cloud.yml
     "GRAFANA_RO_PASSWORD": "test",  # FRE-1203 — now a required var in docker-compose.cloud.yml
+    "CF_ACCESS_TEAM_DOMAIN": "team.example.test",  # FRE-1663 — required by docker-compose.cloud.yml
+    "GRAFANA_CF_ACCESS_AUD": "0" * 64,  # FRE-1663 — required by docker-compose.cloud.yml
 }
 
 _RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"

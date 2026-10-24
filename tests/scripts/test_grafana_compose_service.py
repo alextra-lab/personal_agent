@@ -25,6 +25,8 @@ _RENDER_ENV = {
     "NEO4J_PASSWORD": "test",
     "GRAFANA_ADMIN_PASSWORD": "test",
     "GRAFANA_RO_PASSWORD": "test",
+    "CF_ACCESS_TEAM_DOMAIN": "team.example.test",  # FRE-1663 — required by docker-compose.cloud.yml
+    "GRAFANA_CF_ACCESS_AUD": "0" * 64,  # FRE-1663 — required by docker-compose.cloud.yml
 }
 _RENDER_OVERRIDE = "tests/scripts/fixtures/gateway_render_override.yml"
 
@@ -57,11 +59,48 @@ class TestGrafanaComposeServiceSource:
         """
         assert self._grafana_service(compose_file)["image"] == "grafana/grafana:13.1.3"
 
-    @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
-    def test_anonymous_viewer_access_configured(self, compose_file: str) -> None:
-        env = self._grafana_service(compose_file)["environment"]
+    def test_dev_anonymous_viewer_access_configured(self) -> None:
+        """The local dev stack is not tunnel-exposed, so it stays anonymous Viewer."""
+        env = self._grafana_service("docker-compose.yml")["environment"]
         assert any("GF_AUTH_ANONYMOUS_ENABLED=true" in str(e) for e in env)
         assert any("GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer" in str(e) for e in env)
+
+    def test_cloud_anonymous_access_is_off(self) -> None:
+        """FRE-1663: the observe tunnel route skips Caddy, so anonymous access would let any
+        request that reaches the container read every dashboard. It must be explicitly off.
+        """
+        env = self._grafana_service("docker-compose.cloud.yml")["environment"]
+        assert any(str(e) == "GF_AUTH_ANONYMOUS_ENABLED=false" for e in env)
+        assert not any("GF_AUTH_ANONYMOUS_ORG_ROLE" in str(e) for e in env)
+
+    def test_cloud_jwt_login_verifies_the_cloudflare_access_token(self) -> None:
+        """FRE-1663: Grafana verifies the Access JWT itself — header, key set, audience, identity."""
+        env = [str(e) for e in self._grafana_service("docker-compose.cloud.yml")["environment"]]
+        assert "GF_AUTH_JWT_ENABLED=true" in env
+        assert "GF_AUTH_JWT_HEADER_NAME=Cf-Access-Jwt-Assertion" in env
+        assert "GF_AUTH_JWT_EMAIL_CLAIM=email" in env
+        assert "GF_AUTH_JWT_USERNAME_CLAIM=email" in env
+        assert "GF_AUTH_JWT_AUTO_SIGN_UP=true" in env
+
+    def test_cloud_jwt_key_set_and_audience_are_required_vars(self) -> None:
+        """Both values come from .env behind the `:?` guard: an unset audience stops compose at
+        render time rather than starting Grafana with an empty `aud` expectation.
+        """
+        env = [str(e) for e in self._grafana_service("docker-compose.cloud.yml")["environment"]]
+        jwk = next(e for e in env if e.startswith("GF_AUTH_JWT_JWK_SET_URL="))
+        assert jwk.startswith("GF_AUTH_JWT_JWK_SET_URL=https://${CF_ACCESS_TEAM_DOMAIN:?")
+        assert jwk.endswith("/cdn-cgi/access/certs")
+        expect = next(e for e in env if e.startswith("GF_AUTH_JWT_EXPECT_CLAIMS="))
+        assert '"aud"' in expect
+        assert "${GRAFANA_CF_ACCESS_AUD:?" in expect
+
+    def test_cloud_jwt_users_get_no_role_above_viewer(self) -> None:
+        """No role mapping is configured, so a verified token maps to the default org role
+        (Viewer) — the same reach the anonymous setting had.
+        """
+        env = [str(e) for e in self._grafana_service("docker-compose.cloud.yml")["environment"]]
+        assert not any("ROLE_ATTRIBUTE" in e or "AUTO_ASSIGN_ORG_ROLE" in e for e in env)
+        assert not any("ALLOW_ASSIGN_GRAFANA_ADMIN" in e for e in env)
 
     @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
     def test_login_form_disabled_but_basic_auth_stays_on(self, compose_file: str) -> None:

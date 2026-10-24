@@ -50,7 +50,7 @@ Run: `make test-file FILE=tests/test_orchestrator/test_reflection_cadence_gate.p
 4. Enabled false + cadence flag false → no reflection (outermost gate).
 5. Enabled true + `eval_mode=True`, second turn inside the interval → reflects (eval bypass pinned).
 6. Existing tests stay unchanged and pass (enabled true + cadence true is byte-identical).
-7. Existing cadence-false test: docstring updated to state the inversion (reflect every turn).
+7. New test: cadence flag false (flag true) reflects on 3 of 3 turns. This pins the inversion.
 
 Write tests 2–5 first and confirm they fail (the setting does not exist).
 

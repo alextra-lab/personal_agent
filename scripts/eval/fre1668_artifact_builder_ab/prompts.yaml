@@ -1,0 +1,51 @@
+# FRE-1668 pilot: 3 rich artifact requests, the same 3 for every arm (owner, 2026-10-24: "2 or 3
+# artifact requests per model" and "Don't limit the complexity").
+# Each request asks for real interactivity and learning value. None is simplified for the test, and
+# the builder runs with its production output ceiling and timeout.
+# p3 is a generic rewrite of the owner's real concept explainer (the real request text is not stored).
+# p9 is new. p8 edits a real, working interactive page (fixtures/edit_source.html).
+prompts:
+  - id: p3
+    category: interactive explainer
+    request: >-
+      Build an interactive explainer called "One Equation, Four Worlds" that links entropy in heat
+      engines, data compression, information erasure and quantum states. Give each world its own
+      section with working controls. Heat engine: sliders for the hot and cold temperatures, a live
+      Carnot efficiency, and an animated pressure-volume cycle. Data compression: a text box where
+      the reader types a message, with a live Shannon entropy, the symbol frequencies as a bar chart
+      and the best possible compressed size. Information erasure: a temperature slider and a live
+      Landauer limit for erasing one bit and for erasing a megabyte. Quantum state: sliders for the
+      two angles of a qubit on a Bloch sphere drawing, with the live von Neumann entropy of a
+      mixture. Add a section that shows how the same formula appears in all four. Add a step-through
+      walkthrough with next and back buttons, a glossary that opens on click, and a five-question
+      quiz with instant feedback and a score. Make it beautiful, with a clear visual identity,
+      smooth animation, and a layout that works on a phone. A curious teenager must be able to learn
+      the idea from it, and want to keep playing.
+  - id: p9
+    category: data tool
+    request: >-
+      Build an interactive data explorer for the energy mix of 40 countries. Use made-up but
+      plausible figures, and put the full table in the page. Each country has a region, a
+      population in millions, a yearly electricity use per person, and the share of coal, gas, oil,
+      nuclear, hydro, wind, solar and other sources in 1990, 2005 and 2020. Give it filters that
+      work together: a region selector, a population range slider, a year selector, a search box,
+      and checkboxes to include or hide each energy source. Show a sortable table, a stacked bar
+      chart of the mix for the filtered countries, a scatter chart of electricity use against clean
+      share with point size by population, and a line chart of the mix over the three years for one
+      chosen country. Clicking a point or a bar selects the country and fills a detail panel with a
+      short written summary that updates. Add a compare mode for two countries, summary cards that
+      react to the filters, and a button that resets everything. Make it attractive and easy to
+      read, with a legend, tooltips and accessible colours. A student must be able to ask questions
+      of the data and learn from the answers.
+  - id: p8
+    category: edit of an existing interactive page
+    fixture: fixtures/edit_source.html
+    request: >-
+      Here is an existing interactive page, Projectile Lab. Improve it without breaking anything
+      that works. Add a wind slider from -10 to 10 m/s that changes the flight and the live
+      prediction. Keep the last 6 launches as a history that can be shown or hidden, with a colour
+      key. Add a target that the reader can move with a slider, with a hit or miss message after each
+      launch and a streak counter. Add an "explain this result" panel that writes, in plain words,
+      why the last launch went where it did, using the numbers. Replace the single quiz question with
+      a three-question quiz that keeps a score. Add a light and dark theme toggle. Keep every
+      existing control working and keep the visual style, but polish it so it feels finished.

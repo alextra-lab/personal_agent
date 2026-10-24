@@ -37,7 +37,7 @@ from personal_agent.llm_client.models import (
     Placement,
 )
 from personal_agent.llm_client.pricing import register_model_pricing
-from personal_agent.llm_client.types import ModelRole
+from personal_agent.llm_client.types import DialectParameterRejected, ModelRole
 from personal_agent.security import _guard_request_hook
 from personal_agent.telemetry.trace import SystemTraceContext
 
@@ -84,11 +84,12 @@ class TestCatalogEntries:
         assert definition.context_length == 262144
         assert definition.supports_function_calling is True
 
-    @pytest.mark.parametrize("key", _NEW_KEYS)
-    def test_modes_use_the_only_lever_the_probe_found(self, key: str) -> None:
+    @pytest.mark.parametrize(("key", "default"), [(_GLM, "medium"), (_DEEPSEEK, "high")])
+    def test_modes_use_the_only_lever_the_probe_found(self, key: str, default: str) -> None:
+        """DeepSeek's default is high: master's probe got a 400 on its medium."""
         definition = load_model_config().models[key]
         assert definition.default_mode == "default"
-        assert definition.resolve_mode().reasoning_effort == "medium"
+        assert definition.resolve_mode().reasoning_effort == default
         assert definition.resolve_mode("worker").reasoning_effort == "low"
         assert definition.resolve_mode("fast").reasoning_effort == "low"
 
@@ -99,6 +100,31 @@ class TestCatalogEntries:
         mode = load_model_config().models[key].resolve_mode()
         assert mode.temperature is None
         assert mode.top_p is None
+
+
+class TestDeepseekEffortDomain:
+    """Master's probe of the deployed API (2026-10-24): deepseek-v4.1-flash returns 400 on medium."""
+
+    def test_the_deepseek_domain_omits_medium_and_the_glm_domain_does_not(self) -> None:
+        models = load_model_config().models
+        assert models[_DEEPSEEK].reasoning_effort_domain == frozenset({"low", "high"})
+        assert models[_GLM].reasoning_effort_domain == frozenset({"low", "medium", "high"})
+
+    @pytest.mark.parametrize("mode_name", ["default", "worker", "fast"])
+    def test_a_deepseek_mode_at_medium_is_refused_at_catalog_load(self, mode_name: str) -> None:
+        data = _config_dict()
+        data["models"][_DEEPSEEK]["modes"][mode_name] = {"reasoning_effort": "medium"}
+        with pytest.raises(ValidationError, match=_DEEPSEEK):
+            ModelConfig.model_validate(data)
+
+    @pytest.mark.asyncio
+    async def test_a_call_site_medium_is_refused_before_any_request(
+        self, _caught: list[_Sent]
+    ) -> None:
+        """The runtime gate: an override cannot reintroduce the value the catalog refuses."""
+        with pytest.raises(DialectParameterRejected, match="medium"):
+            await _respond(_DEEPSEEK, reasoning_effort="medium")
+        assert _caught == []
 
 
 class TestDialectVocabulary:
@@ -235,7 +261,9 @@ def _caught() -> Iterator[list[_Sent]]:
         yield caught
 
 
-async def _respond(model_key: str, *, mode: str | None = None) -> tuple[MagicMock, MagicMock]:
+async def _respond(
+    model_key: str, *, mode: str | None = None, **call: Any
+) -> tuple[MagicMock, MagicMock]:
     """Dispatch through the trusted-key door. Only the gate and the tracker are mocked.
 
     ``litellm.completion_cost`` is NOT patched: AC-2 needs the real cost the registered
@@ -268,6 +296,7 @@ async def _respond(model_key: str, *, mode: str | None = None) -> tuple[MagicMoc
         await client.respond(
             role=ModelRole.PRIMARY,
             messages=[{"role": "user", "content": "what is the capital of France?"}],
+            **call,
             # A session id is required: without one the client skips the ledger row.
             trace_ctx=SystemTraceContext.new("fre1680", session_id=str(uuid4())),
         )
@@ -293,12 +322,20 @@ class TestDispatch:
         gate.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(("mode", "effort"), [(None, "medium"), ("worker", "low")])
+    @pytest.mark.parametrize(
+        ("key", "mode", "effort"),
+        [
+            (_GLM, None, "medium"),
+            (_GLM, "worker", "low"),
+            (_DEEPSEEK, None, "high"),
+            (_DEEPSEEK, "worker", "low"),
+        ],
+    )
     async def test_the_effort_lever_reaches_the_wire_and_no_other_lever_does(
-        self, mode: str | None, effort: str, _caught: list[_Sent]
+        self, key: str, mode: str | None, effort: str, _caught: list[_Sent]
     ) -> None:
         """AC-3 offline: the dialect's one lever is sent. The levers the probe found inert are not."""
-        await _respond(_GLM, mode=mode)
+        await _respond(key, mode=mode)
 
         body = json.loads(_caught[0].request.content)
         assert body["reasoning_effort"] == effort

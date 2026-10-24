@@ -101,6 +101,8 @@ def _repeat_refusal(session_id: str | None, url: str, *, trace_id: str) -> Fetch
     entry = urls.get(url) if urls is not None else None
     if entry is None or (entry.retryable and entry.attempts < _MAX_REAL_ATTEMPTS):
         return None
+    # A session that keeps asking for failed URLs is in use: refresh it so it is not the one evicted.
+    _failed_fetches.move_to_end(session_id)
     log.info(
         "fetch_url_repeat_refused",
         trace_id=trace_id,

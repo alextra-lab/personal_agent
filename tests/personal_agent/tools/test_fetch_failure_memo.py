@@ -9,6 +9,7 @@ call count is the count of real HTTP requests.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -45,7 +46,7 @@ def _client(*outcomes: MagicMock | Exception) -> AsyncMock:
     return client
 
 
-def _patched(client: AsyncMock):  # type: ignore[no-untyped-def]
+def _patched(client: AsyncMock) -> AbstractContextManager[MagicMock | AsyncMock]:
     return patch("personal_agent.tools.fetch.create_guarded_http_client", return_value=client)
 
 
@@ -213,6 +214,41 @@ async def test_session_cap_evicts_the_oldest_session() -> None:
     assert client.get.await_count == 4
     assert _ALREADY_FAILED not in s1.value.message
     assert _ALREADY_FAILED in s3.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_refused_session_is_refreshed_and_not_evicted() -> None:
+    """A session that keeps hitting the memo is in use, so a newer failing session evicts another."""
+    client = _client(*[_response(status_code=404)] * 4)
+    with _patched(client), patch.object(fetch, "_MEMO_MAX_SESSIONS", 2):
+        for session in ("s1", "s2"):
+            with pytest.raises(FetchError):
+                await fetch_url_executor(url=_URL, ctx=_ctx(session))
+        # s1 is refused from the memo (no request), which makes s2 the oldest session.
+        with pytest.raises(FetchError, match=_ALREADY_FAILED):
+            await fetch_url_executor(url=_URL, ctx=_ctx("s1"))
+        with pytest.raises(FetchError):
+            await fetch_url_executor(url=_URL, ctx=_ctx("s3"))
+        with pytest.raises(FetchError, match=_ALREADY_FAILED):
+            await fetch_url_executor(url=_URL, ctx=_ctx("s1"))
+        with pytest.raises(FetchError) as s2:
+            await fetch_url_executor(url=_URL, ctx=_ctx("s2"))
+
+    assert client.get.await_count == 4
+    assert _ALREADY_FAILED not in s2.value.message
+
+
+@pytest.mark.asyncio
+async def test_download_text_has_no_memo() -> None:
+    """The FRE-1641 harness calls download_text directly, so it must reach the network each time."""
+    client = _client(_response(status_code=404), _response(status_code=404))
+    with _patched(client):
+        for _ in range(2):
+            with pytest.raises(FetchError) as exc:
+                await fetch.download_text(_URL, trace_id="t")
+            assert _ALREADY_FAILED not in exc.value.message
+
+    assert client.get.await_count == 2
 
 
 @pytest.mark.asyncio

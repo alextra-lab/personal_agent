@@ -29,6 +29,8 @@ _RENDER_ENV = {
     "AGENT_OWNER_EMAIL": "test@example.com",
     "GRAFANA_ADMIN_PASSWORD": "test",
     "GRAFANA_RO_PASSWORD": "test",
+    "CF_ACCESS_TEAM_DOMAIN": "team.example.test",  # FRE-1663 — required by docker-compose.cloud.yml
+    "GRAFANA_CF_ACCESS_AUD": "0" * 64,  # FRE-1663 — required by docker-compose.cloud.yml
     "BUILD_FINGERPRINT": "test-fingerprint-abc123",
 }
 

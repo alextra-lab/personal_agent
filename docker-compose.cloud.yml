@@ -192,13 +192,26 @@ services:
   # Access: CF Zero Trust backend_admin policy, scoped to the owner alone (runbook action, not
   # decided in this repo — ADR-0129 D6's own AC-10 text)
   # Tunnel: observe → http://grafana:3000 (bypasses Caddy — a direct Cloudflare Tunnel host)
+  # Auth (FRE-1663): the tunnel skips Caddy, so Grafana verifies the Access JWT itself. The
+  # token is the Cf-Access-Jwt-Assertion header, the keys come from the team certs URL, and the
+  # audience is the AUD tag of the observe Access app (GRAFANA_CF_ACCESS_AUD — a different app
+  # from the agent and the artifact Worker). A verified user gets the default org role, Viewer.
+  # Anonymous access is off. Basic auth stays on for the loopback port (provisioning, tooling).
+  # Basic auth is a second way in: Grafana tries each auth method, so the admin password also
+  # works beside a bad JWT. The tunnel route reaches it only after Access.
   # Resource limit: 512MB RAM, 0.5 CPU
   grafana:
     image: grafana/grafana:13.1.3
     container_name: cloud-sim-grafana
     environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_AUTH_JWT_ENABLED=true
+      - GF_AUTH_JWT_HEADER_NAME=Cf-Access-Jwt-Assertion
+      - GF_AUTH_JWT_JWK_SET_URL=https://${CF_ACCESS_TEAM_DOMAIN:?CF_ACCESS_TEAM_DOMAIN required — set in .env}/cdn-cgi/access/certs
+      - GF_AUTH_JWT_EXPECT_CLAIMS={"aud":"${GRAFANA_CF_ACCESS_AUD:?GRAFANA_CF_ACCESS_AUD required — the observe Access app AUD tag, set in .env}"}
+      - GF_AUTH_JWT_EMAIL_CLAIM=email
+      - GF_AUTH_JWT_USERNAME_CLAIM=email
+      - GF_AUTH_JWT_AUTO_SIGN_UP=true
       - GF_AUTH_DISABLE_LOGIN_FORM=true
       - GF_AUTH_BASIC_ENABLED=true
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required — set in .env}

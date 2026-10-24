@@ -77,12 +77,13 @@ instance; each is a place the obvious approach silently fails.
 | Constraint | Consequence |
 |---|---|
 | Provisioned dashboards report `meta.provisioned: true, canEdit: false, canSave: false` (all 16 checked) | **You cannot edit a committed dashboard in the UI.** Not one of them. |
-| Anonymous org role is `Viewer`; `/dashboard/new` redirects to `/` | **A Viewer cannot author anything.** |
+| The shared instance has no anonymous access; a verified Cloudflare Access login (FRE-1663) gets the org role `Viewer`, and `/dashboard/new` redirects to `/` | **A Viewer cannot author anything.** |
 | `GF_AUTH_DISABLE_LOGIN_FORM=true`; `POST /login` returns `400 auth.client.notConfigured` | **You cannot sign in through the UI to upgrade the session.** |
 | Basic auth authenticates the **HTTP API** (`curl -u admin:…`) but does not give the browser a session | The API is not an authoring path — driving it *is* hand-authoring. |
 
-So authoring needs its own instance. **Do not widen the shared instance's anonymous role** — it is
-reachable through the Cloudflare tunnel, so that is a live security-posture change, not a dev convenience.
+So authoring needs its own instance. **Do not widen the shared instance's roles or re-enable anonymous
+access** — it is reachable through the Cloudflare tunnel, so that is a live security-posture change, not a
+dev convenience.
 
 1. **Stand up an ephemeral Editor instance**, loopback-only, on the compose network so the provisioned
    datasources resolve. Mount the provisioning and dashboards read-only. Do **not** mount the Grafana
@@ -158,7 +159,7 @@ reachable through the Cloudflare tunnel, so that is a live security-posture chan
    JSON living only in its worktree is invisible to it no matter how long you wait (found live,
    FRE-1209: two separate polling loops ran for minutes against a file that could never change).
    **Fix:** stand up a second, throwaway instance the same way as the authoring one but
-   `GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer` (matching prod, not Editor) and read-only-mount *your own
+   `GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer` (the role prod gives a verified Access user, not Editor) and read-only-mount *your own
    worktree's* `config/grafana/provisioning` and `config/grafana/dashboards` — same network, so the
    `pg-ledger` / ES datasources still resolve against the real backing stores. Render-assert and
    raw-data cross-check against that; tear it down after. Only a build session working directly in

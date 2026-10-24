@@ -342,6 +342,9 @@ class TestAC6DashboardPanelsExecuteCleanly:
 class TestAC10GrafanaAuthBracketing:
     """AC-10 — Grafana serves anonymously at no more than Viewer, hides its login form, and
     still admits the admin over basic auth. Three checks, per the ticket's own spec.
+
+    Runs against the dev compose stack, which stays anonymous. The cloud stack verifies the
+    Cloudflare Access JWT instead (FRE-1663) — see tests/scripts/test_grafana_cf_access_jwt.py.
     """
 
     def test_anonymous_role_bracketed_from_both_sides(self) -> None:

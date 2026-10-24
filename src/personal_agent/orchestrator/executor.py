@@ -4825,10 +4825,12 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     )
 
                 # Trigger Captain's Log reflection (LLM-based, background), gated to a coarser
-                # per-session cadence (FRE-710) rather than every turn. eval_mode turns and the
-                # cadence-disabled kill switch bypass the gate and always reflect; a turn that
-                # hits the iteration limit always bypasses the debounce interval (see
-                # ReflectionCadenceGate).
+                # per-session cadence (FRE-710) rather than every turn. FRE-990:
+                # captains_log_reflection_enabled is the outermost gate — False means no
+                # reflection at all, whatever else is set. With it True, eval_mode turns and
+                # cadence_enabled=False bypass the cadence gate and always reflect (False is the
+                # pre-FRE-710 per-turn mode, NOT an off switch); a turn that hits the iteration
+                # limit always bypasses the debounce interval (see ReflectionCadenceGate).
                 # Run in background to avoid blocking user response
                 # Metrics summary is now available in ctx for reflection enrichment
                 from personal_agent.captains_log.background import run_in_background
@@ -4837,7 +4839,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 )
 
                 hit_iteration_limit = ctx.tool_iteration_count > _resolve_max_iterations(ctx)
-                should_reflect = (
+                should_reflect = settings.captains_log_reflection_enabled and (
                     ctx.eval_mode
                     or not settings.captains_log_reflection_cadence_enabled
                     or get_reflection_cadence_gate().should_reflect(
@@ -4846,6 +4848,12 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 )
                 if should_reflect:
                     run_in_background(_trigger_captains_log_reflection(ctx))
+                elif not settings.captains_log_reflection_enabled:
+                    log.debug(
+                        "captains_log_reflection_skipped_disabled",
+                        trace_id=ctx.trace_id,
+                        session_id=ctx.session_id,
+                    )
                 else:
                     log.debug(
                         "captains_log_reflection_skipped_cadence",

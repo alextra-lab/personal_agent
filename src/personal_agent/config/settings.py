@@ -2056,11 +2056,19 @@ class AppConfig(BaseSettings):
         ),
     )
 
-    # Captain's Log reflection cadence (FRE-710)
+    # Captain's Log reflection enable flag (FRE-990) and cadence (FRE-710)
+    captains_log_reflection_enabled: bool = Field(
+        default=True,
+        description="FRE-990: master switch for Captain's Log reflection. False stops every "
+        "reflection and its model call, including eval-mode turns, turns that hit the iteration "
+        "limit, and the cadence flag below. This is the off switch.",
+    )
     captains_log_reflection_cadence_enabled: bool = Field(
         default=True,
         description="FRE-710: gate Captain's Log reflection to a per-session cadence instead of "
-        "every turn. False reverts to unconditional per-turn reflection (pre-FRE-710 behavior).",
+        "every turn. False is NOT an off switch: it reverts to unconditional per-turn reflection "
+        "(pre-FRE-710 behavior) and raises spend. Use captains_log_reflection_enabled to stop "
+        "reflection.",
     )
     captains_log_reflection_min_interval_seconds: float = Field(
         default=1800.0,

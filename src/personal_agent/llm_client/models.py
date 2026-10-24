@@ -93,13 +93,13 @@ class ModeSpec(BaseModel):
         top_p: Nucleus sampling probability.
         top_k: Top-k sampling (llamacpp_qwen and anthropic_budget only).
         min_p: Min-p sampling (llamacpp_qwen only; llama.cpp/vLLM extension).
-        presence_penalty: Presence penalty (llamacpp_qwen and ovh_qwen only).
+        presence_penalty: Presence penalty (llamacpp_qwen, ovh_qwen and scaleway only).
         frequency_penalty: Frequency penalty.
         repeat_penalty: llama.cpp's own wire name for repetition penalty — NOT
             ``repetition_penalty``, which is accepted and silently ignored on
             that server (FRE-1430 F2; the rename itself is FRE-1438).
         seed: Sampling seed.
-        reasoning_effort: ovh_qwen / openai_gpt5's thinking lever. Value domain
+        reasoning_effort: ovh_qwen / openai_gpt5 / scaleway's thinking lever. Value domain
             is further restricted per dialect by :data:`DIALECT_VALUE_DOMAINS` —
             OVH's gateway 400s on ``high`` and 422s on ``xhigh`` (FRE-1430 F3).
         effort: anthropic_adaptive's thinking lever (native

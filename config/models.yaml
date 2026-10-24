@@ -628,7 +628,8 @@ models:
   #
   # Prices: the owner's console, read 2026-10-24, EUR x 1.18 (the rate the OVH chat entry
   # uses). The catalog has no cached-price field, so cached input bills at the full input
-  # price: the ledger over-counts, never under-counts. 256K context, tools, reasoning.
+  # price. Where a cached price exists (deepseek: EUR 0.12 in the console), the ledger
+  # over-counts that input. 256K context, tools, reasoning.
   glm-5.3-scaleway:
     provider: scaleway
     id: "glm-5.3"
@@ -636,7 +637,8 @@ models:
     # A runaway bound, not provider truth: thinking bills as completion. Same value as the OVH entry.
     max_tokens: 32768
     max_concurrency: 10
-    # Master's probe saw one 120 s hang on deepseek-v4.1-flash. This bounds a hang.
+    # Same bound as the deepseek-v4.1-flash entry, where master's probe saw a 120 s hang.
+    # The probe saw no hang on GLM.
     default_timeout: 180
     input_cost_per_token: 0.000002124    # EUR 1.80/MTok x 1.18
     output_cost_per_token: 0.00000649    # EUR 5.50/MTok x 1.18

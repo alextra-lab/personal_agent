@@ -669,3 +669,35 @@ class TestOneCardAtATime:
         assert transport.request_tool_approval.await_count == 2
         assert most_open == 1
         assert sorted(c["x"] for c in recorder.calls) == ["1", "2"]
+
+
+# ── FRE-1676 AC-3: a refused call logs its tool name and argument length ──────
+
+
+@pytest.mark.usefixtures("no_phase_events")
+class TestRefusedCallLogsItsSize:
+    @pytest.mark.asyncio
+    async def test_a_refused_call_logs_tool_name_and_argument_length_but_not_the_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        use_rules(monkeypatch)
+        recorder = _Recorder()
+        layer = _layer(recorder.run, transport=None)
+        arguments = {"x": "SECRET-BODY-" + "y" * 9000}
+        with (
+            patch("personal_agent.tools.executor.settings", _settings(ui_enabled=True)),
+            patch("personal_agent.tools.executor.log") as log,
+        ):
+            result = await _call(layer, None, arguments)
+
+        assert result["success"] is False
+        assert recorder.calls == []
+        violations = [
+            c.kwargs
+            for c in log.warning.call_args_list
+            if c.args and c.args[0] == "policy_violation"
+        ]
+        assert len(violations) == 1
+        assert violations[0]["tool_name"] == "probe"
+        assert violations[0]["argument_length"] == len(json.dumps(arguments))
+        assert all("SECRET-BODY" not in repr(v) for v in violations[0].values())

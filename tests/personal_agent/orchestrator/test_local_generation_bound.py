@@ -256,6 +256,7 @@ class TestARunawayStopsAtTheBound:
             {"id": "call_1", "name": "write_file", "arguments": {"content": "cut off mid-str"}}
         ]
         ctx = _ctx()
+        ctx.length_stop_retries = 1  # FRE-1676: the one retry is spent, so this stop ends the turn
         events: list[tuple[str, dict[str, Any]]] = []
 
         state = await _finalize(
@@ -505,6 +506,7 @@ class TestStepLlmCallForwardsTheBound:
     async def test_the_normal_call_ends_the_turn_and_names_the_deployment(self) -> None:
         ctx = _ctx()
         ctx.answering_model_key = None  # step_llm_call must set it itself
+        ctx.length_stop_retries = 1  # FRE-1676: the one retry is spent, so this stop ends the turn
         client = _local_mock_client(AsyncMock(return_value=_length_response()))
         events: list[tuple[str, dict[str, Any]]] = []
 
@@ -527,6 +529,7 @@ class TestStepLlmCallForwardsTheBound:
         from litellm.exceptions import ContextWindowExceededError
 
         ctx = _ctx()
+        ctx.length_stop_retries = 1  # FRE-1676: the one retry is spent, so this stop ends the turn
         ctx.messages = [
             {"role": "user", "content": "go"},
             {"role": "tool", "tool_call_id": "a", "content": "old " * 200},
@@ -579,6 +582,7 @@ class TestTheReplyNamesOnlyALimitThatApplied:
         response = _length_response()
         response["usage"] = {"prompt_tokens": 131000, "completion_tokens": 900, "total_tokens": 131900}
         ctx = _ctx()
+        ctx.length_stop_retries = 1  # FRE-1676: the one retry is spent, so this stop ends the turn
 
         state = await _finalize(ctx, response, generation_bound=_BOUND)
 

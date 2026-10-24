@@ -112,6 +112,20 @@ PermissionResult = PermissionGranted | PermissionRefused
 _APPROVAL_LOCKS: dict[str, asyncio.Lock] = {}
 
 
+def argument_length(arguments: str | Mapping[str, Any]) -> int:
+    """Return the size of a tool call's arguments in characters, without their text.
+
+    Args:
+        arguments: The raw argument string a client hands over, or the parsed arguments.
+
+    Returns:
+        The string length, or the length of the arguments as JSON.
+    """
+    if isinstance(arguments, str):
+        return len(arguments)
+    return len(json.dumps(arguments, default=str))
+
+
 def _permission_refusal(
     *,
     tool_name: str,
@@ -771,6 +785,7 @@ class ToolExecutionLayer:
                 tool_name=tool_name,
                 reason=permission.reason,
                 mode=current_mode.value,
+                argument_length=argument_length(arguments),
                 trace_id=trace_ctx.trace_id,
             )
             return _failed(

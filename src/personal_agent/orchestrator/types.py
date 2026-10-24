@@ -420,6 +420,10 @@ class ExecutionContext:
     # path (back to TaskState.LLM_CALL) would otherwise issue exactly the extra model
     # call a deadline stop or a user Stop must never produce.
     turn_stopped_early: bool = False
+    # FRE-1676: length stops inside a tool call that this turn has already answered with a note
+    # (_finalize_llm_call_success). The first such stop returns to the model once. A second one
+    # ends the turn as FRE-1562 does.
+    length_stop_retries: int = 0
     # ADR-0076: extra iterations granted when the user picks "Continue" at a
     # tool_iteration_limit constraint pause. Added on top of the resolved max.
     tool_iteration_bonus: int = 0

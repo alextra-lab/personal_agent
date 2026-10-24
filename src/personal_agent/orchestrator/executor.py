@@ -77,7 +77,7 @@ from personal_agent.llm_client.models import (
     Placement,
     synthesis_retains_tools,
 )
-from personal_agent.llm_client.types import is_context_window_error
+from personal_agent.llm_client.types import ToolCall, is_context_window_error
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
@@ -134,6 +134,7 @@ from personal_agent.telemetry import (
     ORCHESTRATOR_FATAL_ERROR,
     PRIMARY_CONTEXT_WINDOW_TRIMMED,
     PRIMARY_GENERATION_HIT_BOUND,
+    PRIMARY_TOOL_CALL_CUT_AT_BOUND,
     REPLY_READY,
     STATE_TRANSITION,
     STEP_EXECUTED,
@@ -149,7 +150,7 @@ from personal_agent.telemetry.spans import close_step_span, open_step_span
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools import ToolExecutionLayer, get_default_registry
 from personal_agent.tools.contract import dispatch_error
-from personal_agent.tools.executor import mode_refusal
+from personal_agent.tools.executor import argument_length, mode_refusal
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolErrorDetail
 
@@ -3488,6 +3489,46 @@ def _local_generation_bound(llm_client: Any) -> int | None:
     return bound if isinstance(bound, int) else None
 
 
+#: Sent once when a local call is cut at the output limit inside a tool call (FRE-1676).
+_CUT_TOOL_CALL_NOTE = (
+    "Your last tool call was cut at the output limit, so it did not run. "
+    "Split the work into smaller calls. "
+    "To make a page or a document, call artifact_draft and let it write the page."
+)
+
+
+def _log_tool_calls_cut_at_bound(
+    ctx: ExecutionContext,
+    tool_calls: Sequence[ToolCall],
+    *,
+    reasoning_length: int,
+    span_id: str,
+) -> None:
+    """Log what a local call was writing when it stopped at its output bound (FRE-1676).
+
+    One event per cut tool call, with the tool name and the sizes of its argument and of the
+    reasoning. The argument and reasoning text never reach the log: the argument can hold a
+    whole page or a secret.
+
+    Args:
+        ctx: Execution context. ``ctx.answering_model_key`` names the deployment.
+        tool_calls: The tool calls of the cut response.
+        reasoning_length: Length in characters of the response's reasoning trace.
+        span_id: This step's span id.
+    """
+    for call in tool_calls:
+        log.warning(
+            PRIMARY_TOOL_CALL_CUT_AT_BOUND,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            span_id=span_id,
+            deployment=ctx.answering_model_key,
+            tool_name=call["name"],
+            argument_length=argument_length(call["arguments"]),
+            reasoning_length=reasoning_length,
+        )
+
+
 def _stop_turn_for_length_bound(
     ctx: ExecutionContext, *, bound: int, tokens_generated: int, span_id: str
 ) -> None:
@@ -6766,6 +6807,30 @@ async def _finalize_llm_call_success(
     # argument, not an answer. End the turn here, before the reply or its tool calls are
     # recorded or run.
     if generation_bound is not None and response.get("finish_reason") == "length":
+        if response_tool_calls:
+            _log_tool_calls_cut_at_bound(
+                ctx,
+                response_tool_calls,
+                reasoning_length=len(response.get("reasoning_trace") or ""),
+                span_id=span_id,
+            )
+            # FRE-1676: the first cut inside a tool call returns to the model once, with the
+            # cut call dropped from history. A second one ends the turn below.
+            if ctx.length_stop_retries == 0:
+                ctx.length_stop_retries += 1
+                ctx.messages.append({"role": "user", "content": _CUT_TOOL_CALL_NOTE})
+                log.info(
+                    STEP_PLANNING_COMPLETED,
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    span_id=span_id,
+                    parent_span_id=trace_ctx.parent_span_id,
+                    model_role=model_role.value,
+                    channel=ctx.channel.value,
+                    status="length_bound_retry",
+                    next_state="llm_call",
+                )
+                return TaskState.LLM_CALL
         _stop_turn_for_length_bound(
             ctx, bound=generation_bound, tokens_generated=completion_tokens, span_id=span_id
         )

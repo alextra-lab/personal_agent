@@ -300,6 +300,43 @@ class TestGuardAttachedCallsStillSucceed:
         guard = _guard(blocklist=frozenset())
         await _dispatch(provider="ovhcloud", base_url=f"https://{ALLOWED_HOST}", guard=guard)
 
+    @pytest.mark.asyncio
+    async def test_scaleway_request_reaches_the_guarded_transport(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1680: a ``scaleway`` call is classified into a route and rides the guard.
+
+        Scaleway rides the OpenAI-SDK route (not the AsyncHTTPHandler one: litellm's
+        openai_like config reads ``api_key`` off the client). The request must reach the
+        patched ``httpx.AsyncHTTPTransport`` that the guarded client builds.
+        """
+        seen: list[str] = []
+
+        async def _handle(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            return httpx.Response(200, json=_openai_success_body(), request=request)
+
+        guard = _guard(blocklist=frozenset())
+        check_url_spy = _spy_check_url(guard)
+        with patch.object(httpx.AsyncHTTPTransport, "handle_async_request", side_effect=_handle):
+            await _dispatch(provider="scaleway", base_url=f"https://{ALLOWED_HOST}", guard=guard)
+        assert len(seen) == 1
+        assert httpx.URL(seen[0]).host == ALLOWED_HOST
+        assert ALLOWED_HOST in _checked_hosts(check_url_spy)
+
+    @pytest.mark.asyncio
+    async def test_scaleway_blocked_host_never_reaches_a_transport(self) -> None:
+        """Seeded negative: a blocklisted Scaleway host is refused before any send."""
+        guard = _guard(blocklist=frozenset({BLOCKED_HOST}))
+        with patch.object(
+            httpx.AsyncHTTPTransport, "handle_async_request", side_effect=_sentinel_never_reached
+        ) as transport_spy:
+            with pytest.raises(EgressBlockedError):
+                await _dispatch(
+                    provider="scaleway", base_url=f"https://{BLOCKED_HOST}", guard=guard
+                )
+        transport_spy.assert_not_called()
+
 
 # ── AC-c: layer-2 hook fires on redirect hops (AsyncHTTPHandler route) ────
 

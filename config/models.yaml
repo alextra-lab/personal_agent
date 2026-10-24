@@ -88,6 +88,17 @@ providers:
     max_concurrency: 50
     summary: "OVH AI Endpoints — managed chat inference (litellm-native provider)"
     dialect: ovh_qwen  # ADR-0145 D3a; reasoning_effort domain {none,low,medium} only (FRE-1430 F3)
+  # FRE-1680: Scaleway Generative APIs, OpenAI-compatible, hosted in Paris. litellm ships
+  # a native `scaleway` provider with this base URL, so dispatch is `scaleway/<id>` and
+  # the pricing registry keys on the same string. Auth is the IAM secret key as a Bearer
+  # token. The key lives in .env as AGENT_SCALEWAY_SECRET_KEY (master writes it at deploy).
+  scaleway:
+    base_url: "https://api.scaleway.ai/v1"
+    auth_env: scaleway_secret_key
+    placement: cloud
+    max_concurrency: 50
+    summary: "Scaleway Generative APIs — managed chat inference (picker-only)"
+    dialect: scaleway  # reasoning_effort is the only thinking lever (master's probe, FRE-1680)
   openai:
     auth_env: openai_api_key
     placement: cloud
@@ -599,6 +610,87 @@ models:
     # licenses `true` here. Confirm in the console if a vision turn misbehaves:
     # this flag is the one that was first set wrong by inferring.
     supports_vision: true
+    supports_pdf_document: false
+
+  # ── Managed GLM and DeepSeek (Scaleway Generative APIs, FRE-1680) ──
+  # Two SELECTABLE alternatives, not bound roles: no role binds either key, and both
+  # appear in the PWA picker because the primary binding is `open: true`. Owner decision
+  # 2026-10-24: any role swap needs a measured comparison and the owner's decision.
+  #
+  # Provider truth, from master's probe of 2026-10-24 (FRE-1680 ticket comment): usage
+  # carries prompt_tokens_details.cached_tokens and completion_tokens_details.
+  # reasoning_tokens. Reasoning is always on and arrives in the `reasoning` field.
+  # chat_template_kwargs and thinking change nothing. reasoning_effort is the only lever.
+  # Measured: GLM 26 reasoning tokens by default and 6 at low (master's probe). Master's
+  # probe of the deployed API on 2026-10-24 (FRE-1680 PR comment): glm-5.3 accepts low,
+  # medium and high (200). deepseek-v4.1-flash accepts low and high (200) but returns 400
+  # on medium ("DeepSeek V4.1 reasoning_effort must be low, high, xhigh, max, or an integer
+  # within [1, 100]"). So the two models differ: GLM `default` is `medium`, DeepSeek
+  # `default` is `high`, and DeepSeek's reasoning_effort_domain omits `medium`. `default`
+  # does not use `low`, which would silently cut thinking for the owner's quality comparison.
+  # xhigh and max are valid on DeepSeek but unmeasured and outside the dialect domain.
+  #
+  # Prices: the owner's console, read 2026-10-24, EUR x 1.18 (the rate the OVH chat entry
+  # uses). The catalog has no cached-price field, so cached input bills at the full input
+  # price. Where a cached price exists (deepseek: EUR 0.12 in the console), the ledger
+  # over-counts that input. 256K context, tools, reasoning.
+  glm-5.3-scaleway:
+    provider: scaleway
+    id: "glm-5.3"
+    context_length: 262144
+    # A runaway bound, not provider truth: thinking bills as completion. Same value as the OVH entry.
+    max_tokens: 32768
+    max_concurrency: 10
+    # Same bound as the deepseek-v4.1-flash entry, where master's probe saw a 120 s hang.
+    # The probe saw no hang on GLM.
+    default_timeout: 180
+    input_cost_per_token: 0.000002124    # EUR 1.80/MTok x 1.18
+    output_cost_per_token: 0.00000649    # EUR 5.50/MTok x 1.18
+    # reasoning_effort_domain makes the runtime gate refuse a call-site `none` or `xhigh`
+    # (the dialect domain checks catalog modes only).
+    reasoning_effort_domain: [low, medium, high]
+    default_mode: default
+    modes:
+      default:
+        reasoning_effort: medium
+      # sub_agent inherits the selected primary (config/model_roles.yaml), so a `worker` mode is required.
+      worker:
+        reasoning_effort: low
+      # ADR-0157 D5: the Fast level's primary mode, the bottom of the dialect's range.
+      fast:
+        reasoning_effort: low
+    # Tool calling: master's probe, finish_reason tool_calls. Vision and PDF: not
+    # stated by the console or the probe, so declared false until checked.
+    supports_function_calling: true
+    tool_calling_strategy: "native"
+    supports_vision: false
+    supports_pdf_document: false
+
+  deepseek-v4.1-flash-scaleway:
+    provider: scaleway
+    id: "deepseek-v4.1-flash"
+    context_length: 262144
+    max_tokens: 32768
+    max_concurrency: 10
+    default_timeout: 180
+    input_cost_per_token: 0.000000708    # EUR 0.60/MTok x 1.18 (cached input EUR 0.12 is not modelled)
+    output_cost_per_token: 0.000002124   # EUR 1.80/MTok x 1.18
+    # No `medium`: Scaleway returns 400 on it for this model (see the note above).
+    reasoning_effort_domain: [low, high]
+    default_mode: default
+    modes:
+      default:
+        reasoning_effort: high
+      worker:
+        reasoning_effort: low
+      fast:
+        reasoning_effort: low
+    # Probe: one `reasoning_effort: low` call hung 120 s once in 12; the repeat answered in 0.3 s.
+    # The probe's second call with a repeated prefix reported cached_tokens 0, so the
+    # cached price was not observed.
+    supports_function_calling: true
+    tool_calling_strategy: "native"
+    supports_vision: false
     supports_pdf_document: false
 
   # ── Cloud Models (ADR-0031) ─────────────────────────────────────

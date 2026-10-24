@@ -1,8 +1,8 @@
 """FRE-1622 (ADR-0157 D5): the answering model runs the level's mode, else ``default`` (AC-4).
 
 Both client paths: the session's primary through ``get_llm_client``, and the vision escalation
-through ``get_llm_client_for_key``. The thirteen pickable deployments (nine, plus the three that FRE-1625 added, plus the one that
-FRE-1631 added) are every ``kind: llm`` entry of the shipped catalog (``is_selectable_binding`` for the open ``primary`` role).
+through ``get_llm_client_for_key``. The fifteen pickable deployments (nine, plus the three that FRE-1625 added, plus the one that
+FRE-1631 added, plus the two that FRE-1680 added) are every ``kind: llm`` entry of the shipped catalog (``is_selectable_binding`` for the open ``primary`` role).
 """
 
 from __future__ import annotations
@@ -44,6 +44,9 @@ _FAST = {
     "claude_haiku_5_5",
     # FRE-1631: Sonnet 5.5 declares fast and deep (picker-only, bound to no role).
     "claude_sonnet_5_5",
+    # FRE-1680: the two Scaleway entries declare a fast mode (ADR-0157 D5), no deep mode.
+    "glm-5.3-scaleway",
+    "deepseek-v4.1-flash-scaleway",
 }
 # FRE-1628: the first entry to declare a deep mode (ADR-0157 D5, effort high).
 _DEEP = {"claude_haiku_5_5", "claude_sonnet_5_5"}
@@ -67,8 +70,8 @@ def _expected(level: str, key: str) -> str:
     return _declared_mode(level, key) or "default"
 
 
-def test_there_are_thirteen_pickable_deployments() -> None:
-    assert len(_PICKABLE) == 13
+def test_there_are_fifteen_pickable_deployments() -> None:
+    assert len(_PICKABLE) == 15
     assert _FAST <= set(_PICKABLE)
 
 

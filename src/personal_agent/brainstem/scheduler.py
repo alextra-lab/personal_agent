@@ -218,6 +218,9 @@ class BrainstemScheduler:
         self.slm_health_probe_interval_seconds = getattr(
             settings, "slm_health_probe_interval_seconds", 300.0
         )
+        self.slm_health_probe_down_interval_seconds = getattr(
+            settings, "slm_health_probe_down_interval_seconds", 60.0
+        )
 
         # Cache-erosion monitor (ADR-0078 / FRE-1189)
         self._last_cache_erosion_probe_run: datetime | None = None
@@ -1129,17 +1132,22 @@ class BrainstemScheduler:
                             trace_id=iteration_trace_id,
                         )
 
-                # Every 5 min: SLM-health monitor (FRE-399 Layer 3 / ADR-0083)
+                # Every 5 min, every minute while 'down': SLM-health monitor
+                # (FRE-399 Layer 3 / ADR-0083; ADR-0144 D4 rule 4 / FRE-1435)
+                from personal_agent.observability.slm_health.scheduler_runner import (
+                    run_scheduled_slm_health_probe,
+                    slm_health_probe_interval_s,
+                )
+
                 if self.slm_health_probe_enabled and (
                     self._last_slm_health_probe_run is None
                     or (now - self._last_slm_health_probe_run).total_seconds()
-                    >= self.slm_health_probe_interval_seconds
+                    >= slm_health_probe_interval_s(
+                        normal_s=self.slm_health_probe_interval_seconds,
+                        down_s=self.slm_health_probe_down_interval_seconds,
+                    )
                 ):
                     try:
-                        from personal_agent.observability.slm_health.scheduler_runner import (
-                            run_scheduled_slm_health_probe,
-                        )
-
                         await run_scheduled_slm_health_probe(
                             es_client=cast(
                                 "AsyncElasticsearch | None",

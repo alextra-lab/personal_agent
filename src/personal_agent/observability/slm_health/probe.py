@@ -22,11 +22,15 @@ in to an additional check: run a one-token completion against the catalog's
 local ``primary`` deployment. Failure degrades the status. This is **opt-in
 and off by default** — only the scheduled probe tick passes ``base_url``
 (gated further by ``settings.slm_health_generation_check_enabled``, itself
-default ``False`` — master gate 2026-09-14, FRE-1517); the per-request
+default ``False`` — master gate 2026-09-14, FRE-1517). The per-request
 provider-availability check
 (:func:`personal_agent.llm_client.provider_health.is_provider_available`)
-never passes ``base_url``, so its call frequency and behaviour are unchanged
-(ADR-0083 already rejected polling the SLM on every turn).
+does not call this probe at all since FRE-1435: it reads the cached verdict
+(ADR-0144 D4 — an availability read costs no request to the origin).
+
+**Observation time (FRE-1435).** Every snapshot carries ``observed_monotonic``
+set to the probe's start. The cache orders writes on it, so a probe that
+started before a real call failed cannot overwrite that call's ``down``.
 
 **The check skips rather than degrades (master gate, FRE-1474) when:**
 
@@ -125,6 +129,7 @@ async def probe_slm_health(
             status="down",
             reachable=False,
             probed_at=probed_at,
+            observed_monotonic=start,
             trace_id=trace_id,
             error=f"timeout after {timeout_s}s",
         )
@@ -141,6 +146,7 @@ async def probe_slm_health(
             status="down",
             reachable=False,
             probed_at=probed_at,
+            observed_monotonic=start,
             trace_id=trace_id,
             error=str(exc),
         )
@@ -166,6 +172,7 @@ async def probe_slm_health(
             reachable=False,
             probe_latency_ms=probe_latency_ms,
             probed_at=probed_at,
+            observed_monotonic=start,
             trace_id=trace_id,
             error="CF Access auth failed (403)",
         )
@@ -183,6 +190,7 @@ async def probe_slm_health(
             reachable=False,
             probe_latency_ms=probe_latency_ms,
             probed_at=probed_at,
+            observed_monotonic=start,
             trace_id=trace_id,
             error=f"HTTP {resp.status_code}",
         )
@@ -218,6 +226,7 @@ async def probe_slm_health(
         body=body,
         probe_latency_ms=probe_latency_ms,
         probed_at=probed_at,
+        observed_monotonic=start,
         trace_id=trace_id,
         gpu_util_degraded_pct=gpu_util_degraded_pct,
         queue_depth_degraded=queue_depth_degraded,
@@ -430,6 +439,7 @@ def _build_snapshot(
     body: dict[str, Any],
     probe_latency_ms: float,
     probed_at: datetime,
+    observed_monotonic: float,
     trace_id: str,
     gpu_util_degraded_pct: float,
     queue_depth_degraded: int,
@@ -459,6 +469,8 @@ def _build_snapshot(
         body: Parsed JSON response from the SLM. May be empty (liveness-only).
         probe_latency_ms: Round-trip probe wall-clock time.
         probed_at: Probe initiation timestamp (UTC).
+        observed_monotonic: ``time.monotonic()`` at probe start — the evidence time the
+            cache orders on (ADR-0144 D4 rule 2).
         trace_id: Probe trace ID.
         gpu_util_degraded_pct: GPU threshold.
         queue_depth_degraded: Queue depth threshold.
@@ -507,6 +519,7 @@ def _build_snapshot(
         model_id=model_id,
         probe_latency_ms=probe_latency_ms,
         probed_at=probed_at,
+        observed_monotonic=observed_monotonic,
         trace_id=trace_id,
         generation_ok=generation_ok,
         generation_skip_reason=generation_skip_reason,

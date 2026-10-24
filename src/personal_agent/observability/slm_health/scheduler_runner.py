@@ -11,8 +11,11 @@ check (passing ``base_url``): the scheduled tick's existing cadence
 (``slm_health_probe_interval_seconds``, 300s by default) absorbs the extra
 cost, rather than adding a new schedule. The per-request provider-availability
 check (:func:`personal_agent.llm_client.provider_health.is_provider_available`)
-calls :func:`~.probe.probe_slm_health` directly, without ``base_url`` — its
-frequency and behaviour are unaffected.
+does not probe: it reads the verdict this tick publishes (FRE-1435).
+
+While the published verdict is ``down``, the scheduler probes at the shorter
+``slm_health_probe_down_interval_seconds`` (ADR-0144 D4 rule 4), see
+:func:`slm_health_probe_interval_s`.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from personal_agent.config.settings import get_settings
-from personal_agent.observability.slm_health.cache import set_cached_snapshot
+from personal_agent.observability.slm_health.cache import set_cached_snapshot, verdict_is_down
 from personal_agent.observability.slm_health.probe import probe_slm_health
 from personal_agent.observability.slm_health.sink import write_result
 from personal_agent.observability.slm_health.snapshot import SlmHealthSnapshot
@@ -33,6 +36,23 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
 
 log = get_logger(__name__)
+
+
+def slm_health_probe_interval_s(*, normal_s: float, down_s: float) -> float:
+    """Return the probe interval the published verdict calls for (ADR-0144 D4 rule 4).
+
+    The scheduler checks this once per lifecycle tick (60 s), so a recovered origin is seen
+    within one interval plus one tick.
+
+    Args:
+        normal_s: The interval while the verdict is not ``down``.
+        down_s: The shorter interval while the verdict is ``down``.
+
+    Returns:
+        The smaller of *down_s* and *normal_s* while an uncleared ``down`` is published, else
+        *normal_s*. The ``min`` keeps a ``down`` from ever probing more slowly than normal.
+    """
+    return min(down_s, normal_s) if verdict_is_down() else normal_s
 
 
 async def run_scheduled_slm_health_probe(
@@ -101,12 +121,14 @@ async def run_scheduled_slm_health_probe(
             )
             return None
 
-        # Update process-global cache regardless of ES availability.
-        set_cached_snapshot(snapshot)
+        # Update process-global cache regardless of ES availability. A probe that
+        # started before a newer observation is rejected (ADR-0144 D4 rule 2).
+        accepted = set_cached_snapshot(snapshot)
 
         log.info(
             "slm_health_probe_scheduled_completed",
             status=snapshot.status,
+            verdict_accepted=accepted,
             reachable=snapshot.reachable,
             probe_latency_ms=snapshot.probe_latency_ms,
             model_loaded=snapshot.model_loaded,

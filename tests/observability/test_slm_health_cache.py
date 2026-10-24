@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 
-def _make_snapshot() -> "SlmHealthSnapshot":
+def _make_snapshot(observed_monotonic: float | None = None) -> "SlmHealthSnapshot":
     from personal_agent.observability.slm_health.snapshot import SlmHealthSnapshot
 
     return SlmHealthSnapshot(
@@ -16,6 +16,7 @@ def _make_snapshot() -> "SlmHealthSnapshot":
         reachable=True,
         probed_at=datetime.now(timezone.utc),
         trace_id="cache-test",
+        observed_monotonic=time.monotonic() if observed_monotonic is None else observed_monotonic,
     )
 
 
@@ -49,37 +50,32 @@ class TestGetCachedSnapshot:
         assert result is snap
 
     def test_returns_none_when_stale(self) -> None:
-        """Snapshot stored in the past (simulated via monkeypatching _cached_at)."""
-        import personal_agent.observability.slm_health.cache as cache_mod
+        """An ``up`` observed longer ago than the TTL is stale (age from observation, FRE-1435)."""
         from personal_agent.observability.slm_health.cache import (
             get_cached_snapshot,
             set_cached_snapshot,
         )
 
-        snap = _make_snapshot()
+        snap = _make_snapshot(observed_monotonic=time.monotonic() - 100.0)
         set_cached_snapshot(snap)
-        # Backdate the cached_at to simulate staleness
-        cache_mod._cached_at = time.monotonic() - 100.0
         result = get_cached_snapshot(ttl=60.0)
         assert result is None
 
     def test_exact_ttl_boundary_returns_none(self) -> None:
-        """At exactly TTL seconds old the snapshot is stale (> check)."""
-        import personal_agent.observability.slm_health.cache as cache_mod
+        """At TTL seconds old the snapshot is stale (> check)."""
         from personal_agent.observability.slm_health.cache import (
             get_cached_snapshot,
             set_cached_snapshot,
         )
 
-        snap = _make_snapshot()
+        snap = _make_snapshot(observed_monotonic=time.monotonic() - 45.0)  # TTL, plus run time
         set_cached_snapshot(snap)
-        cache_mod._cached_at = time.monotonic() - 45.0  # exactly TTL
         result = get_cached_snapshot(ttl=45.0)
         assert result is None
 
 
 class TestSetCachedSnapshot:
-    """set_cached_snapshot stores and overwrites."""
+    """set_cached_snapshot stores and overwrites with a newer observation."""
 
     def test_overwrites_previous(self) -> None:
         from personal_agent.observability.slm_health.cache import (

@@ -13,9 +13,11 @@ probe — a per-provider network call on every config-read is chattiness this
 ADR does not ask for, and secret presence is the same signal
 ``/api/inference/status`` already uses for its cloud branch.
 
-Local placement is a **live** check: it reuses the same SLM-tunnel health
-probe ``/api/inference/status`` calls, since the local provider's GPU really
-can be down independent of any secret.
+Local placement reads the **published verdict** of the SLM-health state model
+(FRE-1435, ADR-0144 D4), since the local provider's GPU really can be down
+independent of any secret. It makes no request to the origin: the scheduled
+probe and real local calls write the verdict, and an availability read only
+reads it.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import structlog
 from personal_agent.config.config_guard import Finding
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import ModelConfig, Placement, ProviderDefinition
-from personal_agent.observability.slm_health import probe_slm_health
+from personal_agent.observability.slm_health.cache import verdict_is_down
 from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry.trace import SystemTraceContext
 
@@ -45,29 +47,21 @@ async def is_provider_available(
 
     Args:
         provider: The provider definition to check.
-        settings: Live ``AppConfig`` to resolve ``auth_env`` and SLM probe
-            settings against.
-        trace_id: Optional trace id for the local health probe's log
-            correlation. A fresh one is generated when omitted.
+        settings: Live ``AppConfig`` to resolve ``auth_env`` against.
+        trace_id: Kept for callers. The local branch no longer probes, so it
+            has no log to correlate.
 
     Returns:
         ``True`` if the provider is available for new requests right now.
         Cloud: the declared ``auth_env`` credential is present (or the
-        provider declares no auth at all). Local: the SLM-tunnel probe status
-        is not ``"down"`` — ``"up"`` and ``"degraded"`` both still serve.
+        provider declares no auth at all). Local: no uncleared ``down`` is
+        published (ADR-0144 D4). A fresh ``up``/``degraded``, an expired
+        verdict and no verdict at all (the cold start) are all available.
     """
     if provider.placement is Placement.CLOUD:
         return provider.auth_env is None or bool(getattr(settings, provider.auth_env, None))
 
-    ctx_trace_id = trace_id or SystemTraceContext.new("provider_health_probe").trace_id
-    snapshot = await probe_slm_health(
-        url=settings.resolved_slm_health_url,
-        timeout_s=3.0,
-        trace_id=ctx_trace_id,
-        gpu_util_degraded_pct=settings.slm_gpu_util_degraded_pct,
-        queue_depth_degraded=settings.slm_queue_depth_degraded,
-    )
-    return snapshot.status != "down"
+    return not verdict_is_down()
 
 
 async def check_all_providers(

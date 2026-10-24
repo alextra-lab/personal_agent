@@ -4,7 +4,7 @@ Cloud providers: config-only check (declared ``auth_env`` secret present on
 settings) — no live reachability probe, matching the existing
 ``/api/inference/status`` cloud branch and the ADR's own "endpoint reachable,
 required secret present" framing for a vendor-managed API. Local providers:
-a live SLM-tunnel health probe, reusing ``probe_slm_health``.
+the published SLM-health verdict, with no request to the origin (FRE-1435).
 
 ``fetch_served_model_ids``/``check_local_served_ids`` (FRE-1415) are a second,
 independent dimension: per-*model* served-id membership, layered on top of the
@@ -105,51 +105,51 @@ async def test_cloud_provider_with_no_auth_env_is_always_available():
 
 @pytest.mark.asyncio
 async def test_cloud_provider_does_not_make_a_network_call():
-    """Cloud availability is a config check only — no probe_slm_health call."""
+    """Cloud availability is a config check only — it does not read the SLM verdict."""
     provider = ProviderDefinition(auth_env="openai_api_key", placement="cloud", max_concurrency=50)
     settings = _settings(openai_api_key="sk-live")
-    with patch(f"{_PKG}.probe_slm_health", new_callable=AsyncMock) as probe_mock:
+    with patch(f"{_PKG}.verdict_is_down") as verdict_mock:
         await is_provider_available(provider, settings)
-    probe_mock.assert_not_awaited()
+    verdict_mock.assert_not_called()
 
 
-# ── Local providers: live SLM probe, "down" excludes, "up"/"degraded" don't ───
+# ── Local providers: read the published verdict (FRE-1435), no probe ─────────
 
 
-@pytest.mark.asyncio
-async def test_local_provider_available_when_probe_up():
-    """A local provider probed 'up' is available."""
-    provider = ProviderDefinition(placement="local", max_concurrency=2)
-    settings = _settings()
-    with patch(f"{_PKG}.probe_slm_health", new_callable=AsyncMock, return_value=_snapshot("up")):
-        assert await is_provider_available(provider, settings) is True
+@pytest.fixture
+def _clean_slm_cache():
+    from personal_agent.observability.slm_health.cache import clear_cache
 
-
-@pytest.mark.asyncio
-async def test_local_provider_available_when_probe_degraded():
-    """A local provider probed 'degraded' still counts as available — only 'down' excludes."""
-    provider = ProviderDefinition(placement="local", max_concurrency=2)
-    settings = _settings()
-    with patch(
-        f"{_PKG}.probe_slm_health", new_callable=AsyncMock, return_value=_snapshot("degraded")
-    ):
-        assert await is_provider_available(provider, settings) is True
+    clear_cache()
+    yield
+    clear_cache()
 
 
 @pytest.mark.asyncio
-async def test_local_provider_unavailable_when_probe_down():
-    """A local provider probed 'down' is unavailable."""
+@pytest.mark.parametrize(("status", "expected"), [("up", True), ("degraded", True), ("down", False)])
+async def test_local_provider_follows_published_verdict(_clean_slm_cache, status, expected):
+    """Only a published 'down' excludes a local provider; 'up'/'degraded' still serve."""
+    from personal_agent.observability.slm_health.cache import set_cached_snapshot
+
     provider = ProviderDefinition(placement="local", max_concurrency=2)
-    settings = _settings()
-    with patch(f"{_PKG}.probe_slm_health", new_callable=AsyncMock, return_value=_snapshot("down")):
-        assert await is_provider_available(provider, settings) is False
+    set_cached_snapshot(_snapshot(status))
+    with patch(f"{_PKG}.create_guarded_http_client") as client_mock:
+        assert await is_provider_available(provider, _settings()) is expected
+    client_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_local_provider_available_on_cold_start(_clean_slm_cache):
+    """No verdict at all is available — a cold start must not block every local call."""
+    provider = ProviderDefinition(placement="local", max_concurrency=2)
+    assert await is_provider_available(provider, _settings()) is True
 
 
 # ── check_all_providers — the per-provider fan-out the read endpoint uses ─────
 
 
 @pytest.mark.asyncio
-async def test_check_all_providers_returns_one_entry_per_provider():
+async def test_check_all_providers_returns_one_entry_per_provider(_clean_slm_cache):
     """check_all_providers covers every declared provider, local and cloud."""
     config = ModelConfig(
         providers={
@@ -172,8 +172,7 @@ async def test_check_all_providers_returns_one_entry_per_provider():
         },
     )
     settings = _settings(anthropic_api_key="sk-live")
-    with patch(f"{_PKG}.probe_slm_health", new_callable=AsyncMock, return_value=_snapshot("up")):
-        result = await check_all_providers(config, settings)
+    result = await check_all_providers(config, settings)
     assert result == {"slm_local": True, "anthropic": True}
 
 

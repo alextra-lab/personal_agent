@@ -168,9 +168,10 @@ def build_provider_availability(
 
     The authoritative per-provider health source is
     :func:`personal_agent.llm_client.provider_health.check_all_providers` (FRE-918),
-    which is **async** because its local path does a live SLM-tunnel probe. This
-    predicate deliberately does not call it: ``resolve_options_and_default`` runs on
-    the synchronous executor-guard path, and threading async + a live probe into it
+    which is **async**, and whose local path reads the published SLM-health verdict
+    (FRE-1435). This predicate deliberately does not call it:
+    ``resolve_options_and_default`` runs on the synchronous executor-guard path, and
+    threading async + the local health refinement into it
     belongs with the build-boundary pause wiring (FRE-882 / ADR-0122 §4), which is
     already async and owns the fail-closed dispatch. The cloud logic is identical, so
     the two never disagree on a cloud provider; only the local live-probe refinement

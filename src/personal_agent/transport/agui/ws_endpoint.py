@@ -7,7 +7,7 @@ and Future registries.
 
 Key capabilities:
 - Reconnect replay via Postgres ``session_events`` table
-- Per-connection decision waiter registry (replaces approval_waiter.py)
+- Session-scoped decision waiter registries (replaces approval_waiter.py)
 - Multi-connection eviction (one active socket per session)
 - Application-level PING/PONG keepalive
 - Inbound rate limiting and message size enforcement
@@ -22,7 +22,7 @@ import itertools
 import json
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
 
@@ -73,10 +73,10 @@ class WaiterMetadata:
 class _ConnectionState:
     """Mutable state for an active WebSocket connection.
 
-    Note the waiter dicts here serve **approval** waiters only
-    (:func:`register_waiter`). Constraint waiters are session-scoped — see
-    :data:`_session_constraint_waiters` — because a mobile client's socket drops
-    and returns constantly, and a decision must outlive its connection (FRE-928).
+    Pending decisions are not held here. Constraint waiters (FRE-928) and approval
+    waiters (FRE-1677) are session-scoped — see :data:`_session_constraint_waiters` and
+    :data:`_session_approval_waiters` — because a mobile client's socket drops and
+    returns constantly, and a decision must outlive its connection.
 
     Liveness is not tracked here: the receiver's bounded
     :data:`AppConfig.ws_ping_timeout_seconds` read wait is the single mechanism that
@@ -88,9 +88,6 @@ class _ConnectionState:
     user: RequestUser
     session_id: str
     outbound_queue: asyncio.Queue[dict[str, Any] | None]
-    waiters: dict[str, asyncio.Event] = field(default_factory=dict)
-    waiter_payloads: dict[str, dict[str, Any]] = field(default_factory=dict)
-    waiter_timeouts: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     cancel_requested: bool = False
     #: The task draining the session queue to this socket. A superseding connection stops it
     #: before its own replay, so no item is taken by a socket that can no longer send it.
@@ -162,6 +159,38 @@ class _ConstraintWaiter:
 #: uvicorn worker (no ``--workers`` in ``Dockerfile.gateway`` or ``docker-compose.cloud.yml``).
 #: Scaling to multiple workers would require moving this to shared state (e.g. Redis).
 _session_constraint_waiters: dict[str, dict[str, _ConstraintWaiter]] = {}
+
+
+@dataclass
+class _ApprovalWaiter:
+    """A pending tool-approval decision, owned by the session rather than a socket.
+
+    Attributes:
+        event: Set when the decision resolves (user answer, cancel, or timeout).
+        payload: Resolution payload filled in by whichever path resolves it.
+        timeout_task: Background task that applies the timeout decision.
+    """
+
+    event: asyncio.Event
+    payload: dict[str, Any]
+    timeout_task: asyncio.Task[None] | None = None
+
+
+#: Pending approval waiters keyed ``session_id -> request_id -> waiter`` (FRE-1677).
+#:
+#: Session-scoped for the reason given on :data:`_session_constraint_waiters`: a mobile
+#: socket drops and returns constantly, and the approval card is persisted and replayed
+#: to the client that returns. A drop, a supersede or a request that arrives in a gap
+#: no longer refuses the call; only an answer, a Stop press, or the timeout resolves a
+#: waiter. A timeout still denies, so the call stays fail-closed. In-process, like the
+#: registry above.
+_session_approval_waiters: dict[str, dict[str, _ApprovalWaiter]] = {}
+
+#: Sessions where an approval timed out with no live socket (FRE-1677). Approvals are
+#: serialized per session, so without this each queued approval would wait out its own
+#: timeout in the same gap. While a session is here and has no socket,
+#: :func:`register_waiter` refuses at once. A connect clears the entry.
+_approval_gap_expired: set[str] = set()
 
 #: Per-session cancel event (FRE-1375), keyed ``session_id -> event`` — set the
 #: instant ``USER_CANCEL`` arrives, so an in-flight primary model call can wake on
@@ -283,12 +312,19 @@ async def register_waiter(
     default_decision: str = "timeout",
     on_registered: Callable[[], Awaitable[None]] | None = None,
 ) -> ApprovalDecision:
-    """Register a decision waiter and block until resolved or timed out.
+    """Register an approval waiter and block until resolved or timed out.
 
-    The waiter is registered **before** ``on_registered`` runs, closing the
-    race where a client responds to a pushed event before the waiter exists
-    (ADR-0076). Callers pass the event-push coroutine as ``on_registered`` so
-    the push happens only after the waiter is ready to receive the reply.
+    The waiter belongs to the session, not to a socket (FRE-1677). A session whose
+    socket has dropped waits for its client to return: ``on_registered`` persists the
+    card, and a reconnect replays it. The waiter is registered **before**
+    ``on_registered`` runs, closing the race where a client responds to a pushed event
+    before the waiter exists (ADR-0076).
+
+    Two cases still refuse at once with ``connection_lost``: a session that has never
+    opened a socket in this process (eval and ``/chat`` callers have no PWA), and a
+    session whose earlier approval already timed out with no socket (see
+    :data:`_approval_gap_expired`). ``on_registered`` still runs, so the card is
+    persisted for replay.
 
     Args:
         session_id: Session the waiter belongs to.
@@ -296,41 +332,71 @@ async def register_waiter(
         timeout_seconds: Seconds before auto-resolving with *default_decision*.
         default_decision: Decision string to use on timeout.
         on_registered: Optional coroutine run after registration (typically the
-            event push). For the no-connection case it still runs so the event
-            is persisted for replay, then a ``connection_lost`` decision returns.
+            event push).
 
     Returns:
         The resolved decision.
+
+    Raises:
+        ValueError: If *request_id* is already pending for the session.
+        Exception: Whatever ``on_registered`` raises, after the waiter is
+            de-registered (a failed push must not leak a pending waiter).
     """
-    conn = _active_connections.get(session_id)
-    if conn is None:
+    if session_id not in _active_connections:
+        never_connected = get_cancel_event(session_id) is None
+        if never_connected or session_id in _approval_gap_expired:
+            log.info(
+                "ws.approval_waiter_refused_no_client",
+                session_id=session_id,
+                request_id=request_id,
+                reason="never_connected" if never_connected else "earlier_gap_timeout",
+            )
+            if on_registered is not None:
+                await on_registered()
+            return ApprovalDecision(decision="connection_lost", reason="no active WS connection")
+        log.info(
+            "ws.approval_waiter_waiting_for_client",
+            session_id=session_id,
+            request_id=request_id,
+            timeout_seconds=timeout_seconds,
+        )
+
+    bucket = _session_approval_waiters.setdefault(session_id, {})
+    if request_id in bucket:
+        raise ValueError(f"approval waiter already registered: {session_id}/{request_id}")
+    waiter = _ApprovalWaiter(event=asyncio.Event(), payload={})
+    bucket[request_id] = waiter
+
+    # The try opens BEFORE the timeout task and the push: a cancelled turn or a failing
+    # push would otherwise leak the entry, as nothing else sweeps a session-scoped waiter.
+    try:
+        waiter.timeout_task = asyncio.create_task(
+            _waiter_timeout(session_id, request_id, timeout_seconds, default_decision),
+        )
+
         if on_registered is not None:
             await on_registered()
-        return ApprovalDecision(decision="connection_lost", reason="no active WS connection")
 
-    event = asyncio.Event()
-    conn.waiters[request_id] = event
-    conn.waiter_payloads[request_id] = {}
-
-    timeout_task = asyncio.create_task(
-        _waiter_timeout(session_id, request_id, timeout_seconds, default_decision),
-    )
-    conn.waiter_timeouts[request_id] = timeout_task
-
-    if on_registered is not None:
-        await on_registered()
-
-    try:
-        await event.wait()
+        await waiter.event.wait()
     finally:
-        timeout_task.cancel()
-        conn.waiters.pop(request_id, None)
-        conn.waiter_timeouts.pop(request_id, None)
+        if waiter.timeout_task is not None:
+            waiter.timeout_task.cancel()
+        _discard_approval_waiter(session_id, request_id)
 
-    payload = conn.waiter_payloads.pop(request_id, {})
-    decision_str = payload.get("decision", default_decision)
-    reason = payload.get("reason")
-    return ApprovalDecision(decision=decision_str, reason=reason)
+    return ApprovalDecision(
+        decision=waiter.payload.get("decision", default_decision),
+        reason=waiter.payload.get("reason"),
+    )
+
+
+def _discard_approval_waiter(session_id: str, request_id: str) -> None:
+    """Remove an approval waiter, dropping the session bucket once it empties."""
+    bucket = _session_approval_waiters.get(session_id)
+    if bucket is None:
+        return
+    bucket.pop(request_id, None)
+    if not bucket:
+        _session_approval_waiters.pop(session_id, None)
 
 
 async def _waiter_timeout(
@@ -339,19 +405,27 @@ async def _waiter_timeout(
     timeout_seconds: float,
     default_decision: str,
 ) -> None:
-    """Background task that resolves a waiter on timeout."""
+    """Background task that resolves an approval waiter on timeout.
+
+    Resolves against the session registry, not the connection. A timeout with no
+    live socket marks the session in :data:`_approval_gap_expired`.
+    """
     await asyncio.sleep(timeout_seconds)
-    conn = _active_connections.get(session_id)
-    if conn is None:
-        return
-    evt = conn.waiters.get(request_id)
-    if evt is not None and not evt.is_set():
-        conn.waiter_payloads[request_id] = {
+    waiter = _session_approval_waiters.get(session_id, {}).get(request_id)
+    if waiter is not None and not waiter.event.is_set():
+        waiter.payload = {
             "decision": default_decision,
             "reason": f"timed out after {timeout_seconds}s",
         }
-        evt.set()
-        log.info("ws.waiter_timeout", request_id=request_id, session_id=session_id)
+        waiter.event.set()
+        if session_id not in _active_connections:
+            _approval_gap_expired.add(session_id)
+        log.info(
+            "ws.waiter_timeout",
+            request_id=request_id,
+            session_id=session_id,
+            client_connected=session_id in _active_connections,
+        )
 
 
 async def register_constraint_waiter(
@@ -464,16 +538,20 @@ async def _constraint_waiter_timeout(
 
 
 def _resolve_waiter(conn: _ConnectionState, request_id: str, payload: dict[str, Any]) -> None:
-    """Resolve a pending waiter with the given payload."""
-    evt = conn.waiters.get(request_id)
-    if evt is None:
+    """Resolve a pending approval waiter with the given payload.
+
+    The waiter is looked up by **session**, so an answer arriving on a freshly
+    reconnected socket resolves the waiter registered before the drop (FRE-1677).
+    """
+    waiter = _session_approval_waiters.get(conn.session_id, {}).get(request_id)
+    if waiter is None:
         log.debug("ws.resolve_unknown_waiter", request_id=request_id, session_id=conn.session_id)
         return
-    if evt.is_set():
+    if waiter.event.is_set():
         log.debug("ws.resolve_already_set", request_id=request_id, session_id=conn.session_id)
         return
-    conn.waiter_payloads[request_id] = payload
-    evt.set()
+    waiter.payload = payload
+    waiter.event.set()
     log.info(
         "ws.waiter_resolved",
         request_id=request_id,
@@ -540,9 +618,9 @@ def _resolve_all_waiters_user_cancel(conn: _ConnectionState) -> list[str]:
     ``user_cancel`` resolution, so any executor awaiting a constraint decision
     unblocks immediately and synthesizes from results gathered so far.
 
-    Covers **both** registries — the connection's approval waiters and the session's
-    constraint waiters. An explicit Stop is a genuine user decision, so unlike a
-    disconnect it must not leave a constraint waiter riding its timeout (FRE-928).
+    Covers **both** registries — the session's approval waiters and its constraint
+    waiters. An explicit Stop is a genuine user decision, so unlike a disconnect it
+    must not leave a waiter riding its timeout (FRE-928, FRE-1677).
 
     Args:
         conn: Active connection whose waiters should be cancelled.
@@ -551,16 +629,16 @@ def _resolve_all_waiters_user_cancel(conn: _ConnectionState) -> list[str]:
         The request IDs that were resolved (for telemetry).
     """
     resolved: list[str] = []
-    for request_id, evt in conn.waiters.items():
-        if evt.is_set():
+    for request_id, approval in _session_approval_waiters.get(conn.session_id, {}).items():
+        if approval.event.is_set():
             continue
         # Approval waiters carry no per-request metadata; "timeout" is register_waiter's
         # own default_decision contract.
-        conn.waiter_payloads[request_id] = {
+        approval.payload = {
             "decision": "timeout",
             "resolution": "user_cancel",
         }
-        evt.set()
+        approval.event.set()
         resolved.append(request_id)
 
     for request_id, waiter in _session_constraint_waiters.get(conn.session_id, {}).items():
@@ -574,37 +652,6 @@ def _resolve_all_waiters_user_cancel(conn: _ConnectionState) -> list[str]:
         resolved.append(request_id)
 
     return resolved
-
-
-def _cancel_all_waiters(conn: _ConnectionState) -> None:
-    """Resolve pending **approval** waiters with connection_lost on disconnect.
-
-    Constraint waiters are deliberately untouched (FRE-928). They are session-scoped
-    and ride their own timeout: a mobile socket drops and returns every 30-140s, so
-    treating a momentary absence as a permanent one is what discarded live user
-    decisions. A client reconnecting inside the window is replayed the pause event and
-    resolves the original waiter; a caller with no client at all still falls back when
-    the timeout expires.
-
-    Approval waiters keep the old fail-closed-fast behaviour: that is a safety posture
-    for HITL tool approval, not the same defect.
-
-    Args:
-        conn: The connection being torn down or superseded.
-    """
-    for request_id, evt in conn.waiters.items():
-        if not evt.is_set():
-            payload: dict[str, Any] = {
-                "decision": "connection_lost",
-                "reason": "WebSocket disconnected",
-                "resolution": "connection_lost",
-            }
-            conn.waiter_payloads[request_id] = payload
-            evt.set()
-    for task in conn.waiter_timeouts.values():
-        task.cancel()
-    conn.waiters.clear()
-    conn.waiter_timeouts.clear()
 
 
 # ── Per-session event queues ───────────────────────────────────────────────
@@ -726,7 +773,6 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     # 2. Multi-connection eviction
     old_conn = _active_connections.get(session_id)
     if old_conn is not None:
-        _cancel_all_waiters(old_conn)
         try:
             await old_conn.websocket.close(code=WS_CLOSE_SUPERSEDED, reason="Superseded")
         except Exception:
@@ -758,6 +804,7 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         generation=next(_connection_generation),
     )
     _active_connections[session_id] = conn
+    _approval_gap_expired.discard(session_id)
     # FRE-1375: create the cancel event now, at first connect, rather than lazily
     # on first race — makes its existence track "has this session ever connected"
     # (stable once true) instead of "is a connection live this instant" (a fact
@@ -784,7 +831,6 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     except Exception:
         log.exception("ws.handler_error", session_id=session_id)
     finally:
-        _cancel_all_waiters(conn)
         if _active_connections.get(session_id) is conn:
             _active_connections.pop(session_id, None)
         try:

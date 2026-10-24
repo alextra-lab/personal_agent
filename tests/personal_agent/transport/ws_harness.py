@@ -54,6 +54,10 @@ from personal_agent.service.auth import RequestUser
 # they finish.  Entries are removed via the task's done callback.
 _background_tasks: set[asyncio.Task[None]] = set()
 
+# Decisions of the tool-approval round-trips started via ``/__test/approval``,
+# keyed by request_id (FRE-1677).
+_approval_results: dict[str, str] = {}
+
 # Close code sent when a new connection supersedes an existing one (ADR-0075).
 WS_CLOSE_SUPERSEDED: int = 4001
 
@@ -538,6 +542,40 @@ def build_ws_test_app(
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
         return {"ok": "started"}
+
+    @test_router.post("/__test/approval")
+    async def _inject_approval(
+        session_id: str, request_id: str, timeout_s: float = 30.0
+    ) -> dict[str, str]:
+        """Start a tool-approval round-trip concurrently and return immediately.
+
+        The decision lands in ``_approval_results`` for ``/__test/approval_result``
+        (FRE-1677). Scheduled with ``asyncio.create_task`` for the reason given on
+        ``/__test/constraint_pause``.
+        """
+        from personal_agent.transport.agui.transport import AGUITransport
+
+        async def _run() -> None:
+            decision = await AGUITransport().request_tool_approval(
+                request_id=request_id,
+                trace_id="test-trace",
+                session_id=session_id,
+                tool="bash",
+                args={"command": "ls"},
+                risk_level="high",
+                reason="test approval",
+                timeout_seconds=timeout_s,
+            )
+            _approval_results[request_id] = decision.decision
+
+        task = asyncio.create_task(_run())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        return {"ok": "started"}
+
+    @test_router.get("/__test/approval_result")
+    async def _approval_result(request_id: str) -> dict[str, str | None]:
+        return {"decision": _approval_results.get(request_id)}
 
     app = FastAPI()
     app.include_router(ws_router)

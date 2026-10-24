@@ -973,6 +973,7 @@ class AGUITransport:
                 tool=tool,
                 risk_level=risk_level,
                 timeout_seconds=timeout_seconds,
+                client_connected=get_active_connection(session_id) is not None,
             )
 
         # Register the waiter BEFORE pushing the event so a fast client reply

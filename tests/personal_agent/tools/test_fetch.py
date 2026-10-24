@@ -44,6 +44,7 @@ def _mock_html_response(
     resp.status_code = status_code
     resp.is_error = status_code >= 400
     resp.text = body
+    resp.content = body.encode()
     resp.headers = {"content-type": content_type}
     return resp
 
@@ -817,3 +818,199 @@ async def test_download_text_returns_the_whole_text_uncut() -> None:
 
     assert text == "y" * 120_000
     assert status == 200
+
+
+# ── Non-HTML bodies: PDF text extraction and binary refusal (FRE-1669) ─────
+
+_PDF_SENTENCE = "Quarterly revenue rose by twelve percent"
+
+
+def _minimal_pdf(text: str) -> bytes:
+    """Build a one-page PDF with a real text layer and a correct xref table."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = b"%PDF-1.7\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref_at = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref_at,
+    )
+    return out
+
+
+def _image_only_pdf() -> bytes:
+    """A PDF whose only page is a raster image, so it has no text layer."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 40), "white").save(buf, format="PDF")
+    return buf.getvalue()
+
+
+async def _fetch_body(body: bytes, content_type: str) -> dict[str, object]:
+    """Run ``fetch_url_executor`` against a real ``httpx.Response`` with these bytes."""
+    resp = httpx.Response(200, content=body, headers={"content-type": content_type})
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        return await fetch_url_executor(url="https://example.com/doc", ctx=_CTX)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/pdf",
+        "Application/PDF; charset=binary",
+        "text/plain",
+        "text/html; charset=utf-8",
+        "application/octet-stream",
+    ],
+)
+async def test_pdf_body_returns_its_text_not_its_bytes(content_type: str) -> None:
+    """FRE-1669 AC1+AC2: a PDF yields text whatever its header says (even a wrong one)."""
+    result = await _fetch_body(_minimal_pdf(_PDF_SENTENCE), content_type)
+
+    assert _PDF_SENTENCE in str(result["text"])
+    assert not str(result["text"]).startswith("%PDF")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "type_name"),
+    [
+        (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" * 20, "PNG image"),
+        (b"PK\x03\x04" + b"\x14\x00\x00\x00" * 20, "ZIP archive"),
+        (b"PK\x05\x06" + b"\x00" * 18, "ZIP archive"),
+        (b"\xff\xd8\xff\xe0" + b"\x00\x10JFIF" * 10, "JPEG image"),
+        (b"GIF89a" + b"\x01\x00\x01\x00" * 10, "GIF image"),
+        (b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x00" * 20, "WebP image"),
+        (b"\x1f\x8b\x08\x00" + b"\x00" * 20, "gzip data"),
+        (b"\x7fELF\x02\x01\x01" + b"\x00" * 20, "ELF executable"),
+        (b"MZ\x90\x00\x03\x00\x00\x00" + b"\x00" * 20, "binary data"),
+        # No NUL byte anywhere: the signature alone must refuse these.
+        (b"BZh91AY&SY" + bytes(range(1, 60)), "bzip2 data"),
+        (b"\x28\xb5\x2f\xfd" + bytes(range(1, 60)), "Zstandard data"),
+    ],
+)
+async def test_binary_body_raises_a_typed_error_that_names_the_type(
+    body: bytes, type_name: str
+) -> None:
+    """FRE-1669 AC3: image, archive and executable bodies never come back as text."""
+    with pytest.raises(ToolExecutionError) as exc_info:
+        await _fetch_body(body, "text/plain")
+
+    assert exc_info.value.code == "unsupported_binary"
+    assert type_name in exc_info.value.message
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    ["MZ-300 was a computer.", "PK is a tag.", "BZhang is a name.", "café ü"],
+)
+async def test_text_that_looks_like_a_signature_is_still_text(text: str) -> None:
+    """A text page that starts with a magic-byte lookalike is not refused."""
+    result = await _fetch_body(text.encode(), "text/plain; charset=utf-8")
+
+    assert result["text"] == text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-32"])
+async def test_utf16_and_utf32_text_with_a_byte_order_mark_is_still_text(encoding: str) -> None:
+    """NUL bytes are normal in UTF-16/32 text, so a BOM exempts a body from the binary test."""
+    result = await _fetch_body(
+        "Hello wide world".encode(encoding), f"text/plain; charset={encoding}"
+    )
+
+    assert result["text"] == "Hello wide world"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [b"%PDF-1.7\nthis is not really a pdf", b"<html><body>Not found</body></html>"],
+)
+async def test_corrupt_pdf_raises_pdf_unreadable(body: bytes) -> None:
+    """A PDF header over a body pdfium cannot open fails with a typed error."""
+    with pytest.raises(ToolExecutionError) as exc_info:
+        await _fetch_body(body, "application/pdf")
+
+    assert exc_info.value.code == "pdf_unreadable"
+
+
+@pytest.mark.asyncio
+async def test_image_only_pdf_says_it_has_no_text_layer() -> None:
+    """A scanned PDF fails with a PDF-specific message, not the JavaScript hint."""
+    with pytest.raises(ToolExecutionError) as exc_info:
+        await _fetch_body(_image_only_pdf(), "application/pdf")
+
+    assert exc_info.value.code == "no_readable_text"
+    assert "PDF" in exc_info.value.message
+    assert "JavaScript" not in (exc_info.value.next_action or "")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_pdf_fetches_do_not_overlap_in_pdfium() -> None:
+    """Pdfium is not thread-safe, so two extractions must never run at the same time."""
+    import threading
+    import time
+
+    from personal_agent.tools import fetch as fetch_module
+
+    active = 0
+    peak = 0
+    guard = threading.Lock()
+    real_extract = fetch_module.extract_page_text
+
+    def slow_extract(page: object) -> str:
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        try:
+            return real_extract(page)  # type: ignore[arg-type]
+        finally:
+            with guard:
+                active -= 1
+
+    resp = httpx.Response(
+        200, content=_minimal_pdf(_PDF_SENTENCE), headers={"content-type": "application/pdf"}
+    )
+    # Patch once, outside the gather: concurrent patch enter/exit would leave a mock behind.
+    with (
+        patch(
+            "personal_agent.tools.fetch.create_guarded_http_client",
+            return_value=_mock_client(resp),
+        ),
+        patch.object(fetch_module, "extract_page_text", slow_extract),
+    ):
+        results = await asyncio.gather(
+            *(fetch_url_executor(url="https://example.com/doc", ctx=_CTX) for _ in range(4))
+        )
+
+    assert all(_PDF_SENTENCE in str(r["text"]) for r in results)
+    assert peak == 1
+
+
+def test_tool_description_says_a_pdf_url_returns_its_text() -> None:
+    """FRE-1669 change 3: the model must be able to learn this from the tool description."""
+    assert "PDF" in fetch_url_tool.description

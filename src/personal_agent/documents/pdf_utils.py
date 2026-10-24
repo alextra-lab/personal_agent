@@ -7,12 +7,21 @@ PyMuPDF (AGPL) and pdf2image/Poppler (GPL) are explicitly excluded.
 from __future__ import annotations
 
 import io
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
 import pypdfium2 as pdfium
 from PIL import Image
+
+# PDFium is not thread-safe, even across separate documents. A caller that runs PDFium in a
+# worker thread (``asyncio.to_thread``) holds this lock for the whole open, read and close
+# sequence, so two such callers never call into PDFium at once. Only ``fetch_url`` takes it
+# today. The helpers in this module do not, because they call each other and the lock is not
+# reentrant. The attachment path in ``orchestrator/document_resolution.py`` does not take it
+# yet.
+PDFIUM_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)

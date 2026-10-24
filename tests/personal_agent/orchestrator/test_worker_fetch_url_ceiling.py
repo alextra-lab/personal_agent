@@ -32,9 +32,9 @@ from personal_agent.orchestrator.sub_agent_types import SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 from personal_agent.orchestrator.worker_types import WORKER_TYPES, WorkerType
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.contract import dispatch_error
 from personal_agent.tools.fetch import _MAX_CHARS_CAP, fetch_url_executor, fetch_url_tool
 from personal_agent.tools.schema_validator import validate_tool_arguments
-from personal_agent.tools.contract import dispatch_error
 from personal_agent.tools.types import ToolResult
 
 #: A page longer than the tool's own 50,000-character cap, so the cap is what bounds it.
@@ -57,6 +57,7 @@ def _stub_http_client() -> AsyncMock:
     response.status_code = 200
     response.is_error = False
     response.text = _page_html()
+    response.content = response.text.encode()
     response.headers = {"content-type": "text/html; charset=utf-8"}
     client = AsyncMock()
     client.get = AsyncMock(return_value=response)

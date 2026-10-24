@@ -364,3 +364,66 @@ class TestDispatch:
         assert row["input_tokens"] == _PROMPT_TOKENS
         assert row["output_tokens"] == _COMPLETION_TOKENS
         assert row["cache_read_input_tokens"] == 640
+
+
+class TestToolsPassLitellmsParameterCheck:
+    """FRE-1692 AC-1: tools reach the wire through litellm's real parameter check.
+
+    litellm 1.106.0's scaleway table lists neither ``tools`` nor ``tool_choice`` for these
+    two models, so it raises ``UnsupportedParamsError`` before it sends anything. The
+    fixture replaces only the HTTP send, so that check runs here as it does live.
+    """
+
+    _TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Return the weather for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", _NEW_KEYS)
+    async def test_a_request_with_tools_reaches_the_wire(
+        self, key: str, _caught: list[_Sent]
+    ) -> None:
+        await _respond(key, tools=self._TOOLS)
+
+        assert len(_caught) == 1
+        body = json.loads(_caught[0].request.content)
+        assert body["tools"] == self._TOOLS
+        assert "reasoning_effort" in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", _NEW_KEYS)
+    async def test_a_request_with_a_forced_tool_choice_reaches_the_wire(
+        self, key: str, _caught: list[_Sent]
+    ) -> None:
+        choice = {"type": "function", "function": {"name": "get_weather"}}
+        await _respond(key, tools=self._TOOLS, tool_choice=choice)
+
+        body = json.loads(_caught[0].request.content)
+        assert body["tool_choice"] == choice
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", _NEW_KEYS)
+    async def test_a_tool_request_keeps_the_guard_the_secret_and_the_ledger_row(
+        self, key: str, _caught: list[_Sent]
+    ) -> None:
+        """AC-2 holds on the tool path, not only on the plain one."""
+        _, tracker = await _respond(key, tools=self._TOOLS)
+
+        sent = _caught[0]
+        assert sent.guarded
+        assert sent.request.headers["authorization"] == f"Bearer {_SECRET}"
+        row = tracker.record_api_call.await_args.kwargs
+        assert row["provider"] == "scaleway"
+        assert row["model"] == _LITELLM_MODEL[key]
+        assert row["cost_usd"] > 0

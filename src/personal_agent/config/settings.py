@@ -1960,6 +1960,19 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    slm_thinking_canary_enabled: bool = Field(
+        default=False,
+        description=(
+            "Run the two-arm thinking canary on the scheduled SLM-health tick "
+            "(FRE-1368 / ADR-0141 D6.1): one short thinking-on call that must read "
+            "reasoning, and one thinking-off call that must read none, both through "
+            "production dispatch. Defaults off: it sends two short generations to the "
+            "local backend each tick, so master enables it after a preflight. A red "
+            "result shows on the Elasticsearch snapshot; it never changes the SLM-health "
+            "verdict."
+        ),
+    )
+
     # Cache-erosion monitor (ADR-0078 / FRE-1189)
     cache_erosion_probe_enabled: bool = Field(
         default=True,

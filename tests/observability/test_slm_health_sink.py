@@ -80,3 +80,27 @@ class TestWriteResult:
         assert doc["kind"] == "system:slm_health_probe"
         # probed_at should be serialisable (ISO string from model_dump mode="json")
         assert isinstance(doc["probed_at"], str)
+
+    @pytest.mark.asyncio
+    async def test_canary_values_reach_the_document(self) -> None:
+        """FRE-1368: a red canary is visible on the document the probe already writes."""
+        from personal_agent.observability.slm_health.sink import write_result
+
+        es = AsyncMock()
+        snap = _make_snapshot(status="up").model_copy(
+            update={
+                "thinking_canary_ok": False,
+                "thinking_canary_error": "off arm: 31 reasoning characters",
+                "thinking_canary_on_reasoning_chars": 17,
+                "thinking_canary_off_reasoning_chars": 31,
+            }
+        )
+        await write_result(es, snap, prefix="agent-monitors-slm-health")
+
+        doc = es.index.call_args.kwargs["document"]
+        assert doc["status"] == "up"
+        assert doc["thinking_canary_ok"] is False
+        assert doc["thinking_canary_error"] == "off arm: 31 reasoning characters"
+        assert doc["thinking_canary_on_reasoning_chars"] == 17
+        assert doc["thinking_canary_off_reasoning_chars"] == 31
+        assert doc["thinking_canary_skip_reason"] is None

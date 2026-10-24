@@ -335,10 +335,16 @@ def test_insights_template_exists_and_fixes_join_key_and_costs() -> None:
 
 
 def test_slm_health_template_covers_full_model() -> None:
-    """slm-health template covers the full 17-field snapshot model."""
+    """slm-health template maps every field of the snapshot model, with the right type."""
+    from personal_agent.observability.slm_health.snapshot import SlmHealthSnapshot
+
     tpl = _load("monitors-slm-health-index-template.json")
     assert "agent-monitors-slm-health-*" in tpl["index_patterns"]
     props = _props(tpl)
+    # A field added to the model without a mapping would fall to dynamic mapping, where a
+    # null never creates the mapping and a later value picks a type by its first sight.
+    unmapped = set(SlmHealthSnapshot.model_fields) - set(props)
+    assert not unmapped, f"snapshot fields with no template mapping: {sorted(unmapped)}"
     expected = {
         "status": "keyword",
         "reachable": "boolean",
@@ -353,6 +359,11 @@ def test_slm_health_template_covers_full_model() -> None:
         "generation_ok": "boolean",  # FRE-1474
         "generation_skip_reason": "text",  # FRE-1474
         "generation_probe_latency_ms": "float",  # FRE-1474
+        "thinking_canary_ok": "boolean",  # FRE-1368
+        "thinking_canary_skip_reason": "text",  # FRE-1368
+        "thinking_canary_error": "text",  # FRE-1368
+        "thinking_canary_on_reasoning_chars": "integer",  # FRE-1368
+        "thinking_canary_off_reasoning_chars": "integer",  # FRE-1368
         "probed_at": "date",
         "trace_id": "keyword",  # join-key fix (was text)
         "error": "text",

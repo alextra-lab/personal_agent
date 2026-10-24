@@ -27,6 +27,10 @@ from personal_agent.observability.slm_health.cache import set_cached_snapshot, v
 from personal_agent.observability.slm_health.probe import probe_slm_health
 from personal_agent.observability.slm_health.sink import write_result
 from personal_agent.observability.slm_health.snapshot import SlmHealthSnapshot
+from personal_agent.observability.slm_health.thinking_canary import (
+    ThinkingCanaryResult,
+    run_thinking_canary,
+)
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -53,6 +57,32 @@ def slm_health_probe_interval_s(*, normal_s: float, down_s: float) -> float:
         *normal_s*. The ``min`` keeps a ``down`` from ever probing more slowly than normal.
     """
     return min(down_s, normal_s) if verdict_is_down() else normal_s
+
+
+async def _run_canary(base_url: str, *, trace_id: str) -> ThinkingCanaryResult:
+    """Run the thinking canary, turning any failure into an error result (FRE-1368).
+
+    :func:`run_thinking_canary` never raises. This guard keeps the tick safe if that
+    contract is ever broken, and it is what the scheduler-level test pins.
+
+    Args:
+        base_url: The SLM's ``/v1`` API base.
+        trace_id: The tick's trace ID.
+
+    Returns:
+        The canary's result, or one carrying only the error.
+    """
+    try:
+        return await run_thinking_canary(base_url=base_url, trace_id=trace_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "slm_thinking_canary_launch_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            trace_id=trace_id,
+            component="slm_health",
+        )
+        return ThinkingCanaryResult(error=f"{type(exc).__name__}: {exc}"[:200])
 
 
 async def run_scheduled_slm_health_probe(
@@ -95,12 +125,13 @@ async def run_scheduled_slm_health_probe(
         # No Cloudflare Access headers are built here (ADR-0132 D1): the health URL
         # resolves to the internal Caddy egress block on deployments behind
         # Cloudflare, and Caddy injects the service token.
-        generation_base_url: str | None = None
-        if settings.slm_health_generation_check_enabled:
-            # resolved_slm_base_url is an origin that may or may not already
-            # carry /v1 (mirrors resolved_slm_health_url's own normalization).
-            origin = settings.resolved_slm_base_url.rstrip("/").removesuffix("/v1")
-            generation_base_url = f"{origin}/v1"
+        # resolved_slm_base_url is an origin that may or may not already
+        # carry /v1 (mirrors resolved_slm_health_url's own normalization).
+        origin = settings.resolved_slm_base_url.rstrip("/").removesuffix("/v1")
+        slm_v1_base_url = f"{origin}/v1"
+        generation_base_url: str | None = (
+            slm_v1_base_url if settings.slm_health_generation_check_enabled else None
+        )
 
         try:
             snapshot = await probe_slm_health(
@@ -138,11 +169,21 @@ async def run_scheduled_slm_health_probe(
             component="slm_health",
         )
 
+        # FRE-1368: the thinking canary runs only after the verdict is cached, and its
+        # result goes onto a copy for Elasticsearch. The cache never holds a canary field,
+        # so a red canary cannot change what `is_provider_available` reads (master,
+        # 2026-10-24). An unreachable backend has nothing to measure.
+        published = snapshot
+        if settings.slm_thinking_canary_enabled and snapshot.reachable:
+            published = snapshot.model_copy(
+                update=(await _run_canary(slm_v1_base_url, trace_id=ctx.trace_id)).snapshot_fields()
+            )
+
         if es_client is not None:
             try:
                 await write_result(
                     es_client,
-                    snapshot,
+                    published,
                     prefix=settings.slm_health_index_prefix,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -153,6 +194,6 @@ async def run_scheduled_slm_health_probe(
                     component="slm_health",
                 )
 
-        return snapshot
+        return published
     finally:
         close_root_span(span, token, cv_tokens)

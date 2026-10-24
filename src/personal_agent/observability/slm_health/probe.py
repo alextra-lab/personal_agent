@@ -326,6 +326,47 @@ def _resolve_primary_local_deployment() -> tuple[tuple[str, str] | None, str | N
     return (model_def.provider, model_def.id), None
 
 
+async def _resolve_probe_target(
+    *, base_url: str, trace_id: str
+) -> tuple[tuple[str, str] | None, str | None]:
+    """Return the local ``primary`` deployment a generation-style probe may call now.
+
+    The skip rules shared by the FRE-1474 generation check and the FRE-1368 thinking
+    canary: a probe that sends a real completion must not run when this gateway's own
+    provider is busy, or when the catalog's primary is not the model currently served.
+
+    :func:`personal_agent.llm_client.provider_health.fetch_served_model_ids` is imported
+    locally for the cycle reason given on :func:`_probe_generation`.
+
+    Args:
+        base_url: The SLM's ``/v1`` API base.
+        trace_id: Probe's trace ID for log correlation.
+
+    Returns:
+        ``((provider_key, model_id), None)`` when the probe may run. ``(None, <reason>)``
+        when it must skip; the reason carries no probe-specific prefix.
+    """
+    primary, resolve_reason = _resolve_primary_local_deployment()
+    if primary is None:
+        return None, str(resolve_reason)
+    provider_key, primary_model_id = primary
+
+    active = _provider_active_count(provider_key)
+    if active > 0:
+        return None, f"{provider_key} busy (active={active})"
+
+    from personal_agent.llm_client.provider_health import (  # noqa: PLC0415 — avoid import cycle
+        fetch_served_model_ids,
+    )
+
+    served_ids = await fetch_served_model_ids(base_url, trace_id=trace_id)
+    if not served_ids:
+        return None, "no model reported as served"
+    if primary_model_id not in served_ids:
+        return None, f"primary deployment {primary_model_id!r} not currently served"
+    return (provider_key, primary_model_id), None
+
+
 async def _probe_generation(
     *, base_url: str, timeout_s: float, trace_id: str
 ) -> tuple[bool | None, str | None]:
@@ -367,28 +408,10 @@ async def _probe_generation(
         skipped — the primary deployment is unresolvable, its provider is
         busy, or it is not currently served. Never raises.
     """
-    primary, resolve_reason = _resolve_primary_local_deployment()
-    if primary is None:
-        return None, f"generation check skipped: {resolve_reason}"
-    provider_key, primary_model_id = primary
-
-    active = _provider_active_count(provider_key)
-    if active > 0:
-        return None, f"generation check skipped: {provider_key} busy (active={active})"
-
-    from personal_agent.llm_client.provider_health import (  # noqa: PLC0415 — avoid import cycle
-        fetch_served_model_ids,
-    )
-
-    served_ids = await fetch_served_model_ids(base_url, trace_id=trace_id)
-    if not served_ids:
-        return None, "generation check skipped: no model reported as served"
-    if primary_model_id not in served_ids:
-        return (
-            None,
-            f"generation check skipped: primary deployment {primary_model_id!r} "
-            "not currently served",
-        )
+    target, skip_reason = await _resolve_probe_target(base_url=base_url, trace_id=trace_id)
+    if target is None:
+        return None, f"generation check skipped: {skip_reason}"
+    _, primary_model_id = target
 
     try:
         async with create_guarded_http_client(timeout=timeout_s) as client:

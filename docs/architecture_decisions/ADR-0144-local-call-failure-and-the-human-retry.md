@@ -1,6 +1,6 @@
 # ADR-0144: A local model call fails honestly, and the human decides the retry
 
-**Status:** Accepted — 2026-10-23 (owner, FRE-1650 backlog cull: the implementation chain was approved)
+**Status:** Accepted — 2026-10-23 (owner, FRE-1650 backlog cull: the implementation chain was approved) · Partly implemented, rest parked — 2026-10-24 (owner): D4's registry (FRE-1433) and state model (FRE-1435) shipped; FRE-1432, FRE-1434, FRE-1436 and FRE-1437 are parked
 **Date:** 2026-09-06
 **Deciders:** Owner (D1–D4 owner-directed, 2026-09-06) · adr session
 **Tags:** reliability, llm-client, observability, timeouts, retry, health
@@ -697,3 +697,14 @@ which emptied an unread `stderr` pipe; the freeze then recurred nine times betwe
 2026-09-11. Root cause reproduced on the origin and fixed there on 2026-09-11. See the Correction
 in Context. D1–D4 are unchanged and still stand; FRE-1433 gains weight, because our own telemetry
 emitted nothing for the full ten minutes the backend was frozen.
+
+### 2026-10-24 - Partly implemented, rest parked
+**Changed By:** master, on the owner's decision
+**Reason:** FRE-1433 (the in-flight local-call registry) and FRE-1435 (the D4 health state model)
+merged and deployed on 2026-10-24. The owner then parked the rest of the chain: FRE-1432 (the gap
+bound), FRE-1434 (the retry loop), FRE-1436 (the generating probe and the call-side verdict) and
+FRE-1437 (the human retry). Owner: "The mac only goes silent when I make a mistake and 1) unplug
+it and it goes into power safe mode. 2) i m traveling. I don't need complicated timeout monitor for
+something I am already in control of." The origin freeze is fixed (2026-09-11), and FRE-1488 removed
+the silent prefill phase. Known effect: a sleeping Mac or a dropped Mac tunnel connection ends the
+turn with the Cloudflare error. The parked tickets name their unpark condition.

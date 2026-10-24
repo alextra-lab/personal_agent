@@ -263,8 +263,10 @@ class AppConfig(BaseSettings):
         default=10,
         ge=1,
         description=(
-            "ADR-0143 D1/D3: the budget for one close step. Today only service shutdown reads it: "
-            "the wait for cancelled request tasks before survivors are marked leaked."
+            "ADR-0143 D1/D3: the budget for one close step. It bounds the lock wait and the DONE "
+            "append in emit_done, the degraded stream close (half for the sentinel put, half "
+            "for the raw socket close), the gap between the stage-one and stage-two deadlines, "
+            "and the waits at service shutdown."
         ),
     )
     orchestrator_creditable_pause_limit: int = Field(

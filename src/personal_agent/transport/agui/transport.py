@@ -27,7 +27,9 @@ from uuid import UUID, uuid4
 if TYPE_CHECKING:
     from personal_agent.error_classification import ClassifiedError
 
+from personal_agent.config import settings
 from personal_agent.service.database import AsyncSessionLocal
+from personal_agent.service.request_tasks import RequestTaskRegistry, get_request_task_registry
 from personal_agent.telemetry import get_logger
 from personal_agent.transport.agui.adapter import to_agui_event
 from personal_agent.transport.agui.event_buffer import SessionEventBuffer
@@ -36,6 +38,8 @@ from personal_agent.transport.agui.ws_endpoint import (
     DONE_SENTINEL_TYPE,
     ApprovalDecision,
     WaiterMetadata,
+    close_connection_if_current,
+    get_active_connection,
     get_event_queue,
     register_constraint_waiter,
     register_waiter,
@@ -295,16 +299,90 @@ async def _emit_phase_snapshot_best_effort(session_id: str, phase_id: str) -> No
         )
 
 
+#: Why the stream was closed outside the normal path (ADR-0143 D3). The first five are the
+#: failure that started the degraded path. ``superseded``, ``no_connection``, ``queue_timeout``,
+#: ``close_timeout`` and ``close_failed`` are what the path itself found or did next.
+DegradedTrigger = Literal[
+    "lock_timeout", "persist_timeout", "persist_failed", "deadline", "shutdown"
+]
+
+
+def _log_degraded(session_id: str, trace_id: str, reason: str) -> None:
+    """Log one line of the degraded close, with its reason (ADR-0143 D3b)."""
+    log.warning("transport.done_degraded", session_id=session_id, trace_id=trace_id, reason=reason)
+
+
+async def close_stream_degraded(
+    session_id: str,
+    trace_id: str,
+    *,
+    trigger: DegradedTrigger | None,
+    registry: RequestTaskRegistry,
+) -> None:
+    """Close the client stream outside the emit lock (ADR-0143 D3b).
+
+    The caller must have won ``registry.close_once`` for the trace. One budget of
+    ``service_request_close_timeout_seconds`` is split in two: the first half for the sentinel
+    put, the second half reserved for the raw socket close. The policy is that closure beats
+    ordering: the sentinel has no ``seq``, so the persisted series is untouched.
+
+    The path opens with one synchronous section, with no await in it. The section checks for a
+    newer live turn on the session, captures the active connection and its generation, and
+    decides. A reason is logged at each step that fails, so a later failure adds a second line.
+
+    Args:
+        session_id: The session whose stream is closed.
+        trace_id: The turn whose close this is. The sentinel carries it.
+        trigger: The failure that started the path, logged first. ``None`` logs no first line:
+            the normal path found a full queue and the path only finishes the close.
+        registry: The registry that holds the turn's record and any newer turn on the session.
+    """
+    if trigger is not None:
+        _log_degraded(session_id, trace_id, trigger)
+    if registry.has_newer_live_record(trace_id):
+        _log_degraded(session_id, trace_id, "superseded")
+        return
+    conn = get_active_connection(session_id)
+    if conn is None:
+        _log_degraded(session_id, trace_id, "no_connection")
+        return
+    generation = conn.generation
+    queue = conn.outbound_queue
+    budget = float(settings.service_request_close_timeout_seconds)
+    half = budget / 2
+    try:
+        async with asyncio.timeout(half):
+            await queue.put(
+                {"type": DONE_SENTINEL_TYPE, "trace_id": trace_id, "generation": generation}
+            )
+        return
+    except TimeoutError:
+        _log_degraded(session_id, trace_id, "queue_timeout")
+    try:
+        async with asyncio.timeout(budget - half):
+            await close_connection_if_current(session_id, generation, trace_id=trace_id)
+    except TimeoutError:
+        _log_degraded(session_id, trace_id, "close_timeout")
+    except Exception:
+        log.exception(
+            "transport.done_degraded",
+            session_id=session_id,
+            trace_id=trace_id,
+            reason="close_failed",
+        )
+
+
 async def emit_done(session_id: str, trace_id: str) -> None:
-    """Persist the terminal ``DONE`` row, then enqueue the close sentinel (FRE-518).
+    """Persist the terminal ``DONE`` row, then enqueue the close sentinel (FRE-518, ADR-0143 D3).
 
-    Runs under the same per-session emit lock as :func:`_push_event` so the DONE
-    row's ``seq`` is ordered after every prior live emit and the close sentinel
-    is enqueued in seq order behind them. The sentinel closes the sender's live
-    drain loop; the persisted DONE row is what reconnect replay delivers.
+    Lock acquisition and the DONE append run under one ``service_request_close_timeout_seconds``
+    bound. Inside the lock the sentinel is enqueued in seq order behind every prior live emit,
+    after ``registry.close_once`` is won. The persisted DONE row is what reconnect replay
+    delivers. When the lock or the append times out or fails, or the queue is full, the
+    degraded close runs outside the lock (:func:`close_stream_degraded`).
 
-    Best-effort: a persistence failure still pushes the sentinel so the live
-    socket is not left hanging.
+    A timeout that fires after the append committed leaves a DONE row and a degraded close.
+    That is accepted.
 
     Args:
         session_id: Target session identifier.
@@ -313,24 +391,46 @@ async def emit_done(session_id: str, trace_id: str) -> None:
             client joining on trace_id (e.g. the rating control) never has to
             fall back to a trace_id stashed from an earlier event.
     """
-    async with _get_emit_lock(session_id):
-        try:
-            async with AsyncSessionLocal() as db:
-                buf = SessionEventBuffer(db)
-                await buf.append(
-                    session_id=UUID(session_id),
-                    event_type="DONE",
-                    payload={"type": "DONE", "trace_id": trace_id},
-                )
-        except Exception:
+    registry = get_request_task_registry()
+    bound = asyncio.timeout(float(settings.service_request_close_timeout_seconds))
+    lock_acquired = False
+    trigger: DegradedTrigger | None = None
+    try:
+        async with bound:
+            async with _get_emit_lock(session_id):
+                lock_acquired = True
+                async with AsyncSessionLocal() as db:
+                    buf = SessionEventBuffer(db)
+                    await buf.append(
+                        session_id=UUID(session_id),
+                        event_type="DONE",
+                        payload={"type": "DONE", "trace_id": trace_id},
+                    )
+                if not registry.close_once(trace_id, "emit_done"):
+                    log.warning(
+                        "transport.done_after_close", session_id=session_id, trace_id=trace_id
+                    )
+                    return
+                try:
+                    get_event_queue(session_id).put_nowait(
+                        {"type": DONE_SENTINEL_TYPE, "trace_id": trace_id}
+                    )
+                    return
+                except asyncio.QueueFull:
+                    pass  # this call won close_once: finish the close outside the lock
+    except TimeoutError:
+        if bound.expired():
+            trigger = "persist_timeout" if lock_acquired else "lock_timeout"
+        else:
             log.exception("transport.persist_done_failed", session_id=session_id, trace_id=trace_id)
-        queue = get_event_queue(session_id)
-        try:
-            queue.put_nowait({"type": DONE_SENTINEL_TYPE, "trace_id": trace_id})
-        except asyncio.QueueFull:
-            log.warning(
-                "transport.queue_full", session_id=session_id, event_type="DONE", trace_id=trace_id
-            )
+            trigger = "persist_failed"
+    except Exception:
+        log.exception("transport.persist_done_failed", session_id=session_id, trace_id=trace_id)
+        trigger = "persist_failed"
+    if trigger is not None and not registry.close_once(trace_id, "degraded"):
+        log.warning("transport.done_after_close", session_id=session_id, trace_id=trace_id)
+        return
+    await close_stream_degraded(session_id, trace_id, trigger=trigger, registry=registry)
 
 
 async def open_turn(session_id: str, trace_id: str) -> int | None:

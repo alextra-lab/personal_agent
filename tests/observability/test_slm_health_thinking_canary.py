@@ -55,6 +55,8 @@ from personal_agent.security import DomainGuard
 LOCAL_BASE_URL = "https://slm.test.example/v1"
 PRIMARY_KEY = "local_primary"
 MODEL_ID = "unsloth/canary-test"
+ALTERNATIVE_KEY = "local_alternative"
+ALTERNATIVE_MODEL_ID = "unsloth/alternative-test"
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -66,9 +68,31 @@ def _config(
     worker_thinking: bool = False,
     sub_agent_deployment: str = "inherit",
     sub_agent_mode: str | None = "worker",
+    with_selectable_alternative: bool = False,
 ) -> ModelConfig:
-    """One local deployment with a thinking default mode and a ``worker`` mode."""
+    """One local deployment with a thinking default mode and a ``worker`` mode.
+
+    ``with_selectable_alternative`` adds a second local deployment that the open ``primary``
+    role may select, so a test can tell the catalog primary from a turn's selection.
+    """
     sampling = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
+    primary_def = ModelDefinition(
+        id=MODEL_ID,
+        provider="slm_local",
+        context_length=131072,
+        max_concurrency=1,
+        endpoint=LOCAL_BASE_URL,
+        tool_calling_strategy=ToolCallingStrategy.NATIVE,
+        default_timeout=600,
+        default_mode="default",
+        modes={
+            "default": ModeSpec(enable_thinking=default_thinking, **sampling),
+            "worker": ModeSpec(enable_thinking=worker_thinking, **sampling),
+        },
+    )
+    models = {PRIMARY_KEY: primary_def}
+    if with_selectable_alternative:
+        models[ALTERNATIVE_KEY] = primary_def.model_copy(update={"id": ALTERNATIVE_MODEL_ID})
     return ModelConfig(
         providers={
             "slm_local": ProviderDefinition(
@@ -79,22 +103,7 @@ def _config(
                 dialect="llamacpp_qwen",
             )
         },
-        models={
-            PRIMARY_KEY: ModelDefinition(
-                id=MODEL_ID,
-                provider="slm_local",
-                context_length=131072,
-                max_concurrency=1,
-                endpoint=LOCAL_BASE_URL,
-                tool_calling_strategy=ToolCallingStrategy.NATIVE,
-                default_timeout=600,
-                default_mode="default",
-                modes={
-                    "default": ModeSpec(enable_thinking=default_thinking, **sampling),
-                    "worker": ModeSpec(enable_thinking=worker_thinking, **sampling),
-                },
-            )
-        },
+        models=models,
         roles={
             "primary": RoleBinding(deployment=PRIMARY_KEY, open=True),
             "sub_agent": RoleBinding(
@@ -281,9 +290,27 @@ async def test_healthy_path_is_green() -> None:
 
 @pytest.mark.asyncio
 async def test_both_arms_are_bounded_and_background() -> None:
-    _, wire = await _canary()
+    """Each arm is capped in tokens and time, makes one request, and yields to user turns."""
+    from personal_agent.llm_client.priority import InferencePriority
+
+    real_respond = litellm_client_module.LiteLLMClient.respond
+    calls: list[dict[str, Any]] = []
+
+    async def _spy(self: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return await real_respond(self, *args, **kwargs)
+
+    stack, wire = _run_env()
+    with stack, patch.object(litellm_client_module.LiteLLMClient, "respond", _spy):
+        await run_thinking_canary(base_url=LOCAL_BASE_URL, trace_id="canary-test")
 
     assert [b["max_tokens"] for b in wire.bodies] == [256, 64]
+    assert len(calls) == 2
+    for call in calls:
+        assert call["timeout_s"] == 45.0
+        assert call["max_retries"] == 0
+        assert call["priority"] is InferencePriority.BACKGROUND
+        assert call["priority_timeout"] == 2.0
 
 
 # ── AC-a: able to fail in both directions ─────────────────────────────────
@@ -421,10 +448,11 @@ async def test_a_sub_agent_without_a_mode_skips() -> None:
 
 @pytest.mark.asyncio
 async def test_a_turn_selection_does_not_change_the_target() -> None:
+    """A valid, open selection moves a real turn; it must not move the canary."""
     from personal_agent.config import selection
 
-    stack, wire = _run_env()
-    token = selection.set_current_selection({"primary": "some_cloud_model"})
+    stack, wire = _run_env(config=_config(with_selectable_alternative=True))
+    token = selection.set_current_selection({"primary": ALTERNATIVE_KEY})
     try:
         with stack:
             result = await run_thinking_canary(base_url=LOCAL_BASE_URL, trace_id="canary-test")
@@ -432,7 +460,7 @@ async def test_a_turn_selection_does_not_change_the_target() -> None:
         selection.reset_current_selection(token)
 
     assert result.ok is True
-    assert len(wire.bodies) == 2
+    assert [body["model"] for body in wire.bodies] == [MODEL_ID, MODEL_ID]
 
 
 @pytest.mark.asyncio
@@ -449,11 +477,14 @@ async def test_canary_calls_carry_the_canary_callsite() -> None:
 
 @pytest.mark.asyncio
 async def test_the_canary_never_publishes_a_verdict() -> None:
-    with patch.object(canary_module, "set_cached_snapshot", create=True) as spy:
-        await _canary()
-
-    spy.assert_not_called()
+    """Run alone, the canary leaves an empty cache empty and a stored verdict as it was."""
+    await _canary()
     assert get_cached_snapshot(ttl=60.0) is None
+
+    stored = _snapshot("up")
+    assert set_cached_snapshot(stored) is True
+    await _canary(shape="inline_think")
+    assert get_cached_snapshot(ttl=60.0) is stored
 
 
 # ── The scheduled tick: the cache stays a verdict ─────────────────────────

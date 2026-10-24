@@ -22,8 +22,9 @@ Rules that keep it a monitor and not a second health writer:
 * It skips when the probe-shared rules skip (:func:`.probe._resolve_probe_target`: a busy
   provider, a primary that is not the served model), and when the catalog cannot test the
   control (the declaration guard owns that failure).
-* Both arms are bounded: a short timeout, no retry, background priority and a short slot wait,
-  so a user turn never waits behind a canary.
+* Both arms are bounded: a short timeout, no retry, background priority and a short slot wait.
+  Priority only orders the waiters. A user turn that arrives while an arm holds a slot waits
+  for that arm, for a few seconds in practice and 45 s at worst.
 * It resolves the primary deployment from the catalog and uses the trusted-config factory door,
   which ignores the per-turn model selection. A user's selection cannot move the target.
 """
@@ -76,7 +77,7 @@ class ThinkingCanaryResult(BaseModel):
     on_reasoning_chars: int | None = None
     off_reasoning_chars: int | None = None
 
-    def snapshot_fields(self) -> dict[str, Any]:
+    def snapshot_fields(self) -> dict[str, bool | str | int | None]:
         """Return this result under the ``SlmHealthSnapshot`` field names.
 
         Returns:

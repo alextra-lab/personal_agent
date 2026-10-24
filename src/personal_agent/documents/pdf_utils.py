@@ -7,12 +7,18 @@ PyMuPDF (AGPL) and pdf2image/Poppler (GPL) are explicitly excluded.
 from __future__ import annotations
 
 import io
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
 import pypdfium2 as pdfium
 from PIL import Image
+
+# PDFium is not thread-safe, even across separate documents. Code that runs PDFium in a
+# worker thread (``asyncio.to_thread``) holds this lock for the whole open, read and close
+# sequence, so two threads never call into PDFium at once.
+PDFIUM_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)

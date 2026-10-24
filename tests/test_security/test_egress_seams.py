@@ -540,6 +540,7 @@ class TestFetchUrlToolSeam:
         resp = MagicMock()
         resp.is_error = False
         resp.text = "<p>Allowed page content.</p>"
+        resp.content = resp.text.encode()
         resp.headers = {"content-type": "text/html"}
         with patch(
             "personal_agent.tools.fetch.create_guarded_http_client",

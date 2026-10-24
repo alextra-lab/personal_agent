@@ -41,6 +41,7 @@ def _mock_html_response(body: str) -> MagicMock:
     resp.status_code = 200
     resp.is_error = False
     resp.text = body
+    resp.content = body.encode()
     resp.headers = {"content-type": "text/html; charset=utf-8"}
     return resp
 

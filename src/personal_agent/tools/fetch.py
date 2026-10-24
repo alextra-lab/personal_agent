@@ -11,6 +11,7 @@ new dependency required.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import html
 import ipaddress
 import re
@@ -19,7 +20,9 @@ from html.parser import HTMLParser
 from typing import Any, Literal
 
 import httpx
+import pypdfium2 as pdfium
 
+from personal_agent.documents.pdf_utils import PDFIUM_LOCK, extract_page_text
 from personal_agent.security import (
     EgressBlockedError,
     create_guarded_http_client,
@@ -41,6 +44,8 @@ FetchCode = Literal[
     "upstream_timeout",
     "fetch_failed",
     "no_readable_text",
+    "unsupported_binary",
+    "pdf_unreadable",
 ]
 
 
@@ -304,11 +309,131 @@ def _extract_text(html_body: str) -> str:
     return extractor.get_text()
 
 
+# FRE-1669: a body is judged by its first bytes, not only by its header, so a binary body
+# is never returned as text.
+_BINARY_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "PNG image"),
+    (b"\xff\xd8\xff", "JPEG image"),
+    (b"GIF87a", "GIF image"),
+    (b"GIF89a", "GIF image"),
+    (b"II*\x00", "TIFF image"),
+    (b"MM\x00*", "TIFF image"),
+    (b"PK\x03\x04", "ZIP archive"),
+    (b"PK\x05\x06", "ZIP archive"),
+    (b"PK\x07\x08", "ZIP archive"),
+    (b"\x1f\x8b", "gzip data"),
+    (b"7z\xbc\xaf\x27\x1c", "7-Zip archive"),
+    (b"Rar!\x1a\x07", "RAR archive"),
+    (b"\xfd7zXZ\x00", "xz archive"),
+    (b"\x7fELF", "ELF executable"),
+    (b"\xfe\xed\xfa\xce", "Mach-O executable"),
+    (b"\xfe\xed\xfa\xcf", "Mach-O executable"),
+    (b"\xce\xfa\xed\xfe", "Mach-O executable"),
+    (b"\xcf\xfa\xed\xfe", "Mach-O executable"),
+)
+# A NUL byte this early marks a binary format with no signature above (PE, BMP, ICO, bzip2,
+# WebAssembly). UTF-16 and UTF-32 text holds NUL bytes too, so a byte-order mark exempts it.
+_SNIFF_BYTES = 1024
+_WIDE_TEXT_BOMS = (
+    codecs.BOM_UTF16_LE,
+    codecs.BOM_UTF16_BE,
+    codecs.BOM_UTF32_LE,
+    codecs.BOM_UTF32_BE,
+)
+
+
+def _binary_kind(body: bytes) -> str | None:
+    """Name the binary format of a response body, if it is one.
+
+    Args:
+        body: The raw response body.
+
+    Returns:
+        A short name such as ``"PNG image"``, ``"binary data"`` for an unrecognised binary
+        body, or ``None`` when the body looks like text.
+    """
+    for magic, name in _BINARY_SIGNATURES:
+        if body.startswith(magic):
+            return name
+    if body.startswith(b"RIFF") and body[8:12] == b"WEBP":
+        return "WebP image"
+    if b"\x00" in body[:_SNIFF_BYTES] and not body.startswith(_WIDE_TEXT_BOMS):
+        return "binary data"
+    return None
+
+
+def _is_pdf(content_type: str, body: bytes) -> bool:
+    """Whether a response is a PDF, by its header or by its first bytes.
+
+    Args:
+        content_type: The ``Content-Type`` header value (may be empty).
+        body: The raw response body.
+
+    Returns:
+        ``True`` for the ``application/pdf`` media type (any case, any parameters) or a
+        body that starts with ``%PDF``. A server can send a PDF under a wrong header.
+    """
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type == "application/pdf" or body.startswith(b"%PDF")
+
+
+def _pdf_text(body: bytes) -> str:
+    """Read the text layer of every page. Blocking: call it through ``asyncio.to_thread``.
+
+    Args:
+        body: The raw PDF bytes.
+
+    Returns:
+        The page texts, joined by blank lines.
+
+    Raises:
+        pypdfium2.PdfiumError: The bytes are not a PDF that PDFium can open, or the PDF
+            needs a password.
+    """
+    with PDFIUM_LOCK, pdfium.PdfDocument(body) as pdf:
+        return "\n\n".join(extract_page_text(page) for page in pdf)
+
+
+async def _extract_pdf_text(body: bytes, url: str) -> str:
+    """Extract the text of a PDF response body.
+
+    Args:
+        body: The raw PDF bytes.
+        url: The fetched URL, for the error message.
+
+    Returns:
+        The text of the PDF.
+
+    Raises:
+        FetchError: ``pdf_unreadable`` if PDFium cannot open the body, or
+            ``no_readable_text`` if the PDF has no text layer (a scan).
+    """
+    try:
+        text = await asyncio.to_thread(_pdf_text, body)
+    except pdfium.PdfiumError as exc:
+        raise FetchError(
+            "pdf_unreadable",
+            f"Fetched {url} as a PDF but could not open it: {exc}",
+            retryable=False,
+            next_action=("The file is damaged, or it needs a password. " + _OTHER_SOURCE),
+        ) from exc
+    if not text.strip():
+        raise FetchError(
+            "no_readable_text",
+            f"Fetched {url} as a PDF but it has no text layer.",
+            retryable=False,
+            next_action="The PDF holds scanned images, not text. " + _OTHER_SOURCE,
+        )
+    return text
+
+
 fetch_url_tool = ToolDefinition(
     name="fetch_url",
     description=(
         "Fetch one web page by URL and return its readable text, with HTML tags, scripts, "
         "navigation and footers removed. "
+        "A PDF URL returns the PDF's extracted text. Images, archives and other binary "
+        "files are refused. "
         "Use it when you have a URL and need its content: the fetched page is a citable "
         "source, and a bash curl fetch of the same page is not. "
         "Use web_search instead when you have no URL. Use bash curl only for a non-GET "
@@ -416,11 +541,31 @@ async def download_text(url: str, *, trace_id: str) -> tuple[str, int]:
                 )
 
             content_type = resp.headers.get("content-type", "")
-            text = (
-                _extract_text(resp.text)
-                if "html" in content_type or not content_type
-                else resp.text
-            )
+            body = resp.content
+            if _is_pdf(content_type, body):
+                text = await _extract_pdf_text(body, url)
+            elif (binary_kind := _binary_kind(body)) is not None:
+                log.warning(
+                    "fetch_url_binary_refused",
+                    trace_id=trace_id,
+                    url=url,
+                    binary_kind=binary_kind,
+                    content_type=content_type,
+                )
+                raise FetchError(
+                    "unsupported_binary",
+                    f"Fetched {url} (HTTP {resp.status_code}) but the body is "
+                    f"{binary_kind}, not text.",
+                    retryable=False,
+                    next_action="Do not retry. fetch_url reads web pages and PDFs only. "
+                    + _OTHER_SOURCE,
+                )
+            else:
+                text = (
+                    _extract_text(resp.text)
+                    if "html" in content_type or not content_type
+                    else resp.text
+                )
 
     except FetchError:
         raise

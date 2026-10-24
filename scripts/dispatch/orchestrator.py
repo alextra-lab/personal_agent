@@ -542,7 +542,11 @@ class TrackedFacts:
     run_confirmed: bool
 
     def as_log_fields(self) -> dict[str, object]:
-        """Return the facts as structured-log / notifier keyword fields."""
+        """Return the facts as structured-log / notifier keyword fields.
+
+        Returns:
+            The five fact names mapped to their values.
+        """
         return dataclasses.asdict(self)
 
 
@@ -876,10 +880,11 @@ def _clear_reason(normalized_state: str | None) -> str:
 def _open_pr_exists(ticket: str, runner: CommandRunner) -> bool | None:
     """Return whether an open PR belongs to ``ticket``, or ``None`` if that cannot be told.
 
-    A PR belongs to the ticket when the ticket id appears as a whole token in its branch
-    name, title or body. The branch alone is not enough: the ``adr`` stream's branches are
-    ``adr-NNNN-...`` and carry the ticket only in the PR text. ``gh --search`` is a text
-    search, so its raw result is never counted without this match (FRE-1054).
+    A PR belongs to the ticket when the ticket id is a whole token in its branch name. A
+    branch that names a different ``fre-NNN`` ticket never belongs, even if the PR text quotes
+    this ticket. A branch that names no ticket (the ``adr`` stream's ``adr-NNNN-...``) is
+    matched on the PR title and body instead. ``gh --search`` is a text search, so its raw
+    result is never counted without this match (FRE-1054).
 
     Args:
         ticket: The ticket identifier (e.g. ``FRE-786``).
@@ -912,13 +917,21 @@ def _open_pr_exists(ticket: str, runner: CommandRunner) -> bool | None:
         return None
     # Whole-token match: ``fre-786`` must not match ``fre-7860``.
     token = re.compile(rf"(?<![a-z0-9]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
-    return any(
-        isinstance(pr, dict)
-        and any(
+    any_ticket = re.compile(r"(?<![a-z0-9])fre-[0-9]+", re.IGNORECASE)
+
+    def belongs(pr: object) -> bool:
+        if not isinstance(pr, dict):
+            return False
+        branch = str(pr.get("headRefName") or "")
+        # A branch that names a ticket decides alone: a PR for another ticket can quote this
+        # one in its text ("split out of FRE-786") without being its PR.
+        if any_ticket.search(branch):
+            return token.search(branch) is not None
+        return any(
             token.search(str(pr.get(field) or "")) for field in ("headRefName", "title", "body")
         )
-        for pr in raw
-    )
+
+    return any(belongs(pr) for pr in raw)
 
 
 def _record_for_result(

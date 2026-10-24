@@ -133,7 +133,15 @@ systemctl status seshat-dispatch-orchestrator
   entitlement with `claude doctor`.
 - **`dispatch_blocked reason=kill-switch`** → the kill switch is set; remove
   `telemetry/dispatch.disabled` to resume.
-- **`dispatch_stall`** → a launched run produced no PR in time. Attach to the
+- **`dispatch_stall`** → a launched run did not advance in time. Read `reason` and the
+  facts next to it (FRE-1054), in the `dispatch_decision` log and in the notice:
+  `ticket_state`, `pr_open` (`None` = `gh` could not answer, not "no PR"),
+  `on_stream_board` (`False` = the ticket left the stream, such as parked, while the
+  daemon still holds its slot), `age_s`, `run_confirmed`. A pre-pickup stall says
+  `no-pr-past-timeout` only when a PR was checked for and none exists. It says
+  `pr-open-ticket-not-in-review` when a PR is open but the ticket is not In Review, and
+  `pr-check-undetermined-past-timeout` when the PR check failed. Only a terminal state
+  releases the slot, so a parked ticket holds it until someone acts. Attach to the
   session (`claude.ai/code` / the mobile app, or locally `tmux attach -t
   cc-<stream>`), answer any waiting prompt, or investigate a crash. The
   orchestrator never advances on silence — it advances only on the durable

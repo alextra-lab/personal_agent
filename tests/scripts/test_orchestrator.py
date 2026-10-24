@@ -556,6 +556,22 @@ def test_open_pr_exists_finds_an_adr_stream_pr_by_its_body() -> None:
     assert _open_pr_exists("FRE-786", _gh(stdout=out)) is True
 
 
+def test_open_pr_exists_ignores_another_tickets_pr_that_quotes_this_ticket() -> None:
+    # A follow-up PR on its own ticket branch can say "split out of FRE-786" in its text.
+    # Its branch names a different ticket, so it is not FRE-786's PR.
+    out = json.dumps(
+        [
+            {
+                "number": 2,
+                "headRefName": "fre-900-follow-up",
+                "title": "fix(FRE-900): follow-up",
+                "body": "Split out of FRE-786.",
+            }
+        ]
+    )
+    assert _open_pr_exists("FRE-786", _gh(stdout=out)) is False
+
+
 def test_open_pr_exists_ignores_a_body_that_names_only_a_longer_ticket_number() -> None:
     out = json.dumps(
         [{"number": 1, "headRefName": "adr-0144-x", "title": "t", "body": "See FRE-7860."}]

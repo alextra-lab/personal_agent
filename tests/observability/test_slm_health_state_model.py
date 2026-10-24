@@ -35,6 +35,7 @@ from personal_agent.observability.slm_health.snapshot import SlmHealthSnapshot
 _TTL_S = 45.0
 _NORMAL_INTERVAL_S = 300.0
 _DOWN_INTERVAL_S = 60.0
+_WAIT_S = 10.0
 _LOCAL = ProviderDefinition(placement="local", max_concurrency=3)
 _PROBE_HTTP = "personal_agent.observability.slm_health.probe.create_guarded_http_client"
 
@@ -128,12 +129,13 @@ class TestAc2StaleWriteCannotOverwrite:
         release = asyncio.Event()
         _recovered_generating_origin(monkeypatch, in_flight=in_flight, release=release)
         probe_task = asyncio.create_task(run_scheduled_slm_health_probe(es_client=None))
-        await in_flight.wait()
+        # Bounded waits: if the probe never reaches /health, fail fast instead of hanging.
+        await asyncio.wait_for(in_flight.wait(), timeout=_WAIT_S)
 
         call_down = _snap("down", writer="call", trace_id="failing-call")
         assert set_cached_snapshot(call_down) is True
         release.set()
-        probe_snapshot = await probe_task
+        probe_snapshot = await asyncio.wait_for(probe_task, timeout=_WAIT_S)
 
         assert probe_snapshot is not None and probe_snapshot.generation_ok is True
         assert probe_snapshot.observed_monotonic < call_down.observed_monotonic
@@ -300,7 +302,7 @@ def _recovered_generating_origin(
         if request.url.path.endswith("/health") and release is not None:
             if in_flight is not None:
                 in_flight.set()
-            await release.wait()
+            await asyncio.wait_for(release.wait(), timeout=_WAIT_S)
         if request.url.path.endswith("/models"):
             return httpx.Response(200, json={"data": [{"id": "m-primary"}]})
         if request.url.path.endswith("/chat/completions"):
@@ -364,7 +366,7 @@ class TestRule4SchedulerGate:
             mock_settings.freshness_enabled = False
             mock_settings.sysgraph_maintenance_enabled = False
             mock_settings.feedback_polling_enabled = False
-            await sched._lifecycle_loop()
+            await asyncio.wait_for(sched._lifecycle_loop(), timeout=_WAIT_S)
         return tick
 
     @pytest.mark.asyncio

@@ -109,6 +109,13 @@ _OPENAI_SDK_ROUTE_PROVIDERS = frozenset({"openai", "slm_local", "scaleway"})
 # which is AsyncHTTPHandler-based like Anthropic's own dedicated handler — not
 # a third mechanism.
 _ASYNC_HTTP_HANDLER_ROUTE_PROVIDERS = frozenset({"anthropic", "ovhcloud"})
+# FRE-1692: providers whose litellm parameter table omits ``tools`` and ``tool_choice``
+# for catalog models. litellm's JSON-declared openai_like providers (``scaleway``) take
+# tool support from ``supports_function_calling`` in ``litellm.model_cost``. Pricing
+# registration sets prices only, so litellm drops both parameters and raises
+# ``UnsupportedParamsError`` before any request. The catalog's own
+# ``supports_function_calling`` is the declaration; ``allowed_openai_params`` carries it.
+_CATALOG_DECLARED_TOOL_PROVIDERS = frozenset({"scaleway"})
 # FRE-1627: providers whose bridged requests take the guarded Responses route
 # (responses_route.aresponses_as_chat). Only `openai` has a native litellm
 # Responses config, whose handler keeps an AsyncHTTPHandler client=
@@ -1496,6 +1503,17 @@ class LiteLLMClient:
             # text documents, and F9 measured the provider honouring the value
             # once it is forwarded.
             litellm_kwargs["allowed_openai_params"] = ["reasoning_effort"]
+        if (
+            self.provider in _CATALOG_DECLARED_TOOL_PROVIDERS
+            and self.model_def is not None
+            and self.model_def.supports_function_calling
+        ):
+            allowed = litellm_kwargs.setdefault("allowed_openai_params", [])
+            allowed.extend(
+                name
+                for name in ("tools", "tool_choice")
+                if name in litellm_kwargs and name not in allowed
+            )
         if timeout_s is not None:
             litellm_kwargs["timeout"] = timeout_s
         if max_retries is not None:

@@ -22,6 +22,7 @@ llm_client/
 ├── factory.py            # get_llm_client() / get_llm_client_for_key() — the construction door
 ├── litellm_client.py      # LiteLLMClient — the one dispatch class, both placements
 ├── concurrency.py         # InferenceConcurrencyController + process-wide singleton
+├── inflight.py            # In-flight local-call registry: dispatch + last-byte stamps (FRE-1433, ADR-0144 D4)
 ├── dspy_adapter.py        # DSPy integration for structured outputs (ADR-0010)
 ├── adapters.py            # Response/request adapters
 ├── history_sanitiser.py   # tool_call/tool_result consistency before dispatch

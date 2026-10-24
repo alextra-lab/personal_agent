@@ -47,6 +47,7 @@ from personal_agent.llm_client.concurrency import (
     InferenceSlotTimeout,
     get_inference_concurrency_controller,
 )
+from personal_agent.llm_client.inflight import get_inflight_registry
 from personal_agent.llm_client.models import (
     Dialect,
     ModelDefinition,
@@ -2170,6 +2171,14 @@ class LiteLLMClient:
                 role=role.value, model=self.model_id, provider=self.provider
             ) as _model_span:
                 span_id = format(_model_span.get_span_context().span_id, "016x")
+                # FRE-1433: the in-flight registry keys on this id, so it must differ per
+                # call. A non-recording span (no SDK tracer installed) formats as sixteen
+                # zeroes, which two concurrent calls would share and then remove from
+                # under each other.
+                inflight_span_id = (
+                    span_id if _model_span.get_span_context().is_valid else uuid4().hex[:16]
+                )
+                inflight = get_inflight_registry()
 
                 # All four propagation headers (ADR-0141 D7): W3C traceparent plus
                 # the legacy trio slm_server still reads. inject() reads the active
@@ -2216,9 +2225,17 @@ class LiteLLMClient:
                             attempts += 1
                             stream: Any = None
                             chunks: list[dict[str, Any]] = []
+                            # FRE-1433 (ADR-0144 D4): stamped at dispatch, so a call that
+                            # receives nothing has an age. One record per attempt, removed
+                            # by the `finally` below on every exit. Nothing can raise
+                            # between this line and the `try`.
+                            inflight_key = inflight.register(inflight_span_id, attempts)
                             try:
                                 stream = await litellm.acompletion(**litellm_kwargs)
                                 async for chunk in stream:
+                                    # Any chunk is a sign of life — reasoning and prefill
+                                    # reports included. Separate from the content fold below.
+                                    inflight.touch(inflight_key)
                                     dumped = chunk.model_dump()
                                     if progress_sink is not None:
                                         _update_generation_progress(progress_sink, dumped)
@@ -2269,6 +2286,9 @@ class LiteLLMClient:
                                     progress_sink.content = ""
                                     progress_sink.generation_started_monotonic = None
                             finally:
+                                # First, so a slow close can never leave a dead record that
+                                # reads as a live stall.
+                                inflight.remove(inflight_key)
                                 # Best-effort: an unclosed stream on a cancelled/timed-out
                                 # call would otherwise leak into the cached guarded
                                 # httpx.AsyncClient (process-lifetime connection pool).

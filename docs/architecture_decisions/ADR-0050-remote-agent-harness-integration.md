@@ -1,6 +1,6 @@
 # ADR-0050: Remote Agent Harness Integration
 
-**Status**: Accepted
+**Status**: Accepted — D4 and D6 (outbound delegation and its adapters) superseded by [ADR-0159](ADR-0159-development-agent-opencode-sandbox.md), 2026-10-24
 **Date**: 2026-04-13
 **Deciders**: Project owner
 **Depends on**: ADR-0033 (Multi-Provider Model Taxonomy — delegation types), ADR-0043 (Three-Layer Separation), ADR-0045 (Infrastructure — Cloud Knowledge Layer)

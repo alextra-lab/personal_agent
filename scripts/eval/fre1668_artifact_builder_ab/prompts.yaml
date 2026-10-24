@@ -1,0 +1,42 @@
+# FRE-1668: the 8 artifact requests. `from_fre1615` takes the request text from
+# scripts/eval/fre1615/suite.yaml, so the two files never disagree.
+# p2, p3 and p4 are generic, self-contained rewrites of the owner's three real builds of the last
+# 60 days. No real conversation text is stored here.
+prompts:
+  - id: p1
+    category: cheat sheet
+    from_fre1615: ar1
+  - id: p2
+    category: data chart
+    request: >-
+      Make a bar chart of monthly sales for January to June 2025, in euros: Jan 12,400, Feb 9,800,
+      Mar 15,300, Apr 14,100, May 17,900, Jun 16,200. Add a two-sentence summary under the chart.
+  - id: p3
+    category: interactive page
+    request: >-
+      Build an interactive explainer that links heat engines and information. Give it two sliders for
+      the hot and cold temperatures of a heat engine that show the Carnot efficiency, and a section
+      on the Shannon entropy of a coin with an adjustable bias.
+  - id: p4
+    category: interactive page
+    request: >-
+      Make an interactive weekly picks board for a football league: a table of 8 matches, a pick for
+      each, a confidence slider from 50 to 95 percent for each pick, a column for injury notes, and a
+      total confidence score that updates when a slider moves.
+  - id: p5
+    category: document or report
+    request: >-
+      Write a one-page quarterly spend report for a small team. Use made-up figures that add up: totals
+      for July, August and September, the top three categories, and three short recommendations.
+  - id: p6
+    category: diagram
+    from_fre1615: ar2
+  - id: p7
+    category: document or report
+    from_fre1615: ar3
+  - id: p8
+    category: edit of an existing page
+    fixture: fixtures/edit_source.html
+    request: >-
+      Here is an existing page. Add a dark-mode toggle button to it, and add a new row for May to
+      the table. Keep everything else as it is.

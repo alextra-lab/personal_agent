@@ -12,7 +12,7 @@
 # What this script does:
 #   - Installs required security packages
 #   - Hardens SSH daemon (disables root + password auth)
-#   - Configures iptables with a minimal allow-list
+#   - Configures iptables and ip6tables with the same minimal allow-list
 #   - Persists iptables rules across reboots
 #   - Configures fail2ban for the custom SSH port
 #   - Applies kernel hardening via sysctl
@@ -70,7 +70,12 @@ if [[ -f /etc/ssh/sshd_config ]]; then
     cp /etc/ssh/sshd_config "/etc/ssh/sshd_config.bak.$(date +%Y%m%d%H%M%S)"
 fi
 
-cat > /etc/ssh/sshd_config.d/99-hardening.conf << 'SSHEOF'
+# sshd keeps the FIRST value it reads, and it reads this directory in file-name order.
+# The name must sort before 50-cloud-init.conf, which sets PasswordAuthentication yes.
+# Remove the old 99- file that earlier versions of this script wrote.
+rm -f /etc/ssh/sshd_config.d/99-hardening.conf
+
+cat > /etc/ssh/sshd_config.d/01-hardening.conf << 'SSHEOF'
 # SSH hardening — applied by harden.sh
 # Do NOT set Port here; it must be in the main sshd_config.
 
@@ -99,6 +104,15 @@ SSHEOF
 
 # Validate config before reloading
 sshd -t
+
+# Confirm the hardening won before the reload: another drop-in may set the same option earlier.
+# Capture first: under pipefail, grep -q can end the pipe early and make sshd report a false failure.
+SSHD_EFFECTIVE="$(sshd -T)"
+if ! grep -qi '^passwordauthentication no$' <<< "$SSHD_EFFECTIVE"; then
+    echo "Error: sshd -T does not report 'passwordauthentication no'. Check /etc/ssh/sshd_config.d/ for an earlier file." >&2
+    exit 1
+fi
+
 systemctl reload ssh
 echo "    SSH daemon reloaded."
 
@@ -109,6 +123,11 @@ echo "    SSH daemon reloaded."
 
 echo "==> Configuring iptables..."
 
+# Keep INPUT open while the rules are rebuilt, so a live SSH session never loses its allow rule.
+# The INPUT policy goes to DROP after the last rule below.
+iptables  -P INPUT   ACCEPT
+ip6tables -P INPUT   ACCEPT
+
 # Flush all existing user-space rules
 iptables -F
 iptables -X
@@ -116,10 +135,8 @@ ip6tables -F
 ip6tables -X
 
 # Default policies
-iptables  -P INPUT   DROP
 iptables  -P FORWARD DROP
 iptables  -P OUTPUT  ACCEPT
-ip6tables -P INPUT   DROP
 ip6tables -P FORWARD DROP
 ip6tables -P OUTPUT  ACCEPT
 
@@ -152,6 +169,17 @@ ip6tables -A OUTPUT -o lo -j ACCEPT
 ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # ICMPv6 (required for neighbour discovery, etc.)
 ip6tables -A INPUT -p icmpv6 -j ACCEPT
+
+# SSH
+ip6tables -A INPUT -p tcp --dport "$SSH_PORT" -m conntrack --ctstate NEW -j ACCEPT
+
+# HTTP and HTTPS (Caddy)
+ip6tables -A INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT
+ip6tables -A INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
+
+# All allow rules are in place: close the INPUT policy
+iptables  -P INPUT DROP
+ip6tables -P INPUT DROP
 
 # Persist rules across reboots
 netfilter-persistent save

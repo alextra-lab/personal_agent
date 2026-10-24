@@ -120,7 +120,7 @@ CLOUDFLARE_TUNNEL_TOKEN=<token-from-cloudflare>
 bash infrastructure/scripts/harden.sh
 ```
 
-Applies: non-root SSH only, fail2ban, sysctl hardening, unattended-upgrades.
+Applies: non-root SSH only, an iptables and ip6tables allow-list (the same rules on IPv4 and IPv6), fail2ban, sysctl hardening, unattended-upgrades.
 
 ### 3.4 First deploy
 

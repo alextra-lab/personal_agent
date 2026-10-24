@@ -26,6 +26,7 @@ so ``capture_logs()`` is unreliable under the shared suite (the FRE-552 pattern)
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -118,7 +119,7 @@ def _isolate_step_init(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _drive_gateway_turn(
-    monkeypatch: pytest.MonkeyPatch, ctx: ExecutionContext
+    monkeypatch: pytest.MonkeyPatch, ctx: ExecutionContext, session: Any = None
 ) -> list[tuple[str, dict[str, Any]]]:
     """Drive one ``step_init`` gateway turn; return the captured log calls.
 
@@ -126,14 +127,15 @@ async def _drive_gateway_turn(
     scheduler evaluation are all genuine. The session load is stubbed
     (``get_session`` returns ``None``) and ``ctx.messages`` pre-seeded instead, so a
     regression in how persisted history reaches ``ctx.messages`` would not be caught
-    here; that is not what these tests are asserting.
+    here; that is not what these tests are asserting. A test that needs a persisted
+    session passes one as ``session``.
     """
     _isolate_step_init(monkeypatch)
     mock_log, calls = _capturing_log()
     monkeypatch.setattr(ex, "log", mock_log)
 
     session_manager = MagicMock()
-    session_manager.get_session = MagicMock(return_value=None)
+    session_manager.get_session = MagicMock(return_value=session)
 
     state = await ex.step_init(ctx, session_manager, TraceContext(trace_id="t1", session_id="s1"))
     assert state == TaskState.LLM_CALL
@@ -383,6 +385,56 @@ async def test_conversation_context_loaded_total_vs_loaded_count_asymmetry(
     assert payload["messages_loaded"] == len(messages) + 1
 
 
+def _windowed_session(kept: int, dropped: int) -> Any:
+    """A persisted session as the service hands it over: ``kept`` messages after the window."""
+    history = [{"role": "user", "content": f"turn {i}"} for i in range(kept)]
+    return SimpleNamespace(messages=history, messages_dropped_by_window=dropped)
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_loaded_reports_what_the_window_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1673: a 30-message stored session under a window of 20 reports 30 stored, 10 dropped.
+
+    The service hands ``step_init`` the 20 kept messages plus the count the window cut.
+    ``total_messages_in_db`` keeps its old meaning (the count after the window), so the new
+    fields are the only place the cut is visible.
+    """
+    ctx = _gateway_ctx([])
+    calls = await _drive_gateway_turn(monkeypatch, ctx, session=_windowed_session(20, 10))
+
+    payload = _events(calls, CONVERSATION_CONTEXT_LOADED)[0]
+    assert payload["stored_messages_before_window"] == 30
+    assert payload["messages_dropped_by_window"] == 10
+    assert payload["total_messages_in_db"] == 20
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_loaded_reports_zero_dropped_when_history_fits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1673: a 6-message session under a window of 20 reports 6 stored, 0 dropped."""
+    ctx = _gateway_ctx([])
+    calls = await _drive_gateway_turn(monkeypatch, ctx, session=_windowed_session(6, 0))
+
+    payload = _events(calls, CONVERSATION_CONTEXT_LOADED)[0]
+    assert payload["stored_messages_before_window"] == 6
+    assert payload["messages_dropped_by_window"] == 0
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_loaded_reports_zero_stored_without_a_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1673: with no persisted session both new fields read 0, not a missing key."""
+    calls = await _drive_gateway_turn(monkeypatch, _gateway_ctx([]))
+
+    payload = _events(calls, CONVERSATION_CONTEXT_LOADED)[0]
+    assert payload["stored_messages_before_window"] == 0
+    assert payload["messages_dropped_by_window"] == 0
+
+
 @pytest.mark.asyncio
 async def test_enforced_expansion_subpath_also_emits_conversation_context_loaded(
     monkeypatch: pytest.MonkeyPatch,
@@ -473,6 +525,8 @@ def test_conversation_context_loaded_helper_emits_full_schema(
         messages_loaded=4,
         messages_truncated=1,
         estimated_tokens=42,
+        stored_messages_before_window=5,
+        messages_dropped_by_window=2,
     )
 
     events = _events(calls, CONVERSATION_CONTEXT_LOADED)
@@ -484,4 +538,6 @@ def test_conversation_context_loaded_helper_emits_full_schema(
         "messages_loaded": 4,
         "messages_truncated": 1,
         "estimated_tokens": 42,
+        "stored_messages_before_window": 5,
+        "messages_dropped_by_window": 2,
     }

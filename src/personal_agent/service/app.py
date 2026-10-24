@@ -3,6 +3,7 @@
 import asyncio
 import contextvars
 import time
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
@@ -95,6 +96,22 @@ sandbox_reaper_task: asyncio.Task[None] | None = None
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
 _pending_append_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+def _apply_history_window(
+    stored_messages: Sequence[dict[str, Any]], max_history: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Cut stored history to the last ``max_history`` messages (FRE-1673).
+
+    Args:
+        stored_messages: Every message stored for the session, before this turn's message.
+        max_history: ``conversation_max_history_messages``. Zero or less keeps everything.
+
+    Returns:
+        The kept messages and the number of stored messages the window dropped.
+    """
+    kept = list(stored_messages[-max_history:] if max_history > 0 else stored_messages)
+    return kept, len(stored_messages) - len(kept)
 
 
 def _resolve_active_model_attribution(
@@ -418,8 +435,8 @@ async def _process_chat_stream_background(
 
             # ── Session ──────────────────────────────────────────────────────
             session_uuid = UUID(session_id)
-            db_messages: list[dict[str, Any]] = []
             prior_messages: list[dict[str, Any]] = []
+            messages_dropped_by_window = 0
 
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
@@ -485,9 +502,9 @@ async def _process_chat_stream_background(
                             deployment_key=primary_selection_key,
                         )
 
-                db_messages = list(session.messages or [])
-                max_history = settings.conversation_max_history_messages
-                prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
+                prior_messages, messages_dropped_by_window = _apply_history_window(
+                    list(session.messages or []), settings.conversation_max_history_messages
+                )
                 await repo.append_message(
                     session_uuid,
                     {
@@ -569,7 +586,11 @@ async def _process_chat_stream_background(
                         get_current_mode(), Channel.CHAT, session_id=session_id
                     )
                 if prior_messages:
-                    session_mgr.update_session(session_id, messages=prior_messages)
+                    session_mgr.update_session(
+                        session_id,
+                        messages=prior_messages,
+                        messages_dropped_by_window=messages_dropped_by_window,
+                    )
 
                 if scheduler:
                     scheduler.notify_request_start()
@@ -2384,9 +2405,9 @@ async def _chat_impl(
         await _pending_append_tasks.pop(sid)
 
     # --- Phase: session_hydration ---
-    db_messages = list(session.messages or [])
-    max_history = settings.conversation_max_history_messages
-    prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
+    prior_messages, messages_dropped_by_window = _apply_history_window(
+        list(session.messages or []), settings.conversation_max_history_messages
+    )
 
     # --- Phase: db_append_user_message ---
     await repo.append_message(
@@ -2526,7 +2547,11 @@ async def _chat_impl(
             )
 
         if prior_messages:
-            session_manager.update_session(str(session.session_id), messages=prior_messages)
+            session_manager.update_session(
+                str(session.session_id),
+                messages=prior_messages,
+                messages_dropped_by_window=messages_dropped_by_window,
+            )
 
         if scheduler:
             scheduler.notify_request_start()

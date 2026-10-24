@@ -50,7 +50,9 @@ async def test_chat_hydrates_prior_messages_before_current_turn(
     )
 
     assert result["response"] == "Alex"
-    session_manager.update_session.assert_called_once_with(str(session_id), messages=prior_messages)
+    session_manager.update_session.assert_called_once_with(
+        str(session_id), messages=prior_messages, messages_dropped_by_window=0
+    )
     # append_message is called with extra envelope fields (trace_id, timestamp, metadata)
     # added in service.app; assert only the fields the test cares about are present.
     assert mock_repo.append_message.called

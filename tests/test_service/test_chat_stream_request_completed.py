@@ -196,6 +196,45 @@ async def test_noop_branch_still_appends_directly(
 @patch("personal_agent.orchestrator.Orchestrator")
 @patch("personal_agent.service.app.SessionRepository")
 @patch("personal_agent.service.app.AsyncSessionLocal")
+async def test_fre1673_stream_hands_the_window_drop_count_to_the_session_manager(
+    mock_session_local: MagicMock,
+    mock_repo_cls: MagicMock,
+    mock_orchestrator_cls: MagicMock,
+    mock_push_event: AsyncMock,
+    mock_emit_done: AsyncMock,
+    mock_validate_attachments: AsyncMock,
+) -> None:
+    """FRE-1673: 30 stored messages under a window of 20 reach the manager as 20 + 10 dropped."""
+    session_id = uuid4()
+    stored = [{"role": "user", "content": f"turn {i}"} for i in range(30)]
+    session = SimpleNamespace(session_id=session_id, messages=stored, execution_profile="local")
+    mock_repo = MagicMock()
+    mock_repo.get = AsyncMock(return_value=session)
+    mock_repo.append_message = AsyncMock(return_value=None)
+    mock_repo_cls.return_value = mock_repo
+    mock_session_local.side_effect = lambda: _fake_db_session(MagicMock())
+    mock_validate_attachments.return_value = []
+    orchestrator = _mock_orchestrator()
+    mock_orchestrator_cls.return_value = orchestrator
+    set_global_event_bus(NoOpBus())
+
+    await run_turn(
+        session_id=str(session_id), message="hi", user_id=_TEST_USER_ID, trace_id="trace-1"
+    )
+
+    orchestrator.session_manager.update_session.assert_called_once()
+    kwargs = orchestrator.session_manager.update_session.call_args.kwargs
+    assert kwargs["messages"] == stored[-20:]
+    assert kwargs["messages_dropped_by_window"] == 10
+
+
+@pytest.mark.asyncio
+@patch("personal_agent.service.app._validate_attachments", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport.emit_done", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport._push_event", new_callable=AsyncMock)
+@patch("personal_agent.orchestrator.Orchestrator")
+@patch("personal_agent.service.app.SessionRepository")
+@patch("personal_agent.service.app.AsyncSessionLocal")
 async def test_publish_failure_falls_back_to_direct_append_and_releases_waiter(
     mock_session_local: MagicMock,
     mock_repo_cls: MagicMock,

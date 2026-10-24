@@ -72,3 +72,62 @@ async def test_session_hydration_truncates_to_the_configured_history_depth(
     assert len(hydrated_messages) == 20
     # The tail 20 of the 25, not an arbitrary 20 — proves the slice, not just the count.
     assert hydrated_messages == stored_messages[-20:]
+
+
+async def _chat_with_stored_history(stored_count: int) -> MagicMock:
+    """Run ``chat()`` over ``stored_count`` stored messages; return the session manager mock."""
+    session_id = uuid4()
+    session = SimpleNamespace(
+        session_id=session_id, messages=_make_history(stored_count), execution_profile="local"
+    )
+    mock_repo = MagicMock()
+    mock_repo.get = AsyncMock(return_value=session)
+    mock_repo.append_message = AsyncMock(return_value=None)
+
+    session_manager = MagicMock()
+    session_manager.get_session.return_value = None
+    orchestrator = MagicMock()
+    orchestrator.session_manager = session_manager
+    orchestrator.handle_user_request = AsyncMock(
+        return_value={"reply": "hi", "trace_id": "trace-1"}
+    )
+
+    with (
+        patch("personal_agent.orchestrator.Orchestrator", return_value=orchestrator),
+        patch("personal_agent.service.app.SessionRepository", return_value=mock_repo),
+        patch(
+            "personal_agent.service.app.run_gateway_pipeline",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        await chat(
+            message="what did we discuss",
+            session_id=str(session_id),
+            request_user=_TEST_REQUEST_USER,
+            db=AsyncMock(),
+        )
+    return session_manager
+
+
+@pytest.mark.asyncio
+async def test_window_drop_count_reaches_the_session_manager() -> None:
+    """FRE-1673: 30 stored messages under a window of 20 hand over 20 and report 10 dropped."""
+    assert get_settings().conversation_max_history_messages == 20
+
+    session_manager = await _chat_with_stored_history(30)
+
+    session_manager.update_session.assert_called_once()
+    kwargs = session_manager.update_session.call_args.kwargs
+    assert len(kwargs["messages"]) == 20
+    assert kwargs["messages_dropped_by_window"] == 10
+
+
+@pytest.mark.asyncio
+async def test_window_drop_count_is_zero_when_history_fits() -> None:
+    """FRE-1673: a 6-message session under a window of 20 drops nothing."""
+    session_manager = await _chat_with_stored_history(6)
+
+    kwargs = session_manager.update_session.call_args.kwargs
+    assert len(kwargs["messages"]) == 6
+    assert kwargs["messages_dropped_by_window"] == 0

@@ -52,6 +52,26 @@ def test_update_session_messages() -> None:
     assert session.messages == messages
 
 
+def test_update_session_records_and_clears_window_drop_count() -> None:
+    """FRE-1673: the dropped count is kept with the messages and reset by a later replacement."""
+    manager = SessionManager()
+    session_id = manager.create_session(Mode.NORMAL, Channel.CHAT)
+    session = manager.get_session(session_id)
+    assert session is not None
+    assert session.messages_dropped_by_window == 0
+
+    manager.update_session(
+        session_id, messages=[{"role": "user", "content": "a"}], messages_dropped_by_window=10
+    )
+    assert session.messages_dropped_by_window == 10
+
+    # A timestamp-only update leaves the count alone; a replacement without a count resets it.
+    manager.update_session(session_id)
+    assert session.messages_dropped_by_window == 10
+    manager.update_session(session_id, messages=[{"role": "user", "content": "b"}])
+    assert session.messages_dropped_by_window == 0
+
+
 def test_update_session_timestamp() -> None:
     """Test that updating session updates last_active_at."""
     manager = SessionManager()

@@ -121,7 +121,7 @@ async def test_step_init_populates_planning_note_with_resolved_deployment_budget
     """ADR-0122 §5/T6: the note names the resolved deployment's effective budget.
 
     A non-default pick (gpt-5.4-mini, declared max_tokens 8192) so the note cannot
-    coincidentally match the configured default (claude_sonnet, 32768). claude_haiku
+    coincidentally match the configured default (gpt-6.1-sol, 128000 clamped to 32768). claude_haiku
     is no longer usable here: its declared cap is now 64000 (the real provider
     ceiling), which the 32768 operator ceiling clamps back to 32768 — identical to
     the default, defeating the point of a non-default pick.

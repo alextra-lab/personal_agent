@@ -102,7 +102,7 @@ class TestPreviouslyBindingOnlyRolesNowResolve:
     @pytest.mark.parametrize(
         ("role", "expected"),
         [
-            ("artifact_builder", "claude_sonnet"),
+            ("artifact_builder", "gpt-6.1-sol"),
             ("sub_agent", "qwen3.8-flash-next"),
             ("vision", "claude_sonnet"),
         ],

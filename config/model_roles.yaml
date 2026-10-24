@@ -61,9 +61,13 @@ bindings:
   # ADR-0121 T5 (FRE-920): pinned to claude_sonnet — owner-directed 2026-07-20
   # at the master gate (there is only one binding default now that
   # ExecutionProfile is gone, and profile-based redirection no longer
-  # applies to either role). artifact_builder's real per-build choice lands
-  # with ADR-0122.
-  artifact_builder:   { deployment: claude_sonnet, open: true }
+  # applies to either role). The per-build choice landed with ADR-0122.
+  # FRE-1691 (2026-10-24): the owner moved the default to gpt-6.1-sol after the FRE-1668
+  # pilot: Sol built all 3 rich pages at about half the cost per build, while Sonnet 5 and
+  # Sonnet 5.5 each built 1 of 3 and stopped at the output ceiling on the others. The role
+  # stays open: the owner can still pick another builder per build. Rollback: set this back
+  # to claude_sonnet.
+  artifact_builder:   { deployment: gpt-6.1-sol, open: true }
   # ADR-0145 D1 (FRE-1445): the local instruct twin (qwen3.8-flash-next-instruct)
   # this role used to bind is deleted — one served model, one catalog entry, no
   # pairing table. `inherit` resolves to whatever the session's primary deployment

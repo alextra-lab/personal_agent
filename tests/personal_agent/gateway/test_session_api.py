@@ -975,7 +975,7 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
 
     roles = resp.json()["roles"]
     assert roles["primary"]["resolved"] == "qwen3.8-flash-next"
-    assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
+    assert roles["artifact_builder"]["resolved"] == "gpt-6.1-sol"
     assert (
         roles["sub_agent"]["resolved"] == "qwen3.8-flash-next"
     )  # ADR-0145 D1 (FRE-1445): sub_agent inherits the primary's resolved deployment

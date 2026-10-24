@@ -28,7 +28,7 @@
 | `operator_stanza` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:368` |
 | `reflection_dspy_signature` | 🟢 STATIC | 816 | `src/personal_agent/captains_log/reflection_dspy.py:79` |
 | `reflection_manual_fallback` | 🟢 STATIC | 558 | `src/personal_agent/captains_log/reflection.py:172` |
-| `html_generation_system` | 🟢 STATIC | 1,468 | `src/personal_agent/tools/artifact_tools.py:1154` |
+| `html_generation_system` | 🟢 STATIC | 1,607 | `src/personal_agent/tools/artifact_tools.py:1154` |
 
 ### Skill Documents
 
@@ -741,7 +741,7 @@ Do not include markdown formatting, explanations, or any text outside the JSON o
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 1,468 |
+| **Token count** | 1,607 |
 | **Source** | `src/personal_agent/tools/artifact_tools.py:1154` |
 
 ```
@@ -756,6 +756,12 @@ REQUIREMENTS:
   * Typography: --font-sans, --font-mono; size classes from text-xs to text-3xl.
   * Utility classes: flex, grid, gap-1 through gap-6, p-1 through p-8, m-1 through m-8, text-center, text-left, text-right, font-bold, font-medium, rounded, rounded-lg, shadow, shadow-lg, hidden, w-full.
 - INTERACTIVITY: JavaScript is available. The document runs in a sandboxed, sealed page — inline <script> blocks and event handlers run normally, so use them freely for genuine interactivity: simulations, explorable diagrams, charts, animations, calculators, tabs, filters. Prefer plain CSS (:hover, :target, <details>/<summary>, transitions) when it does the job with less code; reach for JavaScript when the experience genuinely needs it.
+- QUALITY: the reader judges every page on five questions. Build for all five.
+  * Every widget works: each visible control does something visible when used. No dead or placeholder controls.
+  * It is creative: give the page its own visual identity that fits its subject, not a generic template.
+  * It is easy to learn from: explain as the reader goes, show cause and effect, and give feedback on every action.
+  * It is attractive and enticing: deliberate colour, typography, spacing and motion.
+  * It encourages learning or continued use: give the reader a reason to keep exploring, such as a challenge, a goal, progress, or something to discover.
 - CURATED TOOLKIT: a small, vetted /lib/ shelf is hosted on the artifact origin — it is the ONLY external origin this page may load. Reference each asset by its EXACT absolute, version-pinned URL below (a relative path will not load). Reach for one only when the document genuinely needs it; otherwise inline your own code.
   * Math (KaTeX) — render TeX/LaTeX:
     <link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">

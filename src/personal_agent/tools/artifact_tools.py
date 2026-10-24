@@ -1172,6 +1172,17 @@ them freely for genuine interactivity: simulations, explorable diagrams, \
 charts, animations, calculators, tabs, filters. Prefer plain CSS (:hover, \
 :target, <details>/<summary>, transitions) when it does the job with less \
 code; reach for JavaScript when the experience genuinely needs it.
+- QUALITY: the reader judges every page on five questions. Build for all five.
+  * Every widget works: each visible control does something visible when used. \
+No dead or placeholder controls.
+  * It is creative: give the page its own visual identity that fits its \
+subject, not a generic template.
+  * It is easy to learn from: explain as the reader goes, show cause and \
+effect, and give feedback on every action.
+  * It is attractive and enticing: deliberate colour, typography, spacing and \
+motion.
+  * It encourages learning or continued use: give the reader a reason to keep \
+exploring, such as a challenge, a goal, progress, or something to discover.
 - CURATED TOOLKIT: a small, vetted /lib/ shelf is hosted on the artifact \
 origin — it is the ONLY external origin this page may load. Reference each \
 asset by its EXACT absolute, version-pinned URL below (a relative path will \

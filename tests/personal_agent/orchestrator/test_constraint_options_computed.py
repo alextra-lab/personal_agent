@@ -297,11 +297,8 @@ def test_resolve_options_and_default_artifact_builder_against_real_catalog() -> 
     assert "embedding" not in opts
     assert "reranker" not in opts
     # the configured default is the artifact_builder binding's deployment —
-    # claude_sonnet, owner-directed 2026-07-20 (ADR-0121 T5, FRE-920 master
-    # gate): there is only one binding now that Path/ExecutionProfile is
-    # gone, and the owner picked sonnet directly for both sub_agent and
-    # artifact_builder.
-    assert default == "claude_sonnet"
+    # gpt-6.1-sol, owner-directed 2026-10-24 (FRE-1691), after the FRE-1668 pilot.
+    assert default == "gpt-6.1-sol"
 
 
 def test_valid_preference_actions_artifact_builder_against_real_catalog() -> None:

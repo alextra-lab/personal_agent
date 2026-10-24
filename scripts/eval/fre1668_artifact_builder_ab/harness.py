@@ -382,10 +382,13 @@ def resolve_arms(
             catalog,
             is_provider_available=is_provider_available,
         )
-        if got != key:
+        # The fallback default can equal the arm's own key (FRE-1691 binds Sol), so a
+        # missing credential is checked on the arm's provider, not only on the resolved key.
+        provider = catalog.models[key].provider
+        if got != key or provider is None or not is_provider_available(provider):
             raise ArmResolutionError(
-                f"arm {arm} asks for {key} but would run on {got}. "
-                "Check the provider API key and the catalog entry."
+                f"arm {arm} asks for {key} but would run on {got}, or its provider has no "
+                "credential. Check the provider API key and the catalog entry."
             )
         resolved[arm] = got
     return resolved

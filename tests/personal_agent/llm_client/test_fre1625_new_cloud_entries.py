@@ -544,4 +544,8 @@ class TestNoBindingChange:
         resolved = {role: resolve_role_model_key(role) for role in roles}
         bound = {role: key for role, key in resolved.items() if key in _NEW_KEYS}
         # FRE-1646: gpt-6.1-sol passed the captains_log bar on the FRE-1640 study (F4).
-        assert bound == {"captains_log": "gpt-6.1-sol"}, resolved
+        # FRE-1691: the owner moved artifact_builder to it after the FRE-1668 pilot.
+        assert bound == {
+            "captains_log": "gpt-6.1-sol",
+            "artifact_builder": "gpt-6.1-sol",
+        }, resolved

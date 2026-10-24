@@ -7,10 +7,10 @@ logs how each task ended, and cancels the live tasks at service shutdown.
 
 The registry is process-local, like ``_active_connections``. Seshat runs one worker.
 
-Scope of this module today: D1 (the registry, the entry guard, the ending log, the gauge and
-the shutdown contract without the stream close) and the record fields that D2 reads. The
-stage-two close (D3) is a separate ticket (FRE-1410). The ``close_won`` flag and the
-``stage_two_deadline`` field ship here and nothing reads them yet.
+Scope: D1 (the registry, the entry guard, the ending log, the gauge, the shutdown contract) and
+D3 (FRE-1410): the ``close_once`` arbiter, the stage-two deadline that closes the client stream
+around a task that does not end, and the stream close at shutdown. The degraded close itself
+lives in ``transport.agui.transport.close_stream_degraded``.
 """
 
 from __future__ import annotations
@@ -29,6 +29,9 @@ log = get_logger(__name__)
 
 RequestOutcome = Literal["completed", "timed_out", "cancelled", "failed"]
 RequestTaskState = Literal["live", "leaked"]
+#: Who won ``close_once``: the task's own ``emit_done``, its degraded handler, the stage-two
+#: deadline, or service shutdown.
+CloseHow = Literal["emit_done", "degraded", "deadline", "shutdown"]
 
 # Set by ``RequestTaskRegistry.spawn`` while it creates the task, so the task's context copy
 # carries the trace id of the record that owns it. The turn body checks it on entry.
@@ -56,8 +59,10 @@ class RequestTask:
         task: The turn task. ``None`` only while ``spawn`` is creating it.
         state: ``leaked`` once a task outlived shutdown. A leaked record stays enumerable.
         outcome: How the task ended, once known. ``None`` until stamped or derived.
-        close_won: Whether the close-once arbiter has been won (FRE-1410). Unused today.
+        close_won: Whether the close-once arbiter has been won (ADR-0143 D3).
+        close_how: Who won the arbiter. ``None`` until it is won.
         deadline_timer: The timer that stamps ``timed_out`` at the stage-one deadline.
+        stage_two_timer: The timer that closes the stream at the stage-two deadline.
     """
 
     trace_id: str
@@ -69,7 +74,9 @@ class RequestTask:
     state: RequestTaskState = "live"
     outcome: RequestOutcome | None = None
     close_won: bool = False
+    close_how: CloseHow | None = None
     deadline_timer: asyncio.TimerHandle | None = field(default=None, repr=False)
+    stage_two_timer: asyncio.TimerHandle | None = field(default=None, repr=False)
 
     def stamp_timed_out(self) -> None:
         """Record that stage one fired. This wins over an earlier ``failed`` stamp."""
@@ -87,6 +94,8 @@ class RequestTaskRegistry:
     def __init__(self) -> None:
         """Create an empty registry."""
         self._records: dict[str, RequestTask] = {}
+        # Strong references to the running degraded closes, so none is collected mid-flight.
+        self._close_tasks: set[asyncio.Task[None]] = set()
 
     def spawn(
         self, coro: Coroutine[Any, Any, None], *, trace_id: str, session_id: str
@@ -125,6 +134,9 @@ class RequestTaskRegistry:
         record.task = task
         self._records[trace_id] = record
         record.deadline_timer = loop.call_at(stage_one, self._on_stage_one_deadline, record)
+        record.stage_two_timer = loop.call_at(
+            record.stage_two_deadline, self._on_stage_two_deadline, record
+        )
         task.add_done_callback(partial(self._on_done, record))
         self._log_gauge()
         return record
@@ -139,6 +151,51 @@ class RequestTaskRegistry:
             The record, or ``None`` when no task is registered for the trace.
         """
         return self._records.get(trace_id)
+
+    def close_once(self, trace_id: str, how: CloseHow) -> bool:
+        """Claim the right to close the stream of one trace (ADR-0143 D3, the arbiter).
+
+        Only the caller that gets ``True`` pushes a sentinel or closes a socket. The check and
+        the claim have no await between them.
+
+        Args:
+            trace_id: The turn's trace id.
+            how: Who claims: the actor's name, kept on the record and in the ending log.
+
+        Returns:
+            ``True`` for the first claim on a registered trace, ``False`` after. A trace with
+            no record is not arbitrated and always gets ``True``: that is a caller outside the
+            registry, such as a test, and it keeps the behaviour it had before the arbiter.
+        """
+        record = self._records.get(trace_id)
+        if record is None:
+            return True
+        if record.close_won:
+            return False
+        record.close_won = True
+        record.close_how = how
+        return True
+
+    def has_newer_live_record(self, trace_id: str) -> bool:
+        """Report whether a later turn on the same session is still live.
+
+        Args:
+            trace_id: The turn that asks.
+
+        Returns:
+            ``True`` when another live record on the session was inserted after this turn's.
+            ``False`` when there is none, or when the trace has no record.
+        """
+        record = self._records.get(trace_id)
+        if record is None:
+            return False
+        return any(
+            other is not record
+            and other.session_id == record.session_id
+            and other.state == "live"
+            and other.started_at > record.started_at
+            for other in self._records.values()
+        )
 
     def records(self) -> tuple[RequestTask, ...]:
         """Return every record.
@@ -158,16 +215,23 @@ class RequestTaskRegistry:
         return len(self._records) - leaked, leaked
 
     async def shutdown(self) -> None:
-        """Cancel every live task, wait for them, and mark the survivors leaked.
+        """Close every live stream, cancel the live tasks, wait, and mark the survivors leaked.
 
-        The wait is bounded by ``service_request_close_timeout_seconds``. This does not
-        close the client streams. The stream close at shutdown is FRE-1410's (ADR-0143 D3).
+        The stream close comes first and wins ``close_once`` for each live task, so a task that
+        ends during the wait cannot close its stream a second time. Each close and the wait
+        that follows are bounded by ``service_request_close_timeout_seconds``.
         """
+        budget = settings.service_request_close_timeout_seconds
+        for record in tuple(self._records.values()):
+            if record.state == "live":
+                self._start_close(record, "shutdown")
+        if self._close_tasks:
+            await asyncio.wait(set(self._close_tasks), timeout=budget)
         live = [r.task for r in self._records.values() if r.state == "live" and r.task is not None]
         for task in live:
             task.cancel()
         if live:
-            await asyncio.wait(live, timeout=settings.service_request_close_timeout_seconds)
+            await asyncio.wait(live, timeout=budget)
         for record in tuple(self._records.values()):
             if record.state == "live" and record.task is not None and not record.task.done():
                 record.state = "leaked"
@@ -205,10 +269,58 @@ class RequestTaskRegistry:
             elapsed_seconds=self._elapsed(record),
         )
 
+    def _on_stage_two_deadline(self, record: RequestTask) -> None:
+        """Mark a task that is still alive as leaked and close its stream if nobody has.
+
+        The record stays: it is the only evidence that the task exists. ``close_once`` decides
+        whether the stream still needs the degraded close.
+        """
+        if record.task is None or record.task.done():
+            return
+        record.state = "leaked"
+        log.error(
+            "chat_stream.task_leaked",
+            trace_id=record.trace_id,
+            session_id=record.session_id,
+            elapsed_seconds=self._elapsed(record),
+            reason="stage_two_deadline",
+        )
+        self._log_gauge()
+        self._start_close(record, "deadline")
+
+    def _start_close(self, record: RequestTask, how: Literal["deadline", "shutdown"]) -> None:
+        """Claim the close for a trace and run the degraded close in a task the registry keeps."""
+        if not self.close_once(record.trace_id, how):
+            return
+        task = asyncio.get_running_loop().create_task(self._run_degraded_close(record, how))
+        self._close_tasks.add(task)
+        task.add_done_callback(self._close_tasks.discard)
+
+    async def _run_degraded_close(
+        self, record: RequestTask, trigger: Literal["deadline", "shutdown"]
+    ) -> None:
+        """Run the degraded close of ADR-0143 D3b for a record whose close this registry won."""
+        # Function-level import: transport.py imports this module at its top.
+        from personal_agent.transport.agui.transport import close_stream_degraded
+
+        try:
+            await close_stream_degraded(
+                record.session_id, record.trace_id, trigger=trigger, registry=self
+            )
+        except Exception:
+            log.exception(
+                "chat_stream.degraded_close_failed",
+                trace_id=record.trace_id,
+                session_id=record.session_id,
+                trigger=trigger,
+            )
+
     def _on_done(self, record: RequestTask, task: asyncio.Task[None]) -> None:
         """Log how the task ended and drop its record. The one done callback."""
         if record.deadline_timer is not None:
             record.deadline_timer.cancel()
+        if record.stage_two_timer is not None:
+            record.stage_two_timer.cancel()
         self._records.pop(record.trace_id, None)
         # Retrieve the exception of every task that was not cancelled, so a stamped outcome
         # cannot hide an escaped exception from this log or from asyncio's GC warning.
@@ -230,6 +342,8 @@ class RequestTaskRegistry:
         }
         if exc is not None:
             fields["error_type"] = type(exc).__name__
+        if record.close_how is not None:
+            fields["closed_by"] = record.close_how
         if outcome == "completed":
             log.info("chat_stream.task_ended", **fields)
         else:

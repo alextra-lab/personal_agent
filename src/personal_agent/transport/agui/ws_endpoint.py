@@ -18,6 +18,7 @@ See: docs/architecture_decisions/ADR-0075-websocket-transport.md
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -47,6 +48,7 @@ ws_router = APIRouter(tags=["transport"])
 # ── Connection registry ────────────────────────────────────────────────────
 
 WS_CLOSE_SUPERSEDED = 4001
+WS_CLOSE_TURN_DEADLINE = 4002
 
 
 @dataclass
@@ -93,9 +95,42 @@ class _ConnectionState:
     #: The task draining the session queue to this socket. A superseding connection stops it
     #: before its own replay, so no item is taken by a socket that can no longer send it.
     sender_task: asyncio.Task[None] | None = None
+    #: Counter value taken at connect (ADR-0143 D3b). A close that was decided for one
+    #: connection must not reach a later one that replaced it under the same session.
+    generation: int = 0
 
 
 _active_connections: dict[str, _ConnectionState] = {}
+_connection_generation = itertools.count(1)
+
+
+async def close_connection_if_current(session_id: str, generation: int, *, trace_id: str) -> bool:
+    """Close the session's socket only if it is still the connection with ``generation``.
+
+    The check and the start of the close have no await between them. A reconnect replaces the
+    entry in ``_active_connections``, so a stale caller finds another generation and does nothing.
+
+    Args:
+        session_id: The session whose connection the caller decided to close.
+        generation: The generation that the caller captured with that connection.
+        trace_id: The turn that asks for the close, for the log.
+
+    Returns:
+        ``True`` when the socket was closed. ``False`` when no connection with that generation
+        is active.
+    """
+    conn = _active_connections.get(session_id)
+    if conn is None or conn.generation != generation:
+        log.warning(
+            "ws.close_skipped_generation_mismatch",
+            session_id=session_id,
+            trace_id=trace_id,
+            captured_generation=generation,
+            current_generation=None if conn is None else conn.generation,
+        )
+        return False
+    await conn.websocket.close(code=WS_CLOSE_TURN_DEADLINE, reason="Turn closed")
+    return True
 
 
 @dataclass
@@ -720,6 +755,7 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         user=user,
         session_id=session_id,
         outbound_queue=queue,
+        generation=next(_connection_generation),
     )
     _active_connections[session_id] = conn
     # FRE-1375: create the cancel event now, at first connect, rather than lazily
@@ -992,6 +1028,19 @@ async def _sender(conn: _ConnectionState, last_seq: int, *, attach: bool = False
             item = await queue.get()
         except asyncio.CancelledError:
             return
+        if item is not None and item.get("type") == DONE_SENTINEL_TYPE:
+            # ADR-0143 D3b: a degraded sentinel is tagged with the generation it was decided
+            # for. One that was queued behind a reconnect must not close the new connection.
+            sentinel_generation = item.get("generation")
+            if sentinel_generation is not None and sentinel_generation != conn.generation:
+                log.warning(
+                    "ws.stale_close_sentinel_skipped",
+                    session_id=session_id,
+                    trace_id=item.get("trace_id"),
+                    sentinel_generation=sentinel_generation,
+                    connection_generation=conn.generation,
+                )
+                continue
         if item is None or item.get("type") == DONE_SENTINEL_TYPE:
             done_trace_id = item.get("trace_id") if item is not None else None
             try:

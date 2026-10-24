@@ -40,12 +40,13 @@ The owner asked for this discussion on 2026-10-24 (FRE-1679), in these words:
 | Sandbox pattern | `run_python` starts a sibling container through the Docker socket: non-root, read-only root, `--cap-drop ALL`, `--network=none` by default | `tools/primitives/sandbox.py:178-217`, `docker-compose.cloud.yml:381` |
 | The network that `run_python(network=true)` joins | `cloud-sim`, a plain bridge with internet egress. Every data store is on it. `caddy:8601` on it reads every user's artifact by UUID. | `docker-compose.cloud.yml:662-669`, `config/cloud-sim/Caddyfile:325-331` |
 | Egress control for containers | None | — |
-| Artifact write path | `artifact_write_executor(slug, content_type, content, title, summary, tags, ctx)`. It needs `ctx.user_id`. Each write is a new row. The `artifacts` table has no metadata, version or parent column. | `tools/artifact_tools.py:418-641`, `docker/postgres/init.sql:437-454` |
-| Production artifact CSP | Lives in the Cloudflare Worker (`personal_agent_secrets`). The in-repo mirror is `expected_csp_directives()`. A Playwright server already serves pages with that exact CSP. | `observability/artifact_envelope/spec.py:24-56`, `e2e/artifact-lib/csp-server.ts:74-79` |
-| Approval card | A tool on `ask` shows a PWA card. Deny, timeout and a lost connection all refuse. An explicit `ask` rule offers "allow once" only. The production flag `AGENT_APPROVAL_UI_ENABLED` is true. | ADR-0063 Amendment A, ADR-0156 D8, `tools/executor.py:366-580`, `config/governance/permissions.yaml` |
-| Cost gate | `CostGate.reserve/commit/refund` by budget role. Windows are daily and weekly only. No per-job and no monthly cap exists. | `cost_gate/gate.py:57-354`, `cost_gate/types.py:24-28` |
+| Artifact write path | `artifact_write_executor(slug, content_type, content, title, summary, tags, ctx)`. It needs `ctx.user_id`. It generates a new UUID and uploads to R2 before it inserts the row. The `artifacts` table has no metadata, version or parent column. The size cap is 5 MB. | `tools/artifact_tools.py:418-641`, `docker/postgres/init.sql:437-454` |
+| Artifact read path | `artifact_read_executor` returns content inline only up to 256 KB. A larger page needs an owner-scoped row lookup and `R2ArtifactStore.get`. | `tools/artifact_tools.py:727-888`, `storage/artifact_store.py:222` |
+| Production artifact CSP | Lives in the Cloudflare Worker (`personal_agent_secrets`). The in-repo mirror is `expected_csp_directives()`. A Playwright server serves pages with the same directives from a generated manifest, with the artifact origin rebound to localhost. `make verify-envelope` catches drift between the mirror and the Worker. | `observability/artifact_envelope/spec.py:24-56`, `scripts/build_e2e_artifact_fixtures.py:106-123`, `e2e/artifact-lib/csp-server.ts` |
+| Approval card | A tool on `ask` shows a PWA card. Deny, timeout and a lost connection all refuse. An explicit `ask` rule offers "allow once" only. The production flag `AGENT_APPROVAL_UI_ENABLED` is true. The request is persisted as a session event. The decision comes back through an in-memory waiter and is only logged. | ADR-0063 Amendment A, ADR-0156 D8, `tools/executor.py:266-580`, `transport/agui/transport.py:915-1000` |
+| Cost gate | `CostGate.reserve/commit/refund` by budget role and window. Windows are daily and weekly only. A reservation expires after 180 seconds. `task_id` on a reservation is audit data and keys no counter. No per-job and no monthly cap exists. `api_costs` has no job column, and a row is written only for a positive cost. | `cost_gate/gate.py:54-354`, `cost_gate/types.py:24-28`, `llm_client/litellm_client.py:1781`, `docker/postgres/init.sql:108-122` |
 | OpenAI-compatible endpoint for paid models | None. LiteLLM runs in-process only. | `service/app.py` |
-| Work that outlives a turn | No job mechanism. `_push_event(event, session_id)` can push a persisted event to a session outside a turn. | `transport/agui/transport.py:107-160` |
+| Work that outlives a turn | No job mechanism. `_push_event(event, session_id)` persists an event to `session_events` and puts it on the calling process's local queue. So it reaches a connected client only when the gateway process itself calls it. A reconnecting client replays persisted events. | `transport/agui/transport.py:107-160` |
 
 ADR-0095 has "delegation boundary" in its title, but it is about the model that a sub-agent runs on. This ADR does not touch it.
 
@@ -63,12 +64,22 @@ The model runs at the vendor, so a job uses the VPS for OpenCode, a headless Chr
 
 ## Decision
 
-This ADR gives Seshat a development agent. Seshat hands it a build or a fix. The agent works in its own git repo, tests the page in a browser, and Seshat publishes the result through the existing artifact path.
+This ADR gives Seshat a development agent. Seshat hands it a build or a fix. The agent works in its own git repo and tests the page in a browser. Seshat checks the result and publishes it through the existing artifact path.
+
+### The parts, and who does what
+
+| Part | Where it runs | What it does | What it holds |
+|---|---|---|---|
+| **Gateway** (exists) | `cloud-sim` | Creates the job after approval. Runs the job supervisor. Starts and removes the agent container and the check container through the Docker socket it already holds. Owns the GitHub App. Imports, checks and publishes pages. Pushes job events to the session. | What it holds today, plus the GitHub App private key |
+| **Broker** (new) | `cloud-sim` and `dev-agent` | Model route for the agent (D5). Control relay from the gateway to the job's OpenCode server (D4). Nothing else. | The Scaleway key, a restricted database role, the control secret. No Docker socket. |
+| **Egress proxy** (new) | `dev-agent` and an external network | Forwards only to the allowlist of D4 | Nothing |
+| **Agent container** (new, one per job) | `dev-agent` only | Runs OpenCode on the job | The job's three credentials (D6) |
+| **Check container** (new, one per check) | No network | Runs the publish check (D7) | Nothing |
 
 ### D1 — Scope of v0
 
 1. v0 does one kind of job: **build or fix an interactive artifact**. A job has one of two modes, `build` or `fix`.
-2. v0 delivers one sealed HTML page per job through `artifact_write`, under the ADR-0089 sealed box.
+2. v0 delivers one sealed HTML page per job through the artifact path, under the ADR-0089 sealed box.
 3. The job contract keeps larger outputs possible (owner's choice). The agent writes its deliverable into a **build-output folder**, `dist/`, in the repo. v0 publishes `dist/index.html` only. A later ADR decides where multi-file outputs are hosted. It does not need a new contract.
 4. Other development work (scripts, services, tools for Seshat) is out of scope for v0.
 
@@ -76,91 +87,124 @@ This ADR gives Seshat a development agent. Seshat hands it a build or a fix. The
 
 1. The harness is **OpenCode 2.x**, pinned to one version in the agent image. Owner's reason: it keeps Seshat's models separate from the owner's own coding agent (Claude Code), and it teaches us a second harness.
 2. A new adapter, `OpenCodeAdapter`, implements `DelegationExecutorProtocol`. The protocol stays. The three unused adapters (`claude_code.py`, `codex.py`, `generic_mcp.py`) are deleted. A later adapter can still be added behind the same protocol.
-3. The adapter drives OpenCode through its HTTP server (`opencode serve`, password-protected). It follows progress on the server's event stream.
-4. Every job runs with an explicit OpenCode permission file. OpenCode asks a client when no rule matches, and a headless job has no client to answer. The file allows reads, edits and shell inside the job workspace, and denies everything outside it. It also denies web search and web fetch.
-5. Each repo carries an `AGENTS.md` that states the test loop (D7) as a requirement.
+3. The adapter drives OpenCode through its HTTP server (`opencode serve`), through the broker's control relay. It follows progress on the server's event stream.
+4. Every job runs with an explicit OpenCode permission file. OpenCode asks a client when no rule matches, and a headless job has no client to answer, so every action needs a rule. The file allows reads, edits and shell in the workspace. It denies external directories, web search and web fetch.
+5. **The permission file is defense in depth, not the boundary.** The agent has a shell, so the permission file cannot stop a read outside the workspace. The container (D3) is the boundary.
+6. Each repo carries an `AGENTS.md` that states the test loop and the test contract (D7).
 
-### D3 — Placement: a container now, a separate VPS if the test shows value
+### D3 — Placement: a fresh container for each job, a separate VPS if the evaluation shows value
 
-1. v0 runs the agent as one long-lived container, `seshat-dev-agent`, on the current VPS. It runs one job at a time. Each job gets its own workspace folder and OpenCode session. The folder is deleted after the push.
-2. Container limits: memory cap 3 GB, 2 CPUs, non-root user, `--cap-drop ALL`, `no-new-privileges`, read-only root with a writable workspace volume. The container never gets the Docker socket.
-3. The container is restarted after a job that ends in a timeout, a cap stop or an error. This gives the next job a clean process.
-4. Seshat talks to the agent only through HTTP endpoints: the OpenCode server, and the model route of D5. A move to a separate VPS changes base URLs and the link between hosts, not the code. The decision to move belongs to the owner, with the evaluation of D11 as input.
+1. The gateway starts **one agent container for each job** and removes it at the job's end state. No process, file, OpenCode session or cache survives from one job to the next.
+2. The gateway starts it the same way `run_python` starts its sandbox, but on the `dev-agent` network. Only one job runs at a time (D9).
+3. The container boundary:
+   - non-root user, `--cap-drop ALL`, `no-new-privileges`, a process limit, memory cap 3 GB, 2 CPUs.
+   - read-only root filesystem.
+   - writable paths: a new workspace volume for this job, a `tmpfs` for `/tmp`, and a `tmpfs` for OpenCode's state.
+   - read-only mount: the pinned toolkit (`/lib/`, ADR-0089 Addendum A), verified against its digest.
+   - no other mount, no Docker socket, no host path.
+   - environment: exactly the three job credentials of D6 and the proxy variables, nothing inherited from the gateway.
+4. The gateway deletes the workspace volume at every end state.
+5. Seshat talks to OpenCode only over HTTP, and it starts the container through one launcher interface. A move to a separate VPS replaces the launcher and the base URLs, not the job logic. The decision to move belongs to the owner, with the evaluation of D11 as input.
 
 ### D4 — Network isolation
 
-1. The agent container is **not** on `cloud-sim`. It is on a new Docker network, `dev-agent`, with `internal: true`. That network has no route to the internet, to the data stores, or to Caddy.
-2. Two other containers join `dev-agent`. No other container joins it:
-   - **The broker**, `seshat-dev-broker`: a small Seshat service built from the gateway image. On `dev-agent` it exposes only the model route of D5. On `cloud-sim` it exposes a control API that the gateway calls to run a job. The gateway itself never joins `dev-agent`, so the agent cannot reach the gateway's API.
-   - **The egress proxy**: a forward proxy that also joins an external network. It allows only `github.com`, `api.github.com`, `codeload.github.com` and `registry.npmjs.org`. OpenCode and git use it through `HTTPS_PROXY`.
-3. The curated toolkit (`/lib/`, ADR-0089 Addendum A) is mounted read-only into the container. The agent does not need the internet to test a page.
+1. The agent container is **not** on `cloud-sim`. It is on a new Docker network, `dev-agent`, with `internal: true`. That network has no route to the internet, to the data stores, to Caddy or to the gateway.
+2. Two other containers join `dev-agent`. No other container joins it.
+3. **The broker** runs two separate listeners, each bound to one interface address, never to `0.0.0.0`:
+   - on `dev-agent`: the model route of D5 only, authenticated by the job token.
+   - on `cloud-sim`: the control API, authenticated by a secret that only the gateway holds.
+   The control API relays requests to the OpenCode server of the current job's container only. The broker forwards nothing else, and it has no general proxy function.
+4. The broker runs with an explicit environment allowlist: the Scaleway key, a restricted database role, and the control secret. The role can read and write only the cost-gate tables, the job spend tables of D5, and `api_costs`.
+5. **The egress proxy** also joins an external network. It allows only `github.com`, `api.github.com`, `codeload.github.com` and `registry.npmjs.org`, by host name. It refuses IP literals, other ports and other hosts. OpenCode, git and npm use it through `HTTPS_PROXY`.
 
 ### D5 — Model access through a metering route that Seshat owns
 
 1. The agent holds **no model vendor key**. Its only model endpoint is the broker's OpenAI-compatible route. The route supports streaming.
-2. The broker is not a byte-level pass-through. It dispatches each call through `LiteLLMClient` with the egress guard, as ADR-0141 D1 and D2 require for every LLM call. Scaleway gets a catalog entry and a guard allowlist entry like any other provider.
-3. The broker holds the Scaleway key. The key is an application credential under ADR-0132 D2, so it stays in a Seshat service and never moves to the environment layer or to the agent.
-4. Each request carries a **job token**: a random token that the broker issues when a job starts and revokes when the job ends.
-5. The broker reserves each call on the cost gate under a new budget role, `dev_agent`. Before each call it refuses the request if one of these holds:
-   - the job's committed and still-reserved spend plus this call's worst-case reservation exceeds **€2**;
-   - the `dev_agent` committed and still-reserved spend this calendar month plus this call's worst-case reservation exceeds **€30**.
-6. These two limits are the owner's numbers (FRE-1679, 2026-10-24). They are configured as their equivalents in the ledger currency (USD), with the conversion factor stated in config.
-7. The cost gate gains a `monthly` time window for the €30 cap. This amends ADR-0065 by one window value. The per-job limit uses the reservation's `task_id`, set to the job id.
-8. Each call is written to `api_costs` with the job's `trace_id` and `session_id` and `purpose="dev_agent"`.
-9. Vendor and models (owner's choice): **Scaleway Generative APIs**, Paris. The default model is `deepseek-v4.1-flash`, which has vision and a cached-input price. The alternatives are `glm-5.3` and `qwen3.8-27b`. The model is a configuration value, not a tool argument. Scaleway marks all three as preview models, so the job record stores the model id.
+2. The broker dispatches each call through `LiteLLMClient` with the egress guard, as ADR-0141 D1 and D2 require for every LLM call. Scaleway gets a catalog entry and a guard allowlist entry like any other provider.
+3. The broker holds the Scaleway key. It is an application credential under ADR-0132 D2, so it stays in a Seshat service and never moves to the environment layer or to the agent.
+4. Each request carries the **job token** (D6). The broker accepts it only for its job, only while the job is running, and only for the job's model.
+5. **The caps are atomic counters that Seshat owns, not the cost gate's windows.** Two counters exist:
+   - one row per job, with committed and reserved spend.
+   - one row per UTC calendar month for the `dev_agent` role, with committed and reserved spend.
+6. Before each call, the broker reserves the call's worst-case cost on both rows in one database transaction, with row locks. Worst case means the counted prompt tokens and the requested output tokens at list price. The transaction refuses the call if the reservation takes either row past its cap: **€2 for the job, €30 for the month**. Parallel calls therefore cannot pass a cap together.
+7. These reservations have no time limit. A reservation is released only when its call settles.
+8. After each call, the broker settles the reservation with the cost from the provider's reported usage. If the usage is missing or the cost cannot be computed, the broker keeps the worst-case reservation as spent and stops the job with the reason `cost_unknown`.
+9. The broker writes one row per call to a new table, `dev_job_calls`: job id, model, tokens, reservation, settled cost, status. This table is the per-job ledger. Each job also runs under its own trace id, so the `api_costs` rows that `LiteLLMClient` writes join to the job by trace id.
+10. The broker also reserves each call on the cost gate under a new budget role, `dev_agent`. This keeps the global daily and weekly caps of ADR-0065 in force. The cost gate's 180-second reservation expiry can release global headroom during a long call. The job and month caps above do not depend on it.
+11. The limits are the owner's numbers (FRE-1679, 2026-10-24). They are configured as their equivalents in the ledger currency (USD), with the conversion factor stated in config.
+12. Vendor and models (owner's choice): **Scaleway Generative APIs**, Paris. The default model is `deepseek-v4.1-flash`, which has vision and a cached-input price. The alternatives are `glm-5.3` and `qwen3.8-27b`. The model is a configuration value, not a tool argument. The Scaleway console marked all three as PREVIEW on 2026-10-24, so the job record stores the model id.
 
-### D6 — Secrets in the agent container
+### D6 — The credentials in the agent container
 
-The container holds exactly three credentials. Each one is scoped to one job:
+The container holds exactly three credentials. The model can read all three through its shell, so each one grants only what this job may do anyway:
 
-| Credential | Scope | Lifetime |
+| Credential | What it grants | Lifetime |
 |---|---|---|
-| Job token for the model route | One job, capped by D5 | Revoked when the job ends |
-| GitHub App installation token | One repository, `contents: write` only | One hour or the end of the job |
-| OpenCode server password | Read by the broker only | Rotated when the container restarts |
+| Job token | The broker's model route, for this job and its model, inside the caps of D5 | Revoked at the job's end state |
+| GitHub App installation token | `contents: write` on this job's repository only | Issued at job start, revoked by the gateway at the job's end state. GitHub ends it after one hour at most. |
+| OpenCode server password | Access to this job's own OpenCode server. It is endpoint authentication, not a secret from the agent. | New for each job |
 
 The container holds no Scaleway key, no Anthropic key, no R2 credential, no database URL and no `.env`.
 
 ### D7 — The test loop and the publish check
 
-1. The agent image contains headless Chromium, Playwright and the CSP test server from `e2e/artifact-lib/csp-server.ts`. That server sends the CSP from `expected_csp_directives()`, so the agent tests the page under the production policy.
-2. `AGENTS.md` requires the loop: open the page, operate every widget, read console errors and CSP violations, fix, repeat. The agent commits its tests into the repo with the page.
-3. Before Seshat publishes, the broker runs a **publish check** that the model does not control. It loads `dist/index.html` from the committed result in a fresh container with no network, under the same CSP. It requires zero console errors and zero CSP violations.
-4. A page that fails the check is not published. The job ends as `failed_check`, and the job card shows the repo link and the check output.
-5. A page that passes is published directly, with no owner approval step (owner's choice for v0).
+1. The agent image contains headless Chromium, Playwright and the CSP test server from `e2e/artifact-lib/`. That server sends the production CSP directives from the generated manifest, with the origin rebound to localhost.
+2. `AGENTS.md` requires the loop: open the page, operate every widget, read console errors and CSP violations, fix, repeat. It also requires the **test contract**: the repo holds at least one Playwright test in `tests/` that operates the page's controls and asserts their effect.
+3. Before Seshat publishes, the gateway runs the **publish check** in a check container. The model does not control the check. The check container has no network, a read-only root, no capabilities, a non-root user, and only three inputs: the `dist/` and `tests/` folders at the result commit, and the pinned toolkit.
+4. The check has three steps. All three must pass:
+   - **Load:** the page loads under the CSP with zero console errors, zero page errors and zero CSP violations.
+   - **Generic interaction:** a script that Seshat owns clicks every button, changes every input, select, checkbox and range, and then requires zero new errors and zero CSP violations.
+   - **Repo tests:** the repo's tests run and pass. A repo with no test fails this step.
+5. The check stores its result on the job: pass or fail per step, the console and CSP messages, and the digests of the check image, the toolkit and the CSP manifest.
+6. A page that fails the check is not published. The job ends as `failed_check`, and the job card shows the repo link and the check result.
+7. A page that passes is published directly, with no owner approval step (owner's choice for v0).
 
-### D8 — Private git projects
+### D8 — Private git projects and the handoff of the result
 
-1. The owner creates a new private GitHub organization, separate from `alextra-lab`. A GitHub App is installed only on that organization.
-2. The broker holds the App's private key. It creates each repo, and it mints the per-job token of D6. The agent cannot create repos, and it cannot reach any repo outside its job.
+1. The owner creates a new private GitHub organization, separate from `alextra-lab`, and a GitHub App installed only on that organization.
+2. The gateway holds the App's private key. It creates each repo as private, and it mints the agent's token (D6). The agent cannot create repos, and it cannot reach any repo outside its job.
 3. Repo name: `<artifact-slug>-<short-job-id>`. Repos are kept. v0 deletes none.
-4. **Build mode** creates a new repo from a template that holds `AGENTS.md`, the test setup and an empty `dist/`.
-5. **Fix mode, page built by the agent:** the job continues that page's repo from the recorded commit (owner's choice). The broker finds the repo and the commit through the job record of D9.
-6. **Fix mode, page not built by the agent:** the broker reads the page from R2, creates a new repo from the template, and commits the page as `dist/index.html` before the agent starts.
+4. Each job works on one branch, `job/<job-id>`, created from the base commit. The agent pushes its commits to that branch only.
+5. **Build mode** creates the repo from a template that holds `AGENTS.md`, the test setup and an empty `dist/`. The template commit is the base commit.
+6. **Fix mode, page built by the agent:** the job continues that page's repo (owner's choice). The base commit is the result commit of the job that built the page. The gateway finds both through `dev_jobs`.
+7. **Fix mode, page not built by the agent:** the gateway looks up the artifact row by id **and** by the requesting user, and requires `type='artifact'`, an HTML content type and `upload_pending=false`. It refuses any other row. It reads the page with `R2ArtifactStore.get`, up to the 5 MB artifact cap. It creates a new repo from the template and commits the page as `dist/index.html`. That commit is the base commit.
+8. **The handoff.** When OpenCode reports the session done, or at the time limit, the gateway does these steps in order:
+   1. It revokes the agent's GitHub token.
+   2. It stops the agent container.
+   3. With its own token, it reads the head of `job/<job-id>`.
+   4. It requires that this head is a descendant of the base commit, and that `dist/index.html` exists and is at most 5 MB.
+   5. It stores the head as the job's result commit.
+   Nothing that the agent does after step 1 can change the result.
+9. After a successful publish, the gateway moves the repo's `main` to the result commit by fast-forward. Only one job runs at a time, so the fast-forward cannot conflict.
 
-### D9 — Job record and delivery
+### D9 — The job record, the supervisor and delivery
 
-1. A new Postgres table, `dev_jobs`, holds one row per job. Columns: id, user id, session id, trace id, mode, task text, source artifact id, repo, base commit, result commit, result artifact id, model id, state, spend, start and end times, failure reason.
-2. Job states: `queued`, `running`, `checking`, `succeeded`, `failed`, `failed_check`, `cap_reached`, `timed_out`, `cancelled`.
-3. The `artifacts` table does not change. Provenance and lineage live in `dev_jobs`: a fix job's `source_artifact_id` points to the old page, and its `result_artifact_id` points to the new one.
-4. The broker reads `dist/index.html` from GitHub **at the result commit**. It never reads from the container's working tree. It publishes through `artifact_write_executor` with the job's user id and session id.
-5. The wall-clock limit for a job is 30 minutes.
+1. A new Postgres table, `dev_jobs`, holds one row per job. Columns: id, user id, session id, job trace id, approval request id (unique), mode, task text, source artifact id, repo, base commit, result commit, preallocated result artifact id, model id, state, spend, check result, lease owner, lease expiry, start and end times, failure reason.
+2. Job states: `queued`, `running`, `checking`, `delivering`, `succeeded`, `failed`, `failed_check`, `cap_reached`, `cost_unknown`, `timed_out`, `cancelled`.
+3. A partial unique index allows at most one job in `queued`, `running`, `checking` or `delivering`. That index enforces "one job at a time".
+4. **The supervisor** is a task in the gateway process. It takes a job by writing a lease to its row, and it renews the lease while the job runs. Every state change is one transaction on the row.
+5. **Recovery.** At gateway start, the supervisor finds each job that is not at an end state and whose lease expired. It removes the job's containers by label, revokes the job's tokens, deletes the workspace, and marks the job `failed` with the reason `supervisor_restart`. v0 does not resume a job.
+6. The time limit is 30 minutes from the issue of the agent's token. When the limit is reached, the job goes to the handoff of D8.8 and ends as `timed_out` if no result passes. The token is never renewed.
+7. **Idempotent delivery.** The gateway preallocates the result artifact id on the job row before it publishes. The publish call takes that id instead of a new UUID, and the R2 key derives from it. A retry after a crash at any step finds the same id. It produces at most one R2 object and one `artifacts` row.
+8. The gateway publishes the `dist/index.html` bytes that it read at the result commit, with the job's user id and session id. It never reads from the agent's working tree.
+9. The `artifacts` table does not change apart from what idempotent delivery needs. Provenance and lineage live in `dev_jobs`.
 
 ### D10 — Consent, trigger and the user experience
 
 1. A new native tool starts a job. The primary calls it with the task, the mode, and for a fix the artifact id.
 2. `config/governance/permissions.yaml` puts the tool on an explicit `ask` rule. **Every job shows the approval card in v0**, including when the owner asked directly (owner's decision). The card offers "allow once" only (ADR-0156 D8.3). Deny, timeout and a lost connection refuse (ADR-0063 Amendment A).
-3. The model never decides that the owner "asked directly". A later change can add a direct path that code recognizes, for example a command or a PWA button, and that path can skip the card. v0 has no such path.
-4. After approval, the tool creates the job and returns at once. The turn ends with "build started". If a job is running already, or the month cap is reached, the tool refuses and says why.
-5. The broker pushes job events to the session with `_push_event(event, session_id)`. The PWA shows a job card with the state, the latest step from the OpenCode event stream, the spend, and at the end the artifact card or the failure.
-6. The gateway DELEGATE route stays off. This ADR does not use it.
+3. **The approval decision becomes durable.** The permission layer persists each decision as a session event: request id, tool call id, decision, time. It passes the request id to the executor. The executor stores it on the job row, under the unique constraint of D9.1. A replayed or second use of one approval cannot create a second job.
+4. The model never decides that the owner "asked directly". A later change can add a direct path that code recognizes, for example a command or a PWA button, and that path can skip the card. v0 has no such path.
+5. After approval, the executor creates the job row and returns at once. The turn ends with "build started". If a job is active already, or the month cap is reached, the executor refuses and says why.
+6. The supervisor runs in the gateway process, so its `_push_event` calls reach a connected client directly, and a reconnecting client replays them. The PWA shows a job card with the state, the latest step from the OpenCode event stream, the spend, and at the end the artifact card or the failure.
+7. The gateway DELEGATE route and `delegation_enabled` stay off. This ADR does not use them.
 
 ### D11 — The first evaluation decides whether the work continues
 
-1. The first paid run uses the trace 8e60be11 fix as its task. It runs each of the three models three times. The repeats show the noise. Today's path is the baseline, and it failed on this task.
+1. The first paid run uses the trace 8e60be11 fix as its task. It runs each of the three models three times. The repeats show the noise. Today's path is the baseline, and it failed on this task. Nine jobs at most €2 each stay inside the €30 month.
 2. The run follows the paid-run rule: a preflight on the ticket, a check of the Scaleway balance, and the owner's recorded go.
 3. The owner rates each delivered page blind, as working or not working.
-4. The result goes to the owner, who decides whether to continue and whether to move the agent to a separate VPS (D3.4). This ADR sets no automatic threshold for that decision.
+4. The result goes to the owner, who decides whether to continue and whether to move the agent to a separate VPS (D3.5). This ADR sets no automatic threshold for that decision.
 
 ---
 
@@ -193,9 +237,18 @@ The container holds no Scaleway key, no Anthropic key, no R2 credential, no data
 - Its RAM and disk do not compete with production.
 **Cons:**
 - One more machine to patch and monitor before the idea has shown value.
-**Why rejected:** Deferred, not rejected. D3 keeps the move to a configuration change, and D11 gives the owner the evidence to decide.
+**Why rejected:** Deferred, not rejected. D3.5 keeps the move to a launcher and configuration change, and D11 gives the owner the evidence to decide.
 
-### Option D: Put the agent on `cloud-sim`, as `run_python(network=true)` does
+### Option D: One long-lived agent container for all jobs
+**Description:** Run `opencode serve` in one container and give each job a folder and a session.
+**Pros:**
+- No container start for each job.
+**Cons:**
+- OpenCode sessions, caches and processes survive from one job to the next.
+- The server password lives for the life of the container.
+**Why rejected:** A job must not see what an earlier job left. A fresh container for each job gives that by construction.
+
+### Option E: Put the agent on `cloud-sim`, as `run_python(network=true)` does
 **Description:** Reuse the existing network and sandbox call.
 **Pros:**
 - No new network or proxy.
@@ -205,33 +258,32 @@ The container holds no Scaleway key, no Anthropic key, no R2 credential, no data
 - It has open internet egress.
 **Why rejected:** The blast radius is the whole production data plane.
 
-### Option E: Give the agent the Scaleway key, and cap spend at the vendor
-**Description:** Put the vendor key in the container and rely on Scaleway billing limits.
+### Option F: Give the agent the Scaleway key, or use the cost gate's windows for the caps
+**Description:** Put the vendor key in the container and rely on Scaleway billing limits, or enforce the caps with `CostGate` alone.
 **Pros:**
-- No metering route to build.
+- No metering route and no new counters to build.
 **Cons:**
 - No hard spend cap at Scaleway was confirmed. Their billing is postpaid.
 - The model can read the key through its shell.
-- Spend does not reach `api_costs`.
-**Why rejected:** The cap must sit outside the agent, and the key must not be in the container.
+- The cost gate has no monthly window, keys no counter by job, and expires reservations after 180 seconds.
+**Why rejected:** The cap must sit outside the agent, hold under parallel calls, and survive long calls.
 
-### Option F: Self-hosted Forgejo for the repos
+### Option G: Self-hosted Forgejo for the repos
 **Description:** Run a git server on the VPS.
 **Pros:**
 - Everything stays on our host.
 **Cons:**
 - One more service to run and back up.
 - Every repo uses the production disk.
-- The owner cannot easily continue a project from anywhere.
 **Why rejected:** The owner chose a private GitHub organization.
 
-### Option G: Let the model decide that the owner asked directly, and skip the card
+### Option H: Let the model decide that the owner asked directly, and skip the card
 **Description:** The primary sets a flag such as `owner_requested=true`.
 **Pros:**
 - One tap less for a direct request.
 **Cons:**
 - The gate is then under the model's control.
-**Why rejected:** A consent gate that the gated party can open is not a gate. D10.3 keeps the later direct path deterministic.
+**Why rejected:** A consent gate that the gated party can open is not a gate. D10.4 keeps the later direct path deterministic.
 
 ---
 
@@ -239,40 +291,41 @@ The container holds no Scaleway key, no Anthropic key, no R2 credential, no data
 
 ### Positive Consequences
 - Seshat gets a write-test-fix loop for pages, which neither `artifact_draft` nor the primary has.
-- The agent holds no production credential, and its network reaches only GitHub, npm and the broker.
-- Every model call is metered on our side, with hard per-job and monthly caps, and lands in `api_costs`.
+- The agent holds no production credential. Its network reaches only GitHub, npm and one broker route.
+- Every model call is metered on our side, with hard per-job and monthly caps that hold under parallel calls.
 - Each delivered page has a repo and a commit, so a fix continues from history instead of from HTML alone.
+- A check that the model does not control operates the page before it is published.
 - The `DelegationExecutorProtocol` gets its first real implementation, and three dead adapters leave the tree.
 
 ### Negative Consequences
-- New moving parts: the broker, the egress proxy, the agent container, a `dev_jobs` table, a GitHub organization and App, a PWA job card.
+- New moving parts: the broker, the egress proxy, the agent and check images, two new tables and a job-spend table, a supervisor, a GitHub organization and App, a PWA job card.
 - A new vendor (Scaleway) and a new budget role.
 - The broker builds an OpenAI-compatible streaming route, which Seshat does not have today.
-- The cost gate gains a monthly window, which amends ADR-0065.
+- The permission layer and `artifact_write_executor` both change in small ways (D10.3, D9.7).
 - A job takes minutes, so the owner waits for a card instead of an answer in the turn.
 
 ### Risks and Mitigations
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Container escape on the production host | High | Non-root, `--cap-drop ALL`, `no-new-privileges`, no Docker socket, internal network. D3.4 keeps the move to a separate VPS cheap. |
-| The model leaks the GitHub token or the job token | Medium | Each token is scoped to one repo or one job and expires at the end of the job (D6). |
-| A job uses up memory with no swap | Medium | 3 GB memory cap, one job at a time (D3). |
-| A preview model changes or disappears at Scaleway | Medium | The model is configuration (D5.9). The job record stores the model id. |
-| The CSP mirror drifts from the Worker | Medium | The existing `verify-envelope` probe catches drift. The publish check uses the same mirror (D7.3). |
-| Disk fills with repos and packages | Low | The workspace is deleted after the push (D3.1). The repos live at GitHub. |
-| The approval card times out after 60 seconds | Low | A timeout refuses, and nothing starts (D10.2). |
+| Container escape on the production host | High | The D3.3 boundary. D3.5 keeps the move to a separate VPS a launcher change. |
+| A compromised broker reaches production | High | No Docker socket, a restricted database role, an environment allowlist, interface-bound listeners (D4.3, D4.4). |
+| The model misuses a job credential | Medium | Each credential grants only what the job may do anyway, and ends with the job (D6). |
+| A job uses up memory with no swap | Medium | 3 GB memory cap, one job at a time (D3, D9.3). |
+| A preview model changes or disappears at Scaleway | Medium | The model is configuration (D5.12). The job record stores the model id. |
+| The CSP mirror drifts from the Worker | Medium | The existing `verify-envelope` probe catches drift. The check records the manifest digest (D7.5). |
+| Disk fills with workspaces and images | Low | The workspace is deleted at every end state (D3.4). The repos live at GitHub. |
 
 ---
 
 ## Implementation Notes
 
 **Order of work (one phase per PR):**
-1. The `dev-agent` network, the egress proxy and the agent image (OpenCode pinned, Chromium, Playwright, CSP server, toolkit mount).
-2. The broker: the metering route (streaming, job tokens, cost gate role `dev_agent`, the monthly window and the per-job limit) and the control API.
-3. The GitHub organization and App (the owner creates both), repo creation, per-job tokens, the template repo with `AGENTS.md`.
-4. `dev_jobs` (in `docker/postgres/init.sql` and a migration), `OpenCodeAdapter`, the publish check, and delivery through `artifact_write_executor`.
-5. The native tool, its `permissions.yaml` ask rule, its `tools.yaml` entry, and the deletion of the three old adapters.
+1. The `dev-agent` network, the egress proxy, the agent image (OpenCode pinned, Chromium, Playwright, CSP server) and the check image.
+2. The broker: the two listeners, the model route with the job and month counters, `dev_job_calls`, the cost-gate role `dev_agent`, the control relay, the restricted database role.
+3. The GitHub organization and App (the owner creates both), repo creation, per-job tokens and their revocation, the template repo with `AGENTS.md` and the test setup.
+4. `dev_jobs` (in `docker/postgres/init.sql` and a migration), the supervisor with lease and recovery, `OpenCodeAdapter`, the launcher, the handoff, the publish check, idempotent delivery.
+5. The native tool, the durable approval decision, its `permissions.yaml` ask rule and `tools.yaml` entry, and the deletion of the three old adapters.
 6. The job events and the PWA job card.
 7. The paid evaluation of D11, with a preflight.
 
@@ -285,17 +338,39 @@ The container holds no Scaleway key, no Anthropic key, no R2 credential, no data
 
 ## Verification / Acceptance Criteria
 
-These criteria are adjudicated on the umbrella ticket FRE-1679, after the implementation chain lands and deploys. They are not adjudicated at the merge of this ADR.
+These criteria are adjudicated on the umbrella ticket FRE-1679, after the implementation chain lands and deploys. They are not adjudicated at the merge of this ADR. Each criterion that inspects successful jobs first requires that such jobs exist, so an empty run cannot pass.
 
-- **AC-1 — No job starts without a recorded approval.** Every `dev_jobs` row has a matching approval outcome `approve` for its tool call. **Check:** join `dev_jobs` to the approval events by `trace_id`, over the test phase. A seeded negative: deny one card and let one card time out. Neither creates a `dev_jobs` row, and the broker logs no model call for those traces. *Fails if* any job row exists without an `approve`, or a denied card leads to a model call.
-- **AC-2 — Spend never passes a cap.** For every job, the `api_costs` sum for its trace is at most the €2 equivalent. For every calendar month, the `dev_agent` sum is at most the €30 equivalent. **Check:** SQL over `api_costs` grouped by trace and by month. A seeded negative: one job with its cap set to the equivalent of €0.05 ends as `cap_reached`, and the broker refuses its next call. *Fails if* any sum exceeds its cap, or the seeded job keeps running.
-- **AC-3 — The agent container cannot reach production.** A probe run inside the container gets a connection failure for Postgres, Neo4j, Elasticsearch, Redis, `caddy:8600`, `caddy:8601`, the gateway, the Docker socket path, and one host that is not on the allowlist. It gets a success for `api.github.com` and `registry.npmjs.org` through the proxy. Its environment holds none of the production secret names from `.env.example`. The job's GitHub token gets a refusal when it pushes to a second repo in the organization. **Check:** a committed probe script, run once per image change. *Fails if* any forbidden target answers, any production secret name is present, or the second push succeeds.
-- **AC-4 — The published page is the committed page.** For every `succeeded` job, the SHA-256 of the artifact bytes in R2 equals the SHA-256 of `dist/index.html` at the job's result commit. **Check:** a script that reads both for every succeeded job. *Fails if* one pair differs.
-- **AC-5 — A fix continues the repo.** For every `fix` job on a page that the agent built, the result commit is a descendant of the source job's result commit, in the same repo. **Check:** GitHub compare API per fix job. *Fails if* a fix job creates a new repo for an agent-built page, or its history does not contain the earlier commit.
-- **AC-6 — The publish check stops a broken page.** A seeded negative: a job whose page makes a `fetch()` call, or throws at load, ends as `failed_check`, and no artifact row is created. **Check:** the seeded job's row state and the `artifacts` table. *Fails if* the broken page is published.
-- **AC-7 — The turn does not wait for the job.** The turn that starts a job ends within 10 seconds after approval, and the job's end state reaches the PWA session as a persisted event. **Check:** turn duration from the turn trace, and the `session_events` row for the job's end state. *Fails if* the turn waits for the job, or the end state never reaches the session.
-- **AC-8 — The trace 8e60be11 fix works (the D11 evaluation).** The evaluation report states, for each model, how many of three runs passed the publish check, how many the owner rated as working, and the median spend and duration. **Check:** the report on FRE-1679 with the job ids, and the owner's blind ratings. *Fails if* the report lacks a model, a run, or the owner's ratings. The owner decides what the numbers mean for D3.4. This criterion does not set a pass mark for the agent's quality.
-- **AC-9 — Production keeps its memory.** During the evaluation window, no production container is killed by the OOM killer, and the agent container's peak memory stays under its 3 GB cap. **Check:** `docker inspect` OOM flags and the kernel log for the window, and the container's peak memory. *Fails if* any production container shows an OOM kill in the window.
+- **AC-1 — No job starts without its own approval.** Every `dev_jobs` row carries an approval request id. That id matches one persisted decision `approve` for the same session and tool. **Check:** SQL join of `dev_jobs` to the persisted decision events on the request id. Seeded negatives: a denied card, a card left to time out, and a second job submitted with an approval id that was already used. None creates a job row, an agent container or a model call. *Fails if* any row lacks a matching `approve`, or a seeded negative creates a row, a container or a `dev_job_calls` row.
+- **AC-2 — Spend never passes a cap, also under parallel calls.** At every point, a job's committed plus reserved spend is at most the €2 equivalent, and a UTC month's is at most the €30 equivalent. For each job, the count of broker-dispatched calls equals its `dev_job_calls` rows. **Check:** SQL over `dev_job_calls` and the counters. Seeded tests: (a) a job with its cap set to the €0.05 equivalent receives ten parallel calls, and the admitted reservations sum to at most the cap; (b) a call whose usage is missing ends the job as `cost_unknown` and keeps its worst-case reservation. *Fails if* any sum passes its cap, the seeded parallel test admits more than the cap, or a call has no ledger row.
+- **AC-3 — The agent container cannot reach production or an earlier job.** A probe runs inside a live agent container and reports:
+  - connection failure for Postgres, Neo4j, Elasticsearch, Redis, `caddy:8600`, `caddy:8601`, the gateway, the broker's control listener, the host, `169.254.169.254`, an IP literal, an IPv6 address, a host off the allowlist, and an allowlisted host on another port.
+  - success for `api.github.com` and `registry.npmjs.org` through the proxy.
+  - an environment with exactly the D6 credentials and the proxy variables, and no file of an earlier job in any writable path or in OpenCode's state.
+  - a refusal when the job's token pushes to a second repo in the organization.
+  A port scan of the broker from each network finds only the listener of D4.3 for that network. `docker inspect` of the agent and check containers shows the D3.3 and D7.3 flags, and no socket or host mount. **Check:** a committed probe script and inspect report, run on every image change and on two consecutive jobs. *Fails if* any forbidden target answers, any extra credential or earlier-job file is present, the second push succeeds, or a flag or mount differs.
+- **AC-4 — The published page is the committed page, once.** At least one build job succeeded. For every `succeeded` job, the SHA-256 of the artifact bytes in R2 equals that of `dist/index.html` at the result commit, and the result commit is the head of `job/<job-id>` read after the token revocation. A seeded crash at each of four points (before upload, after upload, after the row insert, before the end state) followed by a retry leaves exactly one R2 object and one `artifacts` row. **Check:** a script over all succeeded jobs, and the seeded crash test. *Fails if* no build succeeded, a hash pair differs, or a crash leaves a duplicate or an orphan.
+- **AC-5 — A fix continues the right history, and imports only the owner's page.** At least one fix of an agent-built page succeeded. For each such fix, the result commit descends from the source job's result commit in the same repo. A fix of a page that the agent did not build, larger than 256 KB, succeeds. A fix request with another user's artifact id is refused, and no repo is created. **Check:** the GitHub compare API per fix job, and the two seeded requests. *Fails if* no such fix succeeded, a history check fails, the large page fails to import, or the cross-user request creates anything.
+- **AC-6 — The publish check stops broken pages and passes good ones.** Seeded pages: one that throws only when a button is clicked, one that calls `fetch()`, and one whose repo has no test. Each ends as `failed_check`, with no artifact row. A known-good page that uses the Chart.js toolkit passes. Every check result carries the three digests of D7.5. **Check:** the seeded jobs' rows and the `artifacts` table. *Fails if* a broken page is published, the good page fails, or a digest is missing.
+- **AC-7 — The job outlives the turn and the gateway.** The turn that starts a job ends within 10 seconds after approval. The job's end state reaches a client that stays connected, and a client that connects after the end. A gateway restart in the middle of a job ends that job as `failed` with `supervisor_restart`. After that restart, its container is gone, its tokens are revoked, and its end state reaches the session. **Check:** the turn trace, `session_events`, `docker ps`, the GitHub token check, and the seeded restart. *Fails if* the turn waits for the job, a client misses the end state, or the restarted job is left running or without an end state.
+- **AC-8 — One job at a time, and the limits end a job cleanly.** A second request while a job is active is refused, with no row and no container. A seeded job that passes 30 minutes ends as `timed_out`. A seeded job that reaches the month cap is refused at creation. Each seeded end leaves no container and no live token. **Check:** the seeded requests, `docker ps` and the GitHub token check. *Fails if* two jobs run at once, or a seeded end leaves a container or a live token.
+- **AC-9 — The evaluation is complete and decided.** The D11 report on FRE-1679 lists, for each model and each of three runs: the job id, the check result, the owner's blind rating, the spend and the duration. It also records the owner's dated decision on continuing and on the move to a VPS. **Check:** the report and the decision comment. *Fails if* a model, a run, a rating or the decision is missing. This criterion sets no pass mark for the agent's quality. That judgement is the owner's.
+- **AC-10 — Production keeps its memory.** During the evaluation window, Docker's retained events show no OOM kill for any container, including the agent and check containers. **Check:** `docker events --filter event=oom` for the window, and the kernel log. *Fails if* any OOM kill appears.
+
+**Coverage of the decision by the criteria:**
+
+| Decision | Criteria |
+|---|---|
+| D1 scope, `dist/` contract | AC-4, AC-6 |
+| D2 OpenCode pinned, adapter, permission file | AC-3 (inspect report records the image digest and OpenCode version), AC-4 |
+| D3 per-job container and its boundary | AC-3, AC-10 |
+| D4 network, broker listeners, egress proxy | AC-3 |
+| D5 metering, caps, ledger | AC-2, AC-8 |
+| D6 credentials | AC-3, AC-7, AC-8 |
+| D7 publish check | AC-6 |
+| D8 repos, branch, handoff, import | AC-3, AC-4, AC-5 |
+| D9 job record, supervisor, recovery, delivery | AC-4, AC-7, AC-8 |
+| D10 consent, durable approval, async card | AC-1, AC-7 |
+| D11 evaluation | AC-9 |
 
 ---
 
@@ -304,7 +379,7 @@ These criteria are adjudicated on the umbrella ticket FRE-1679, after the implem
 - FRE-1679 — the owner's request and the decision log (comments of 2026-10-24)
 - [ADR-0050](ADR-0050-remote-agent-harness-integration.md) — Remote Agent Harness Integration (Accepted). D4 and D6 superseded by this ADR.
 - [ADR-0063](ADR-0063-primitive-tools-action-boundary-governance.md) — Primitive tools and action-boundary governance, Amendment A (approval fails closed)
-- [ADR-0065](ADR-0065-cost-check-gate.md) — Cost check gate. Amended by D5.7 (monthly window).
+- [ADR-0065](ADR-0065-cost-check-gate.md) — Cost check gate (the role `dev_agent` joins its daily and weekly caps)
 - [ADR-0069](ADR-0069-r2-backed-artifact-substrate.md) — R2-backed artifact substrate
 - [ADR-0077](ADR-0077-artifact-draft-subagent-generation.md) — Artifact draft (Implemented). Not changed. Its edit mode is not built.
 - [ADR-0089](ADR-0089-artifact-execution-security-model.md) — Artifact execution security model (the sealed box, the curated toolkit)
@@ -313,7 +388,8 @@ These criteria are adjudicated on the umbrella ticket FRE-1679, after the implem
 - [ADR-0156](ADR-0156-skills-and-tools-follow-the-industry-standard.md) — Skills and tools follow the industry standard, D8 (deny/ask/allow)
 - `docs/research/2026-10-24-fre-1667-opencode-context-and-prompts.md` — OpenCode study (compaction, prompts, skills)
 - OpenCode docs at upstream commit `5e4aa55c` (2026-10-24): `cli/commands.mdx` (`serve`, `run`), `cli/web.mdx` (server password), `permissions.mdx` (unmatched rule asks), `providers.mdx` (OpenAI-compatible `baseURL`), `network.mdx` (`HTTPS_PROXY`), `instructions.mdx` (`AGENTS.md`), `build/client/effect.mdx` (event stream)
-- [Scaleway Generative APIs pricing](https://www.scaleway.com/en/pricing/model-as-a-service/) and [data privacy](https://www.scaleway.com/en/docs/generative-apis/reference-content/data-privacy/)
+- [GitHub: best practices for creating a GitHub App](https://docs.github.com/en/enterprise-cloud%40latest/apps/creating-github-apps/about-creating-a-github-app/best-practices-for-creating-a-github-app) — installation tokens expire after one hour and can be revoked
+- [Scaleway Generative APIs pricing](https://www.scaleway.com/en/pricing/model-as-a-service/), [supported models](https://www.scaleway.com/en/docs/generative-apis/reference-content/supported-models/) and [data privacy](https://www.scaleway.com/en/docs/generative-apis/reference-content/data-privacy/)
 - [OVHcloud VPS range](https://www.ovhcloud.com/fr/vps/) — prices for Option C
 
 ---

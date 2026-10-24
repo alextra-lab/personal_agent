@@ -49,7 +49,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import yaml
@@ -174,6 +174,23 @@ class Plan:
     cost_usd: float = 0.0
     trace_id: str = ""
     at: str = ""
+
+
+@dataclass(frozen=True)
+class Budget:
+    """The connected cost gate and the spend at the start of a command.
+
+    Attributes:
+        gate: The connected ``CostGate``.
+        caps: The budget caps.
+        start: Spend per ``(window, role)`` at the start (the larger of the gate and the own record).
+        own_start: The own record at the start, so later builds can be added on top of ``start``.
+    """
+
+    gate: Any
+    caps: Sequence["Cap"]
+    start: Mapping[tuple[str, str], Decimal]
+    own_start: Mapping[tuple[str, str], Decimal]
 
 
 @dataclass(frozen=True)
@@ -446,8 +463,21 @@ async def _gate_and_headroom(
     n_builds: int,
     per_plan: Decimal = WORST_CASE_USD_PER_PLAN,
     per_build: Decimal = WORST_CASE_USD_PER_BUILD,
-) -> object:
-    """Connect the cost gate to the eval Postgres and check the caps. Returns the gate."""
+) -> Budget:
+    """Connect the cost gate to the eval Postgres and check the caps.
+
+    Args:
+        n_plans: Plan calls that the command will make.
+        n_builds: Builds that the command will make.
+        per_plan: Estimated cost of one plan call.
+        per_build: Estimated cost of one build.
+
+    Returns:
+        The connected gate with the caps and the starting spend.
+
+    Raises:
+        BudgetShortfallError: A cap lacks the headroom for the projected spend.
+    """
     from personal_agent.cost_gate import (  # noqa: PLC0415
         CostGate,
         load_budget_config,
@@ -477,6 +507,7 @@ async def _gate_and_headroom(
     )
     for key, value in own.items():
         spent[key] = max(spent.get(key, Decimal(0)), value)
+    own_start = dict(own)
     projected = {
         "artifact_builder": per_build * n_builds,
         "study": per_plan * n_plans,
@@ -487,7 +518,29 @@ async def _gate_and_headroom(
         await gate.disconnect()
         set_default_gate(None)
         raise
-    return gate
+    return Budget(gate=gate, caps=caps, start=spent, own_start=own_start)
+
+
+def running_spend(
+    start: Mapping[tuple[str, str], Decimal],
+    own_start: Mapping[tuple[str, str], Decimal],
+    own_now: Mapping[tuple[str, str], Decimal],
+) -> dict[tuple[str, str], Decimal]:
+    """Add the spend of this command's calls to the starting spend.
+
+    Args:
+        start: Spend at the start of the command.
+        own_start: The own record at the start.
+        own_now: The own record now.
+
+    Returns:
+        Spend per ``(window, role)`` now.
+    """
+    keys = set(start) | set(own_now)
+    return {
+        k: start.get(k, Decimal(0)) + own_now.get(k, Decimal(0)) - own_start.get(k, Decimal(0))
+        for k in keys
+    }
 
 
 # ── plans ─────────────────────────────────────────────────────────────────────
@@ -1172,7 +1225,7 @@ async def _cmd_plans(ids: str | None, per_plan: Decimal, retry_failed: bool = Fa
     done = {str(r["prompt_id"]) for r in _read_jsonl(OUT_DIR / "plans.jsonl")}
     failed = {str(r["prompt_id"]) for r in _read_jsonl(OUT_DIR / "plan-failures.jsonl")}
     todo = plans_to_run(_select(ids), done, failed, retry_failed)
-    gate = await _gate_and_headroom(len(todo), 0, per_plan=per_plan)
+    budget = await _gate_and_headroom(len(todo), 0, per_plan=per_plan)
     try:
         for prompt in todo:
             try:
@@ -1187,7 +1240,7 @@ async def _cmd_plans(ids: str | None, per_plan: Decimal, retry_failed: bool = Fa
             _append_jsonl(OUT_DIR / "plans.jsonl", plan.__dict__)
             print(f"{prompt.id} plan: {len(plan.plan)} chars, {plan.cost_usd:.4f} usd")  # noqa: T201
     finally:
-        await gate.disconnect()  # type: ignore[attr-defined]
+        await budget.gate.disconnect()
     return 0
 
 
@@ -1221,9 +1274,24 @@ async def _cmd_build(ids: str | None, per_build: Decimal, retry_failed: bool = F
         if (arm, p.id) not in tries
         or (retry_failed and not any(r["ok"] for r in tries[(arm, p.id)]))
     ]
-    gate = await _gate_and_headroom(0, len(jobs), per_build=per_build)
+    budget = await _gate_and_headroom(0, len(jobs), per_build=per_build)
     try:
         for plan, arm, attempt in jobs:
+            now = datetime.now(timezone.utc)
+            own_now = own_spend(
+                _read_jsonl(OUT_DIR / "builds.jsonl"), _read_jsonl(OUT_DIR / "plans.jsonl"), now
+            )
+            try:
+                check_headroom(
+                    budget.caps,
+                    running_spend(budget.start, budget.own_start, own_now),
+                    {"artifact_builder": per_build},
+                )
+            except BudgetShortfallError as exc:
+                print(
+                    f"STOP before {plan.prompt_id} {ARM_LABEL[arm]}: {exc}. Resume after the window resets."
+                )  # noqa: T201
+                return 3
             row = await build_one(plan, arm, attempt=attempt)
             if not row["ok"] and is_infrastructure_stop(str(row["failure_reason"])):
                 # No model output exists, so this is not a scored failure. Keep the evidence.
@@ -1239,7 +1307,7 @@ async def _cmd_build(ids: str | None, per_build: Decimal, retry_failed: bool = F
                 f"{row['latency_s']}s {row['cost_usd']:.4f} usd {row['failure_reason']}"
             )
     finally:
-        await gate.disconnect()  # type: ignore[attr-defined]
+        await budget.gate.disconnect()
     return 0
 
 

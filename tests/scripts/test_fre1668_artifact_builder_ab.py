@@ -583,3 +583,14 @@ def test_a_failed_build_scores_one_on_every_question() -> None:
     ]
     assert harness._measure(rows, "A", "owner: mean of five") == 1.0
     assert harness._measure(rows, "C", "owner: mean of five") == 4.0
+
+
+def test_running_spend_adds_this_commands_builds_to_the_start() -> None:
+    start = {
+        ("daily", "artifact_builder"): Decimal("0.39")
+    }  # the gate's counter missed long builds
+    own_start = {("daily", "artifact_builder"): Decimal("1.19")}
+    own_now = {("daily", "artifact_builder"): Decimal("1.53"), ("daily", "_total"): Decimal("1.53")}
+    now = harness.running_spend(start, own_start, own_now)
+    assert now[("daily", "artifact_builder")] == Decimal("0.73")
+    assert now[("daily", "_total")] == Decimal("1.53")

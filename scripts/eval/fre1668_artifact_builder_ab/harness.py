@@ -36,6 +36,7 @@ import asyncio
 import html as html_lib
 import json
 import random
+import shutil
 import statistics
 import subprocess  # nosec B404 — fixed argv, no shell
 import sys
@@ -55,6 +56,7 @@ from personal_agent.config.model_loader import load_model_config
 from personal_agent.llm_client.models import ModelConfig
 
 HERE = Path(__file__).parent
+REPO = HERE.parents[2]
 OUT_DIR = Path("telemetry/evaluation/fre1668-artifact-builder-ab")
 HTML_DIR = OUT_DIR / "html"
 RENDER_JS = HERE / "render_check.mjs"
@@ -198,7 +200,11 @@ def assert_eval_database(urls: Mapping[str, str]) -> None:
 
 
 def collect_db_bindings() -> dict[str, str]:
-    """Return the database URL of the settings, the cost tracker and the session engine."""
+    """Return the database URL of the settings, the cost tracker and the session engine.
+
+    Returns:
+        Binding name to URL. The engine URL has its password hidden.
+    """
     from personal_agent.llm_client.cost_tracker import cost_tracker_service  # noqa: PLC0415
     from personal_agent.service.database import engine  # noqa: PLC0415
 
@@ -373,7 +379,11 @@ _PLAN_SYSTEM = (
 
 
 def draft_tool_schema() -> dict[str, object]:
-    """Return the ``artifact_draft`` tool in OpenAI function format, as the registry exports it."""
+    """Return the ``artifact_draft`` tool in OpenAI function format, as the registry exports it.
+
+    Returns:
+        The tool definition for the planning call.
+    """
     from personal_agent.tools.artifact_tools import artifact_draft_tool  # noqa: PLC0415
 
     props: dict[str, object] = {
@@ -451,14 +461,14 @@ def render_html(path: Path) -> JSONDict:
         The check result: error lists, blank flag, and ``render_ok``.
     """
     origin = settings.artifacts_public_base_url or "none"
-    proc = subprocess.run(  # nosec B603 B607 — fixed argv, no shell
-        ["node", str(RENDER_JS), str(path), origin],
-        capture_output=True, text=True, timeout=120, check=False,
-    )  # fmt: skip
     try:
+        proc = subprocess.run(  # nosec B603 B607 — fixed argv, no shell
+            ["node", str(RENDER_JS), str(path), origin],
+            capture_output=True, text=True, timeout=120, check=False,
+        )  # fmt: skip
         result = cast(JSONDict, json.loads(proc.stdout.strip().splitlines()[-1]))
-    except (IndexError, json.JSONDecodeError):
-        result = {"page_errors": [f"render check crashed: {proc.stderr[-200:]}"]}
+    except (subprocess.TimeoutExpired, OSError, IndexError, json.JSONDecodeError) as exc:
+        result = {"page_errors": [f"render check crashed: {type(exc).__name__}: {exc}"[:300]]}
     for field in ("page_errors", "console_errors", "failed_requests", "blocked_requests"):
         result.setdefault(field, [])
     result.setdefault("blank", False)
@@ -469,13 +479,17 @@ def render_html(path: Path) -> JSONDict:
     return result
 
 
-async def build_one(plan: Plan, arm: str, *, skip_render: bool = False) -> JSONDict:
+async def build_one(
+    plan: Plan, arm: str, *, skip_render: bool = False, attempt: int = 1
+) -> JSONDict:
     """Build one page with the real ``artifact_draft_executor`` on one arm.
 
     Args:
         plan: The frozen builder input.
         arm: A key of ``ARMS``.
         skip_render: Skip the headless render check (tests).
+        attempt: Attempt number. The first attempt is the scored one; later attempts save to
+            a separate file.
 
     Returns:
         The per-build record. A failure is a row with ``ok=False`` and a reason, never a raise.
@@ -491,7 +505,8 @@ async def build_one(plan: Plan, arm: str, *, skip_render: bool = False) -> JSOND
         catalog,
         is_provider_available=co.build_provider_availability(catalog, settings),
     )
-    html_path = HTML_DIR / f"{plan.prompt_id}-{arm}.html"
+    suffix = "" if attempt == 1 else f"-r{attempt}"
+    html_path = HTML_DIR / f"{plan.prompt_id}-{arm}{suffix}.html"
     saved: dict[str, int] = {}
 
     async def _capture_write(*, content: str, **_: object) -> dict[str, object]:
@@ -537,6 +552,7 @@ async def build_one(plan: Plan, arm: str, *, skip_render: bool = False) -> JSOND
         "resolved_key": resolved,
         "served_model": served,
         "effort": str(done[0].get("mode", "")) if done else "",
+        "attempt": attempt,
         "ok": ok,
         "failure_reason": failure,
         "render_ok": None,
@@ -649,6 +665,12 @@ def check_complete(
         if r.get("ok") and r.get("render_ok") is None:
             raise IncompleteRunError(f"build {r['arm']}/{r['prompt_id']} has no render result")
     if need_scores:
+        rated = sorted((str(v["arm"]), str(v["prompt_id"])) for v in labels.values())  # type: ignore[index]
+        built = sorted((str(r["arm"]), str(r["prompt_id"])) for r in rows if r.get("ok"))
+        if rated != built:
+            raise IncompleteRunError(
+                "the rating labels do not match the successful builds; bundle again"
+            )
         bad = [
             k for k in labels
             if not isinstance(scores.get(k), int) or isinstance(scores.get(k), bool)
@@ -719,7 +741,15 @@ def decision_table(rows: Sequence[Mapping[str, object]]) -> list[JSONDict]:
 
 
 def recommend(table: Sequence[Mapping[str, object]]) -> str:
-    """Return the one recommendation line, from the owner score first."""
+    """Return the one recommendation line, from the owner score first.
+
+    Args:
+        table: The output of ``decision_table``.
+
+    Returns:
+        A line that names an arm only when its owner score beat the noise band without a loss on
+        success or render. Otherwise the line says "no decision".
+    """
     best: tuple[float, str] | None = None
     for arm in ("B", "C"):
         mine = {str(r["measure"]): r for r in table if r["arm"] == arm}
@@ -820,8 +850,9 @@ async def _cmd_plans(ids: str | None) -> int:
     return 0
 
 
-async def _cmd_build(ids: str | None) -> int:
+async def _cmd_build(ids: str | None, retry_failed: bool = False) -> int:
     assert_isolated()
+    _assert_render_tools()
     catalog = load_model_config()
     resolve_arms(catalog, is_provider_available=_availability(catalog))
     plans = {
@@ -837,21 +868,22 @@ async def _cmd_build(ids: str | None) -> int:
     prompts = [p for p in _select(ids) if p.id in plans]
     if len(prompts) != len(_select(ids)):
         raise IncompleteRunError("run `plans` first: some selected prompts have no plan")
-    have = {
-        (str(r["arm"]), str(r["prompt_id"]))
-        for r in _read_jsonl(OUT_DIR / "builds.jsonl")
-        if r["ok"]
-    }
+    # The first attempt of a build is the scored one. A rerun never replaces it (best-of-N would
+    # flatter an arm). Only --retry-failed runs a build again, and only if no attempt succeeded.
+    tries: dict[tuple[str, str], list[JSONDict]] = {}
+    for r in _read_jsonl(OUT_DIR / "builds.jsonl"):
+        tries.setdefault((str(r["arm"]), str(r["prompt_id"])), []).append(r)
     jobs = [
-        (plans[p.id], arm)
+        (plans[p.id], arm, len(tries.get((arm, p.id), [])) + 1)
         for i, p in enumerate(prompts)
         for arm in (list(ARMS)[i % 4 :] + list(ARMS)[: i % 4])  # alternate the arm order per prompt
-        if (arm, p.id) not in have
+        if (arm, p.id) not in tries
+        or (retry_failed and not any(r["ok"] for r in tries[(arm, p.id)]))
     ]
     gate = await _gate_and_headroom(0, len(jobs))
     try:
-        for plan, arm in jobs:
-            row = await build_one(plan, arm)
+        for plan, arm, attempt in jobs:
+            row = await build_one(plan, arm, attempt=attempt)
             _append_jsonl(OUT_DIR / "builds.jsonl", row)
             print(  # noqa: T201
                 f"{plan.prompt_id} {ARM_LABEL[arm]} ok={row['ok']} render={row['render_ok']} "
@@ -862,6 +894,14 @@ async def _cmd_build(ids: str | None) -> int:
     return 0
 
 
+def _assert_render_tools() -> None:
+    """Stop before the first paid call if the render check cannot run."""
+    if shutil.which("node") is None or not (REPO / "seshat-pwa/node_modules/playwright").exists():
+        raise IncompleteRunError(
+            "the render check needs node and seshat-pwa/node_modules/playwright (run npm ci there)"
+        )
+
+
 def _availability(catalog: ModelConfig) -> Callable[[str], bool]:
     from personal_agent.orchestrator.constraint_options import (  # noqa: PLC0415
         build_provider_availability,
@@ -870,26 +910,42 @@ def _availability(catalog: ModelConfig) -> Callable[[str], bool]:
     return build_provider_availability(catalog, settings)
 
 
-def _latest_builds() -> list[JSONDict]:
-    latest: dict[tuple[str, str], JSONDict] = {}
+def _scored_builds() -> list[JSONDict]:
+    """Return the first attempt of each (arm, prompt). Later attempts never replace it."""
+    first: dict[tuple[str, str], JSONDict] = {}
     for r in _read_jsonl(OUT_DIR / "builds.jsonl"):
-        latest[(str(r["arm"]), str(r["prompt_id"]))] = r  # a rerun replaces a failed row
-    return list(latest.values())
+        first.setdefault((str(r["arm"]), str(r["prompt_id"])), r)
+    return list(first.values())
 
 
-def _cmd_bundle() -> int:
+def _cmd_bundle(force: bool = False) -> int:
+    rows = _scored_builds()
+    check_complete(rows, {}, {}, n_prompts=len(load_prompts()), need_scores=False)
+    if (OUT_DIR / "scores.json").exists() and not force:
+        raise IncompleteRunError(
+            "scores.json exists: a new bundle would relabel the pages and make the scores stale. "
+            "Pass --force only to start a new rating."
+        )
     requests = {p.id: p.request for p in load_prompts()}
-    key = write_rating_pack(_latest_builds(), OUT_DIR / "rating", OUT_DIR / "key.json", requests)
+    key = write_rating_pack(rows, OUT_DIR / "rating", OUT_DIR / "key.json", requests)
     print(f"{len(key)} pages in {OUT_DIR / 'rating'}; key.json stays in {OUT_DIR}")  # noqa: T201
     return 0
 
 
 def _cmd_report() -> int:
-    rows = _latest_builds()
+    rows = _scored_builds()
     key = json.loads((OUT_DIR / "key.json").read_text(encoding="utf-8"))
     scores = json.loads((OUT_DIR / "scores.json").read_text(encoding="utf-8"))
     check_complete(rows, key, scores, n_prompts=len(load_prompts()))
     text = _report(rows, key, scores)
+    every = _read_jsonl(OUT_DIR / "builds.jsonl")
+    retries = [r for r in every if int(cast(int, r.get("attempt", 1))) > 1]
+    spend = sum(float(cast(float, r["cost_usd"])) for r in every)
+    text += f"\nTotal spend over all attempts: {spend:.4f} usd. Retried attempts: {len(retries)}.\n"
+    text += "".join(
+        f"- retry {r['arm']}/{r['prompt_id']} attempt {r['attempt']}: ok={r['ok']} {r['failure_reason']}\n"
+        for r in retries
+    )
     (OUT_DIR / "report.md").write_text(text, encoding="utf-8")
     print(text)  # noqa: T201
     return 0
@@ -918,16 +974,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("plans", "build"):
         sub.add_parser(name).add_argument("--ids", help="comma-separated prompt ids (default: all)")
-    sub.add_parser("bundle")
+    sub.choices["build"].add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="run again the builds with no successful attempt",
+    )
+    sub.add_parser("bundle").add_argument("--force", action="store_true")
     sub.add_parser("report")
     sub.add_parser("prod-count").add_argument("--label", choices=("before", "after"), required=True)
     args = parser.parse_args(argv)
     if args.cmd == "plans":
         return asyncio.run(_cmd_plans(args.ids))
     if args.cmd == "build":
-        return asyncio.run(_cmd_build(args.ids))
+        return asyncio.run(_cmd_build(args.ids, args.retry_failed))
     if args.cmd == "bundle":
-        return _cmd_bundle()
+        return _cmd_bundle(args.force)
     if args.cmd == "report":
         return _cmd_report()
     return _cmd_prod_count(args.label)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import pathlib
 import shutil
+import subprocess
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
@@ -185,15 +186,31 @@ def _complete_rows() -> list[dict[str, Any]]:
     ]
 
 
+def _labels_for(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    ok = [r for r in rows if r["ok"]]
+    return {
+        f"P{n:02d}": {"arm": r["arm"], "prompt_id": r["prompt_id"]} for n, r in enumerate(ok, 1)
+    }
+
+
 def test_report_accepts_a_complete_set() -> None:
-    labels = {f"P{n:02d}": {"arm": "A", "prompt_id": "p1"} for n in range(1, 33)}
-    harness.check_complete(_complete_rows(), labels, {k: 3 for k in labels}, n_prompts=8)
+    rows = _complete_rows()
+    labels = _labels_for(rows)
+    harness.check_complete(rows, labels, {k: 3 for k in labels}, n_prompts=8)
+
+
+def test_report_fails_when_labels_do_not_match_the_successful_builds() -> None:
+    rows = _complete_rows()
+    labels = _labels_for(rows)
+    labels["P01"] = {"arm": "A", "prompt_id": "p99"}
+    with pytest.raises(harness.IncompleteRunError, match="labels"):
+        harness.check_complete(rows, labels, {k: 3 for k in labels}, n_prompts=8)
 
 
 @pytest.mark.parametrize("defect", ["missing_row", "duplicate_row", "missing_score", "bad_score"])
 def test_report_fails_on_incomplete_rows_or_scores(defect: str) -> None:
     rows = _complete_rows()
-    labels = {f"P{n:02d}": {"arm": "A", "prompt_id": "p1"} for n in range(1, 33)}
+    labels = _labels_for(rows)
     scores: dict[str, Any] = {k: 3 for k in labels}
     if defect == "missing_row":
         rows.pop()
@@ -272,3 +289,53 @@ def test_render_check_passes_a_good_page_and_fails_a_broken_one(tmp_path: pathli
     broken = harness.render_html(bad)
     assert broken["render_ok"] is False
     assert broken["page_errors"] and broken["blocked_requests"]
+
+
+def _write_builds(run_dir: pathlib.Path, rows: list[dict[str, Any]]) -> None:
+    (run_dir / "builds.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
+    )
+
+
+@pytest.fixture
+def run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> pathlib.Path:
+    monkeypatch.setattr(harness, "OUT_DIR", tmp_path)
+    return tmp_path
+
+
+def test_bundle_refuses_an_incomplete_run(run_dir: pathlib.Path) -> None:
+    _write_builds(run_dir, _complete_rows()[:-1])
+    with pytest.raises(harness.IncompleteRunError):
+        harness._cmd_bundle()
+    assert not (run_dir / "key.json").exists()
+
+
+def test_bundle_refuses_to_relabel_after_scores_exist(run_dir: pathlib.Path) -> None:
+    rows = [{**r, "html_path": str(run_dir / "x.html")} for r in _complete_rows()]
+    (run_dir / "x.html").write_text(GOOD_HTML, encoding="utf-8")
+    _write_builds(run_dir, rows)
+    (run_dir / "scores.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(harness.IncompleteRunError, match="stale"):
+        harness._cmd_bundle()
+    assert harness._cmd_bundle(force=True) == 0
+    assert (run_dir / "key.json").exists()
+
+
+def test_first_attempt_is_the_scored_one(run_dir: pathlib.Path) -> None:
+    first = {"arm": "C", "prompt_id": "p4", "attempt": 1, "ok": False, "failure_reason": "timeout"}
+    retry = {"arm": "C", "prompt_id": "p4", "attempt": 2, "ok": True, "failure_reason": ""}
+    _write_builds(run_dir, [first, retry])
+    scored = harness._scored_builds()
+    assert len(scored) == 1 and scored[0]["ok"] is False
+
+
+def test_render_html_does_not_raise_on_a_hung_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    def _hang(*_a: Any, **_k: Any) -> None:
+        raise subprocess.TimeoutExpired(cmd="node", timeout=120)
+
+    monkeypatch.setattr(harness.subprocess, "run", _hang)
+    result = harness.render_html(tmp_path / "p.html")
+    assert result["render_ok"] is False
+    assert "TimeoutExpired" in str(result["page_errors"])

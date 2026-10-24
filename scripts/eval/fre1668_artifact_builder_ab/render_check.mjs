@@ -36,7 +36,7 @@ try {
   await page.route("**/*", (route) => {
     const url = route.request().url();
     if (url.startsWith("data:") || url.startsWith("about:") || url.startsWith("blob:")) return route.continue();
-    if (origin && url.startsWith(origin)) return route.continue();
+    if (origin && (url === origin || url.startsWith(origin + "/"))) return route.continue();
     result.blocked_requests.push(url.slice(0, 200));
     return route.abort();
   });

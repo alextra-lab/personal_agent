@@ -1,42 +1,51 @@
-# FRE-1668: the 8 artifact requests. `from_fre1615` takes the request text from
-# scripts/eval/fre1615/suite.yaml, so the two files never disagree.
-# p2, p3 and p4 are generic, self-contained rewrites of the owner's three real builds of the last
-# 60 days. No real conversation text is stored here.
+# FRE-1668 pilot: 3 rich artifact requests, the same 3 for every arm (owner, 2026-10-24: "2 or 3
+# artifact requests per model" and "Don't limit the complexity").
+# Each request asks for real interactivity and learning value. None is simplified for the test, and
+# the builder runs with its production output ceiling and timeout.
+# p3 is a generic rewrite of the owner's real concept explainer (the real request text is not stored).
+# p9 is new. p8 edits a real, working interactive page (fixtures/edit_source.html).
 prompts:
-  - id: p1
-    category: cheat sheet
-    from_fre1615: ar1
-  - id: p2
-    category: data chart
-    request: >-
-      Make a bar chart of monthly sales for January to June 2025, in euros: Jan 12,400, Feb 9,800,
-      Mar 15,300, Apr 14,100, May 17,900, Jun 16,200. Add a two-sentence summary under the chart.
   - id: p3
-    category: interactive page
+    category: interactive explainer
     request: >-
-      Build an interactive explainer that links heat engines and information. Give it two sliders for
-      the hot and cold temperatures of a heat engine that show the Carnot efficiency, and a section
-      on the Shannon entropy of a coin with an adjustable bias.
-  - id: p4
-    category: interactive page
+      Build an interactive explainer called "One Equation, Four Worlds" that links entropy in heat
+      engines, data compression, information erasure and quantum states. Give each world its own
+      section with working controls. Heat engine: sliders for the hot and cold temperatures, a live
+      Carnot efficiency, and an animated pressure-volume cycle. Data compression: a text box where
+      the reader types a message, with a live Shannon entropy, the symbol frequencies as a bar chart
+      and the best possible compressed size. Information erasure: a temperature slider and a live
+      Landauer limit for erasing one bit and for erasing a megabyte. Quantum state: sliders for the
+      two angles of a qubit on a Bloch sphere drawing, with the live von Neumann entropy of a
+      mixture. Add a section that shows how the same formula appears in all four. Add a step-through
+      walkthrough with next and back buttons, a glossary that opens on click, and a five-question
+      quiz with instant feedback and a score. Make it beautiful, with a clear visual identity,
+      smooth animation, and a layout that works on a phone. A curious teenager must be able to learn
+      the idea from it, and want to keep playing.
+  - id: p9
+    category: data tool
     request: >-
-      Make an interactive weekly picks board for a football league: a table of 8 matches, a pick for
-      each, a confidence slider from 50 to 95 percent for each pick, a column for injury notes, and a
-      total confidence score that updates when a slider moves.
-  - id: p5
-    category: document or report
-    request: >-
-      Write a one-page quarterly spend report for a small team. Use made-up figures that add up: totals
-      for July, August and September, the top three categories, and three short recommendations.
-  - id: p6
-    category: diagram
-    from_fre1615: ar2
-  - id: p7
-    category: document or report
-    from_fre1615: ar3
+      Build an interactive data explorer for the energy mix of 40 countries. Use made-up but
+      plausible figures, and put the full table in the page. Each country has a region, a
+      population in millions, a yearly electricity use per person, and the share of coal, gas, oil,
+      nuclear, hydro, wind, solar and other sources in 1990, 2005 and 2020. Give it filters that
+      work together: a region selector, a population range slider, a year selector, a search box,
+      and checkboxes to include or hide each energy source. Show a sortable table, a stacked bar
+      chart of the mix for the filtered countries, a scatter chart of electricity use against clean
+      share with point size by population, and a line chart of the mix over the three years for one
+      chosen country. Clicking a point or a bar selects the country and fills a detail panel with a
+      short written summary that updates. Add a compare mode for two countries, summary cards that
+      react to the filters, and a button that resets everything. Make it attractive and easy to
+      read, with a legend, tooltips and accessible colours. A student must be able to ask questions
+      of the data and learn from the answers.
   - id: p8
-    category: edit of an existing page
+    category: edit of an existing interactive page
     fixture: fixtures/edit_source.html
     request: >-
-      Here is an existing page. Add a dark-mode toggle button to it, and add a new row for May to
-      the table. Keep everything else as it is.
+      Here is an existing interactive page, Projectile Lab. Improve it without breaking anything
+      that works. Add a wind slider from -10 to 10 m/s that changes the flight and the live
+      prediction. Keep the last 6 launches as a history that can be shown or hidden, with a colour
+      key. Add a target that the reader can move with a slider, with a hit or miss message after each
+      launch and a streak counter. Add an "explain this result" panel that writes, in plain words,
+      why the last launch went where it did, using the numbers. Replace the single quiz question with
+      a three-question quiz that keeps a score. Add a light and dark theme toggle. Keep every
+      existing control working and keep the visual style, but polish it so it feels finished.

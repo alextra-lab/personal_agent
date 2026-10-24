@@ -2,27 +2,144 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Team hours</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projectile Lab</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 36rem; color: #1a1a1a; }
-  h1 { font-size: 1.4rem; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #ccc; padding: .4rem .6rem; text-align: right; }
-  th:first-child, td:first-child { text-align: left; }
-  caption { text-align: left; color: #555; margin-bottom: .5rem; }
+  :root { --bg:#0f1720; --card:#17212c; --ink:#e8eef5; --mute:#8fa1b3; --acc:#e4572e; --ok:#3fb67a; }
+  body { background:var(--bg); color:var(--ink); font-family:system-ui,sans-serif; margin:0 auto; max-width:46rem; padding:1.2rem; }
+  h1 { margin:.2rem 0; } .lead { color:var(--mute); margin-top:0; }
+  .panel { background:var(--card); border-radius:.7rem; padding:1rem; display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:.8rem; }
+  label { display:flex; flex-direction:column; gap:.25rem; font-size:.9rem; color:var(--mute); }
+  label.row { flex-direction:row; align-items:center; gap:.5rem; }
+  input[type=text], select { background:#0f1720; color:var(--ink); border:1px solid #2c3b4b; border-radius:.4rem; padding:.4rem; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:.4rem; padding:.55rem 1rem; font-weight:600; cursor:pointer; }
+  button.ghost { background:#2c3b4b; }
+  #pred { color:var(--mute); margin:.8rem 0 .4rem; }
+  canvas { width:100%; background:var(--card); border-radius:.7rem; display:block; }
+  table { width:100%; border-collapse:collapse; margin-top:1rem; }
+  th, td { text-align:right; padding:.35rem .5rem; border-bottom:1px solid #2c3b4b; }
+  th:first-child, td:first-child { text-align:left; }
+  #quiz { background:var(--card); border-radius:.7rem; padding:1rem; margin-top:1rem; }
+  .opt { background:#2c3b4b; margin-right:.5rem; } .opt.good { background:var(--ok); } .opt.bad { background:#8a2d2d; }
 </style>
 </head>
 <body>
-<h1>Team hours, 2026</h1>
-<table>
-  <caption>Billable hours per month</caption>
-  <thead><tr><th>Month</th><th>Hours</th><th>Target</th></tr></thead>
-  <tbody>
-    <tr><td>January</td><td>312</td><td>320</td></tr>
-    <tr><td>February</td><td>298</td><td>320</td></tr>
-    <tr><td>March</td><td>334</td><td>320</td></tr>
-    <tr><td>April</td><td>321</td><td>320</td></tr>
-  </tbody>
-</table>
+<h1>Projectile Lab</h1>
+<p class="lead">Launch a ball and see how angle, speed and gravity shape its flight.</p>
+<section class="panel">
+  <label>Angle <input id="angle" type="range" min="5" max="85" value="45"><output id="angleOut">45°</output></label>
+  <label>Speed <input id="speed" type="range" min="5" max="50" value="25"><output id="speedOut">25 m/s</output></label>
+  <label>World
+    <select id="world">
+      <option value="9.81">Earth (9.81)</option><option value="1.62">Moon (1.62)</option>
+      <option value="3.71">Mars (3.71)</option><option value="24.8">Jupiter (24.8)</option>
+    </select>
+  </label>
+  <label>Run name <input id="name" type="text" placeholder="Run 1"></label>
+  <label class="row"><input id="trail" type="checkbox" checked> Show earlier runs</label>
+  <label class="row"><input id="drag" type="checkbox"> Air drag</label>
+  <button id="launch">Launch</button>
+  <button id="reset" class="ghost">Reset</button>
+</section>
+<p id="pred" aria-live="polite"></p>
+<canvas id="cv" width="640" height="300"></canvas>
+<table id="runs"><thead><tr><th>Run</th><th>Range (m)</th><th>Peak (m)</th><th>Time (s)</th></tr></thead><tbody></tbody></table>
+<section id="quiz">
+  <h2>Check yourself</h2>
+  <p>On Earth with no air drag, which launch angle gives the longest range?</p>
+  <button class="opt" data-ok="0">30°</button><button class="opt" data-ok="1">45°</button><button class="opt" data-ok="0">60°</button>
+  <p id="fb"></p>
+</section>
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const COL = ['#4cc9f0', '#b5179e', '#f9c74f', '#90be6d', '#f8961e', '#a8dadc'];
+let runs = [], anim = null, n = 0;
+
+function params() { return { a: +$('angle').value * Math.PI / 180, v: +$('speed').value, g: +$('world').value }; }
+
+function sim() {
+  const { a, v, g } = params(), k = $('drag').checked ? 0.012 : 0;
+  let x = 0, y = 0, vx = v * Math.cos(a), vy = v * Math.sin(a), t = 0, peak = 0;
+  const pts = [[0, 0]];
+  while (y >= 0 && t < 600) {
+    const sp = Math.hypot(vx, vy);
+    vx -= k * sp * vx * 0.02; vy -= (g + k * sp * vy) * 0.02;
+    x += vx * 0.02; y += vy * 0.02; t += 0.02;
+    if (y > peak) peak = y;
+    pts.push([x, Math.max(y, 0)]);
+  }
+  return { pts, range: x, peak, time: t };
+}
+
+function view(cur) {
+  let mx = 1, my = 1;
+  for (const p of [...runs.map(r => r.pts), cur || []]) for (const q of p) { mx = Math.max(mx, q[0]); my = Math.max(my, q[1]); }
+  const { a, v, g } = params();
+  mx = Math.max(mx, v * v * Math.sin(2 * a) / g); my = Math.max(my, (v * Math.sin(a)) ** 2 / (2 * g));
+  return { sx: (cv.width - 40) / (mx * 1.05), sy: (cv.height - 40) / (my * 1.2) };
+}
+
+function line(pts, X, Y, color) {
+  ctx.strokeStyle = color; ctx.beginPath();
+  pts.forEach((p, j) => j ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1])));
+  ctx.stroke();
+}
+
+function draw(cur, upto) {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const s = view(cur && cur.pts), X = x => 20 + x * s.sx, Y = y => cv.height - 20 - y * s.sy;
+  ctx.strokeStyle = '#8fa1b3'; ctx.beginPath(); ctx.moveTo(20, cv.height - 20); ctx.lineTo(cv.width - 10, cv.height - 20); ctx.stroke();
+  if ($('trail').checked) runs.forEach((r, i) => line(r.pts, X, Y, COL[i % COL.length]));
+  if (cur) {
+    const pts = cur.pts.slice(0, upto); line(pts, X, Y, '#e4572e');
+    const p = pts[pts.length - 1];
+    if (p) { ctx.fillStyle = '#e4572e'; ctx.beginPath(); ctx.arc(X(p[0]), Y(p[1]), 5, 0, 7); ctx.fill(); }
+  }
+}
+
+function predict() {
+  const { a, v, g } = params();
+  $('angleOut').textContent = $('angle').value + '°'; $('speedOut').textContent = $('speed').value + ' m/s';
+  $('pred').textContent = `Ideal flight: range ${(v * v * Math.sin(2 * a) / g).toFixed(1)} m, peak ${((v * Math.sin(a)) ** 2 / (2 * g)).toFixed(1)} m, time ${(2 * v * Math.sin(a) / g).toFixed(1)} s.`;
+  if (!anim) draw();
+}
+
+function addRow(name, c) {
+  const tr = document.createElement('tr');
+  [name, c.range.toFixed(1), c.peak.toFixed(1), c.time.toFixed(1)].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+  $('runs').tBodies[0].appendChild(tr);
+}
+
+function launch() {
+  if (anim) cancelAnimationFrame(anim);
+  const cur = sim(); let i = 0;
+  const step = () => {
+    i = Math.min(i + 4, cur.pts.length); draw(cur, i);
+    if (i < cur.pts.length) { anim = requestAnimationFrame(step); return; }
+    anim = null; n++;
+    const name = $('name').value.trim() || 'Run ' + n;
+    runs.push({ ...cur, name }); if (runs.length > 6) runs.shift();
+    addRow(name, cur);
+  };
+  step();
+}
+
+function reset() {
+  if (anim) cancelAnimationFrame(anim); anim = null; runs = []; n = 0;
+  $('runs').tBodies[0].innerHTML = ''; draw();
+}
+
+['angle', 'speed', 'world', 'trail', 'drag'].forEach(id => $(id).addEventListener('input', predict));
+$('launch').addEventListener('click', launch);
+$('reset').addEventListener('click', reset);
+document.querySelectorAll('.opt').forEach(b => b.addEventListener('click', () => {
+  const ok = b.dataset.ok === '1';
+  document.querySelectorAll('.opt').forEach(o => o.classList.remove('good', 'bad'));
+  b.classList.add(ok ? 'good' : 'bad');
+  $('fb').textContent = ok ? 'Correct. Range grows with sin(2θ), which peaks at 45°.' : 'Not quite. Try a few launches and compare the ranges.';
+}));
+predict();
+</script>
 </body>
 </html>

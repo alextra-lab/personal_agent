@@ -291,4 +291,4 @@ scripts/study/snapshots/
 telemetry/fre994_curve/
 
 # FRE-1668 artifact builder side-by-side: generated pages, screenshots, ratings (real origin inside)
-telemetry/evaluation/fre1668-artifact-builder-ab/
+telemetry/evaluation/fre1668-artifact-builder-ab*/

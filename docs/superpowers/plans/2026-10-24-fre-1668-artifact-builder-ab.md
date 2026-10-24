@@ -214,3 +214,27 @@ Output lands in `telemetry/evaluation/fre1668-artifact-builder-ab/` (gitignored)
 - `--usd-per-build` and `--usd-per-plan` feed the budget check. The default is the worst case. The
   daily `artifact_builder` cap of $1 binds the full run, so the run is split over days or the owner
   raises the cap. The harness never changes `config/`.
+
+## Scope change: the pilot (owner comments 2026-10-24 12:22, 12:27, 12:30)
+
+The owner changed the scope after the first version of this plan. This section replaces the prompt
+set, the quality measures and the verdict above. Isolation, the noise arm, blinding and the
+no-production-write proof are unchanged.
+
+- **Prompts:** 3 rich requests, the same 3 for every arm, 12 builds. p3 is an interactive explainer on
+  entropy in four worlds. p9 is a data explorer with filters and charts. p8 edits a real interactive
+  page (`fixtures/edit_source.html`, a working "Projectile Lab"). None is simplified. The builder runs
+  with its production output ceiling (32,768) and timeout.
+- **Widget check:** `render_check.mjs` finds every visible control, operates each one, and records per
+  control whether the page reacted (yes, no, unverifiable on an animated page, not operated) and
+  whether an error appeared. It operates reset-like controls last and retries controls with no clean
+  reaction after the page settles. A control whose effect applies at the next step can show "no".
+- **Rating:** five scores from 1 to 5 per page, one per owner question: widgets work, creative, easy to
+  learn from, attractive and enticing, encourages learning or continued use. The report shows each
+  question per arm with its own noise band.
+- **Verdict:** the report ends with the pilot go or no-go line. Go: B or C beats A by more than the A to
+  A' difference on the blind rating (mean of the five), or is cheaper or faster by more than that
+  difference at an equal rating. No-go otherwise.
+- **Rules from the owner's go (13:44):** a build that stops at the output ceiling is a failure with that
+  reason. The first 402 or credit error from any vendor stops the run with no retry.
+- **Small sample:** 3 prompts give a direction, not a proof. The report says so.

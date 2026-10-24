@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 from collections.abc import Mapping
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import structlog
-import yaml
 from scripts.eval.fre1668_artifact_builder_ab import harness
 
 from personal_agent.config.model_loader import load_model_config
@@ -166,7 +166,7 @@ def _rows(arm_values: Mapping[str, float]) -> list[dict[str, Any]]:
         {"arm": a, "prompt_id": f"p{i}", "ok": True, "render_ok": True, "latency_s": v,
          "output_tokens": 100, "cost_usd": 0.1, "score": 3}
         for a, v in arm_values.items()
-        for i in range(1, 9)
+        for i in range(1, 4)
     ]  # fmt: skip
 
 
@@ -182,8 +182,12 @@ def _complete_rows() -> list[dict[str, Any]]:
     return [
         {"arm": a, "prompt_id": f"p{i}", "ok": True, "render_ok": True, "failure_reason": ""}
         for a in harness.ARMS
-        for i in range(1, 9)
+        for i in range(1, 4)
     ]
+
+
+def _five_scores(labels: Mapping[str, Any]) -> dict[str, Any]:
+    return {k: {q: 3 for q in harness.QUESTIONS} for k in labels}
 
 
 def _labels_for(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -196,7 +200,7 @@ def _labels_for(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def test_report_accepts_a_complete_set() -> None:
     rows = _complete_rows()
     labels = _labels_for(rows)
-    harness.check_complete(rows, labels, {k: 3 for k in labels}, n_prompts=8)
+    harness.check_complete(rows, labels, _five_scores(labels), n_prompts=3)
 
 
 def test_report_fails_when_labels_do_not_match_the_successful_builds() -> None:
@@ -204,31 +208,35 @@ def test_report_fails_when_labels_do_not_match_the_successful_builds() -> None:
     labels = _labels_for(rows)
     labels["P01"] = {"arm": "A", "prompt_id": "p99"}
     with pytest.raises(harness.IncompleteRunError, match="labels"):
-        harness.check_complete(rows, labels, {k: 3 for k in labels}, n_prompts=8)
+        harness.check_complete(rows, labels, _five_scores(labels), n_prompts=3)
 
 
-@pytest.mark.parametrize("defect", ["missing_row", "duplicate_row", "missing_score", "bad_score"])
+@pytest.mark.parametrize(
+    "defect", ["missing_row", "duplicate_row", "missing_score", "bad_score", "missing_question"]
+)
 def test_report_fails_on_incomplete_rows_or_scores(defect: str) -> None:
     rows = _complete_rows()
     labels = _labels_for(rows)
-    scores: dict[str, Any] = {k: 3 for k in labels}
+    scores: dict[str, Any] = _five_scores(labels)
     if defect == "missing_row":
         rows.pop()
     elif defect == "duplicate_row":
         rows[-1] = dict(rows[0])
     elif defect == "missing_score":
         scores.pop("P05")
+    elif defect == "missing_question":
+        del scores["P05"]["creative"]
     else:
-        scores["P05"] = 9
+        scores["P05"]["creative"] = 9
     with pytest.raises(harness.IncompleteRunError):
-        harness.check_complete(rows, labels, scores, n_prompts=8)
+        harness.check_complete(rows, labels, scores, n_prompts=3)
 
 
 def test_failed_build_without_reason_is_incomplete() -> None:
     rows = _complete_rows()
     rows[0].update(ok=False, failure_reason="")
     with pytest.raises(harness.IncompleteRunError, match="reason"):
-        harness.check_complete(rows, {}, {}, n_prompts=8, need_scores=False)
+        harness.check_complete(rows, {}, {}, n_prompts=3, need_scores=False)
 
 
 def test_budget_headroom_stops_before_the_first_call() -> None:
@@ -247,19 +255,99 @@ def test_budget_headroom_stops_before_the_first_call() -> None:
         )
 
 
-def test_verbatim_prompts_match_fre1615() -> None:
-    suite = yaml.safe_load(pathlib.Path("scripts/eval/fre1615/suite.yaml").read_text("utf-8"))
-    by_id = (
-        {t["id"]: t["message"] for t in suite["tasks"]}
-        if "tasks" in suite
-        else {t["id"]: t["message"] for t in suite}
+def test_pilot_has_exactly_three_rich_prompts_and_twelve_builds() -> None:
+    prompts = harness.load_prompts()
+    assert [p.id for p in prompts] == ["p3", "p9", "p8"]
+    assert len(prompts) * len(harness.ARMS) == 12
+    assert all(len(p.request) > 600 for p in prompts), "no prompt may be simplified"
+    assert sum(1 for p in prompts if p.fixture) == 1, "one prompt edits an existing page"
+
+
+def test_edit_fixture_is_a_rich_interactive_page_that_fits_the_plan_limit() -> None:
+    fixture = harness.HERE / "fixtures" / "edit_source.html"
+    page = fixture.read_text(encoding="utf-8")
+    controls = len(re.findall(r"<(?:input|select|button)\b", page))
+    assert controls >= 8
+    assert "<canvas" in page and "addEventListener" in page
+    assert len(page) < 9000, "the plan carries the page and must stay under 16,000 characters"
+
+
+def test_the_five_questions_are_the_owners() -> None:
+    assert list(harness.QUESTIONS.values()) == [
+        "The interactive widgets work",
+        "It is creative",
+        "It is easy to learn from",
+        "It is attractive and enticing",
+        "It encourages learning or continued use",
+    ]
+
+
+def _table(**per_arm: Mapping[str, str]) -> list[dict[str, Any]]:
+    """A decision table with one verdict per (arm, measure)."""
+    return [
+        {"measure": m, "arm": arm, "verdict": v, "diff": 0.5}
+        for arm, verdicts in per_arm.items()
+        for m, v in verdicts.items()
+    ]
+
+
+def test_pilot_is_go_when_an_arm_beats_a_on_the_rating() -> None:
+    table = _table(B={"owner: mean of five": "higher"}, C={"owner: mean of five": "no decision"})
+    line = harness.pilot_verdict(table)
+    assert line.startswith("Pilot verdict: GO") and "Arm B" in line
+
+
+def test_pilot_is_go_on_cost_at_an_equal_rating() -> None:
+    table = _table(C={"owner: mean of five": "no decision", "mean cost (usd)": "lower"})
+    assert harness.pilot_verdict(table).startswith("Pilot verdict: GO")
+
+
+def test_pilot_is_no_go_when_nothing_clears_the_noise_band() -> None:
+    table = _table(
+        B={"owner: mean of five": "no decision", "mean cost (usd)": "no decision"},
+        C={"owner: mean of five": "lower", "mean cost (usd)": "lower"},
     )
-    prompts = {p.id: p for p in harness.load_prompts()}
-    assert len(prompts) == 8
-    assert prompts["p1"].request == by_id["ar1"]
-    assert prompts["p6"].request == by_id["ar2"]
-    assert prompts["p7"].request == by_id["ar3"]
-    assert "existing" in prompts["p8"].request.lower()
+    line = harness.pilot_verdict(table)
+    assert line.startswith("Pilot verdict: NO-GO") and "Sonnet 5" in line
+
+
+def test_pilot_is_no_go_for_an_arm_that_loses_on_success_or_render() -> None:
+    table = _table(B={"owner: mean of five": "higher", "success rate": "lower"})
+    assert harness.pilot_verdict(table).startswith("Pilot verdict: NO-GO")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Error code: 402 payment required", True),
+        ("Your credit balance is too low to access the Anthropic API", True),
+        ("insufficient_quota: You exceeded your current quota", True),
+        ("billing_hard_limit_reached", True),
+        ("generation_timeout after 600s", False),
+        ("output ceiling reached", False),
+    ],
+)
+def test_vendor_credit_errors_are_told_from_other_failures(text: str, expected: bool) -> None:
+    assert harness.is_vendor_credit_error(text) is expected
+
+
+@pytest.mark.asyncio
+async def test_a_build_that_stops_at_the_output_ceiling_is_a_failure_with_that_reason(
+    builder_env: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Capped(_FakeClient):
+        async def respond(self, **kw: Any) -> dict[str, Any]:
+            out = await super().respond(**kw)
+            out["usage"] = {"completion_tokens": 32768}
+            return out
+
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client_for_key",
+        lambda *_a, **_k: _Capped("anthropic/claude-sonnet-5"),
+    )
+    row = await harness.build_one(_plan(), "A", skip_render=True)
+    assert row["ok"] is False
+    assert "output ceiling reached" in str(row["failure_reason"])
 
 
 _NEEDS_BROWSER = pytest.mark.skipif(
@@ -368,3 +456,51 @@ def test_lib_to_cdn_rewrites_mapped_assets_and_leaves_fonts() -> None:
     out = harness.lib_to_cdn(page, "https://art.test/", entries)
     assert 'src="https://cdn.test/chart.js"' in out
     assert "https://art.test/lib/fonts/f@1/f.woff2" in out
+
+
+@_NEEDS_BROWSER
+def test_widget_check_operates_the_controls_of_a_working_interactive_page(
+    tmp_path: pathlib.Path,
+) -> None:
+    page = tmp_path / "fixture.html"  # a copy: the check saves a screenshot beside the page
+    shutil.copy(harness.HERE / "fixtures" / "edit_source.html", page)
+    result = harness.render_html(page)
+    w = cast(dict[str, Any], result["widgets"])
+    assert result["render_ok"] is True
+    assert w["found"] >= 10 and w["worked"] >= 7
+    assert w["errors"] == 0 and w["with_errors"] == 0
+    kinds = {c["kind"] for c in w["controls"]}
+    assert {"range", "select", "checkbox", "text", "button"} <= kinds
+
+
+@_NEEDS_BROWSER
+def test_widget_check_flags_a_dead_button_and_a_slider_that_throws(tmp_path: pathlib.Path) -> None:
+    page = tmp_path / "broken.html"
+    page.write_text(
+        "<!DOCTYPE html><html><body><h1>Widgets</h1>"
+        "<p>Enough visible text on this page so that the blank test passes.</p>"
+        '<output id="o">0</output>'
+        "<button id=\"ok\" onclick=\"document.getElementById('o').textContent='clicked'\">Works</button>"
+        '<button id="dead">Does nothing</button>'
+        '<input id="bad" type="range" min="0" max="10" value="5" oninput="nope.missing()">'
+        "</body></html>",
+        encoding="utf-8",
+    )
+    result = harness.render_html(page)
+    w = cast(dict[str, Any], result["widgets"])
+    labels = {c["label"]: c for c in w["controls"]}
+    assert w["found"] == 3
+    assert labels["Works"]["reacted"] == "yes"
+    assert labels["Does nothing"]["reacted"] == "no"
+    assert w["with_errors"] >= 1 and w["errors"] >= 1
+    assert result["render_ok"] is True, "errors raised by operating a control are not load errors"
+
+
+def test_rating_pack_shows_the_five_questions_and_no_arm(tmp_path: pathlib.Path) -> None:
+    page = tmp_path / "a.html"
+    page.write_text(GOOD_HTML, encoding="utf-8")
+    rows = [{"arm": "B", "prompt_id": "p3", "ok": True, "html_path": str(page)}]
+    harness.write_rating_pack(rows, tmp_path / "r", tmp_path / "k.json")
+    index = (tmp_path / "r" / "index.html").read_text(encoding="utf-8")
+    assert all(text in index for text in harness.QUESTIONS.values())
+    assert "claude_sonnet_5_5" not in index and ">B<" not in index

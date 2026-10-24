@@ -4,7 +4,7 @@ The owner asked on 2026-10-24 for a test of the artifact building of Sol and Son
 ticket asks one question: must the ``artifact_builder`` role move from ``claude_sonnet`` to
 ``claude_sonnet_5_5`` or to ``gpt-6.1-sol``? This harness reports a result. It changes no binding.
 
-Arms: ``A`` claude_sonnet (baseline) · ``A2`` claude_sonnet again (noise) · ``B`` claude_sonnet_5_5 ·
+Pilot (owner, 2026-10-24): 3 rich prompts, the same 3 for every arm, 12 builds. Arms: ``A`` claude_sonnet (baseline) · ``A2`` claude_sonnet again (noise) · ``B`` claude_sonnet_5_5 ·
 ``C`` gpt-6.1-sol. The unit under test is the real ``artifact_draft_executor``. Each prompt has one
 frozen plan (step ``plans``), so only the builder model varies between arms.
 
@@ -36,6 +36,7 @@ import asyncio
 import html as html_lib
 import json
 import random
+import re
 import shutil
 import statistics
 import subprocess  # nosec B404 — fixed argv, no shell
@@ -62,7 +63,6 @@ OUT_DIR = Path("telemetry/evaluation/fre1668-artifact-builder-ab")
 HTML_DIR = OUT_DIR / "html"
 RENDER_JS = HERE / "render_check.mjs"
 LIB_MAP = REPO / "config/artifact_lib_substitution_map.json"
-SUITE = HERE.parent / "fre1615" / "suite.yaml"
 
 #: Arm name to catalog key. ``A2`` repeats ``A``: the gap between them is the noise band.
 ARMS: dict[str, str] = {
@@ -74,6 +74,14 @@ ARMS: dict[str, str] = {
 ARM_LABEL = {"A": "A", "A2": "A'", "B": "B", "C": "C"}
 PLAN_KEY = "claude_sonnet"
 BLIND_SEED = 20261024
+#: The owner's five questions (FRE-1668 comment, 2026-10-24). Each page gets a 1 to 5 score on each.
+QUESTIONS: dict[str, str] = {
+    "widgets": "The interactive widgets work",
+    "creative": "It is creative",
+    "easy_to_learn": "It is easy to learn from",
+    "attractive": "It is attractive and enticing",
+    "encourages_use": "It encourages learning or continued use",
+}
 EVAL_DB = (
     "127.0.0.1",
     5434,
@@ -81,7 +89,7 @@ EVAL_DB = (
 DB_BINDINGS = ("settings", "cost_tracker", "engine")
 PROD_PG_CONTAINER = "cloud-sim-postgres"
 EVAL_PG_CONTAINER = "cloud-sim-postgres-eval"
-PLAN_MAX_TOKENS = 6000
+PLAN_MAX_TOKENS = 10000
 WORST_CASE_USD_PER_BUILD = Decimal("0.40")  # 32,768 output tokens at $10/MTok, plus input
 WORST_CASE_USD_PER_PLAN = Decimal("0.15")
 
@@ -102,6 +110,25 @@ class IncompleteRunError(RuntimeError):
 
 class BudgetShortfallError(RuntimeError):
     """A budget cap lacks the headroom for the projected spend."""
+
+
+_CREDIT_RE = re.compile(
+    r"\b402\b|credit balance|insufficient[_ ]quota|exceeded your current quota|billing|"
+    r"payment required|out of credits?|credits? (?:are|is) (?:exhausted|depleted)",
+    re.IGNORECASE,
+)
+
+
+def is_vendor_credit_error(text: str) -> bool:
+    """Tell a vendor credit or quota failure from any other failure.
+
+    Args:
+        text: A failure reason.
+
+    Returns:
+        True for a 402, a low credit balance, an exhausted quota or a billing limit.
+    """
+    return bool(_CREDIT_RE.search(text))
 
 
 @dataclass(frozen=True)
@@ -159,20 +186,17 @@ def _append_jsonl(path: Path, row: Mapping[str, object]) -> None:
 
 
 def load_prompts() -> list[Prompt]:
-    """Read the 8 prompts. Entries with ``from_fre1615`` take their text from that suite.
+    """Read the 3 pilot prompts.
 
     Returns:
         The prompts in file order.
     """
     spec = yaml.safe_load((HERE / "prompts.yaml").read_text(encoding="utf-8"))["prompts"]
-    suite = {
-        t["id"]: t["message"] for t in yaml.safe_load(SUITE.read_text(encoding="utf-8"))["tasks"]
-    }
     return [
         Prompt(
             id=p["id"],
             category=p["category"],
-            request=suite[p["from_fre1615"]] if "from_fre1615" in p else p["request"].strip(),
+            request=p["request"].strip(),
             fixture=p.get("fixture"),
         )
         for p in spec
@@ -506,7 +530,7 @@ def render_html(path: Path) -> JSONDict:
     try:
         proc = subprocess.run(  # nosec B603 B607 — fixed argv, no shell
             ["node", str(RENDER_JS), str(path), origin, str(LIB_MAP), str(path.with_suffix(".png"))],
-            capture_output=True, text=True, timeout=120, check=False,
+            capture_output=True, text=True, timeout=300, check=False,
         )  # fmt: skip
         result = cast(JSONDict, json.loads(proc.stdout.strip().splitlines()[-1]))
     except (subprocess.TimeoutExpired, OSError, IndexError, json.JSONDecodeError) as exc:
@@ -520,6 +544,7 @@ def render_html(path: Path) -> JSONDict:
     ):
         result.setdefault(field, [])
     result.setdefault("blank", False)
+    result.setdefault("widgets", {})
     result["render_ok"] = not (
         result["page_errors"] or result["console_errors"] or result["failed_requests"]
         or result["blocked_requests"] or result["blank"]
@@ -528,15 +553,17 @@ def render_html(path: Path) -> JSONDict:
 
 
 def render_fields(path: Path) -> JSONDict:
-    """Run the render check and return the fields a build row stores.
+    """Run the render check and the widget check and return the fields a build row stores.
 
     Args:
         path: The saved HTML.
 
     Returns:
-        ``render_ok`` and the error counts.
+        ``render_ok``, the error counts, and the widget summary (controls found, worked, with no
+        reaction, unverifiable, not operated, with errors) with one entry per control.
     """
     check = render_html(path)
+    w = cast(JSONDict, check["widgets"])
     return {
         "render_ok": check["render_ok"],
         "console_errors": len(cast(list[str], check["console_errors"])),
@@ -545,6 +572,14 @@ def render_fields(path: Path) -> JSONDict:
         "blocked_requests": len(cast(list[str], check["blocked_requests"])),
         "lib_unavailable": len(cast(list[str], check["lib_unavailable"])),
         "blank": check["blank"],
+        "controls_found": w.get("found", 0),
+        "controls_worked": w.get("worked", 0),
+        "controls_no_reaction": w.get("no_reaction", 0),
+        "controls_unverifiable": w.get("unverifiable", 0),
+        "controls_not_operated": w.get("not_operated", 0),
+        "controls_with_errors": w.get("with_errors", 0),
+        "widget_errors": w.get("errors", 0),
+        "controls": w.get("controls", []),
     }
 
 
@@ -614,6 +649,13 @@ async def build_one(
         failure = f"expected one model_call_completed event, found {len(done)}"
     if not failure and served.split("/")[-1] != catalog.models[key].id:
         failure = f"arm {arm} asked for {catalog.models[key].id} but {served} answered"
+    cap = next((e for e in logs if e.get("event") == "artifact_draft_output_cap_hit"), None)
+    if cap is not None:
+        # The owner's rule: a build that stops at the output ceiling is a failure with that reason.
+        ceiling = (
+            f"output ceiling reached ({cap.get('output_tokens')} of {cap.get('max_tokens')} tokens)"
+        )
+        failure = f"{ceiling}: {failure}" if failure else ceiling
     ok = not failure
     row: JSONDict = {
         "arm": arm,
@@ -707,9 +749,11 @@ def write_rating_pack(
     (rating_dir / "index.html").write_text(
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Rate the pages</title>'
         "<style>body{font-family:system-ui,sans-serif;max-width:70rem;margin:1rem auto;padding:0 1rem}"
-        "iframe{width:100%;height:36rem;border:1px solid #888;background:#fff}"
+        "iframe{width:100%;height:46rem;border:1px solid #888;background:#fff}"
         ".ask{color:#555}section{margin-bottom:2.5rem}</style></head><body>"
-        "<h1>Rate each page from 1 (poor) to 5 (excellent)</h1>"
+        "<h1>Rate each page from 1 (poor) to 5 (excellent) on five questions</h1><ol>"
+        + "".join(f"<li>{html_lib.escape(q)}</li>" for q in QUESTIONS.values())
+        + "</ol><p>Reply with one line per label, for example: P01 4 3 5 4 4</p>"
         + "".join(parts)
         + "</body></html>",
         encoding="utf-8",
@@ -732,9 +776,9 @@ def check_complete(
     Args:
         rows: Build rows.
         labels: The blind key.
-        scores: The owner's score per label.
+        scores: The owner's scores per label: one 1 to 5 integer for each question in ``QUESTIONS``.
         n_prompts: Prompts in the set.
-        need_scores: Require one valid 1 to 5 score per label.
+        need_scores: Require five valid scores per label.
 
     Raises:
         IncompleteRunError: A build is missing or repeated, a failure has no reason, a successful
@@ -758,13 +802,23 @@ def check_complete(
             raise IncompleteRunError(
                 "the rating labels do not match the successful builds; bundle again"
             )
-        bad = [
-            k for k in labels
-            if not isinstance(scores.get(k), int) or isinstance(scores.get(k), bool)
-            or not 1 <= cast(int, scores[k]) <= 5
-        ]  # fmt: skip
+        bad = [k for k in labels if not _valid_scores(scores.get(k))]
         if bad or set(scores) != set(labels):
-            raise IncompleteRunError(f"scores missing or invalid for labels: {sorted(bad)}")
+            raise IncompleteRunError(
+                f"scores missing or invalid (five 1-to-5 integers needed) for labels: {sorted(bad)}"
+            )
+
+
+def _valid_scores(entry: object) -> bool:
+    if not isinstance(entry, dict) or set(entry) != set(QUESTIONS):
+        return False
+    return all(
+        isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 5 for v in entry.values()
+    )
+
+
+def _numbers(rows: Sequence[Mapping[str, object]], column: str) -> list[float]:
+    return [float(cast(float, r[column])) for r in rows if r.get(column) is not None]
 
 
 def _measure(rows: Sequence[Mapping[str, object]], arm: str, measure: str) -> float | None:
@@ -774,13 +828,20 @@ def _measure(rows: Sequence[Mapping[str, object]], arm: str, measure: str) -> fl
         return sum(1 for r in mine if r.get("ok")) / len(mine) if mine else None
     if measure == "render pass rate":
         return sum(1 for r in mine if r.get("render_ok")) / len(mine) if mine else None
+    if measure == "controls worked share":
+        found = sum(_numbers(ok, "controls_found"))
+        return sum(_numbers(ok, "controls_worked")) / found if found else None
+    if measure == "widget errors (sum)":
+        return sum(_numbers(ok, "widget_errors")) if ok else None
     column = {
         "median latency (s)": "latency_s",
         "median output tokens": "output_tokens",
         "mean cost (usd)": "cost_usd",
-        "mean owner score": "score",
+        "controls found (mean)": "controls_found",
+        "owner: mean of five": "score",
+        **{f"owner: {text}": f"score_{key}" for key, text in QUESTIONS.items()},
     }[measure]
-    values = [float(cast(float, r[column])) for r in ok if r.get(column) is not None]
+    values = _numbers(ok, column)
     if not values:
         return None
     return statistics.median(values) if measure.startswith("median") else statistics.fmean(values)
@@ -792,7 +853,11 @@ MEASURES = (
     "median latency (s)",
     "median output tokens",
     "mean cost (usd)",
-    "mean owner score",
+    "controls found (mean)",
+    "controls worked share",
+    "widget errors (sum)",
+    *(f"owner: {text}" for text in QUESTIONS.values()),
+    "owner: mean of five",
 )
 
 
@@ -800,7 +865,7 @@ def decision_table(rows: Sequence[Mapping[str, object]]) -> list[JSONDict]:
     """Compare B and C with A, against the noise band ``abs(A' - A)`` (AC-2).
 
     Args:
-        rows: Build rows. A ``score`` field is optional.
+        rows: Build rows. The ``score_*`` and ``score`` fields are optional.
 
     Returns:
         One entry per measure and per arm in B, C. ``verdict`` is ``no decision`` when the
@@ -827,48 +892,79 @@ def decision_table(rows: Sequence[Mapping[str, object]]) -> list[JSONDict]:
     return out
 
 
-def recommend(table: Sequence[Mapping[str, object]]) -> str:
-    """Return the one recommendation line, from the owner score first.
+def pilot_verdict(table: Sequence[Mapping[str, object]]) -> str:
+    """Return the pilot go or no-go line (owner comment on FRE-1668, 2026-10-24 12:27).
+
+    Go: B or C beats A by more than the A to A' difference on the owner's blind rating (the mean of
+    the five questions), or is cheaper or faster by more than that difference at an equal rating.
+    An arm that loses on success rate or render pass rate cannot qualify. No-go: no arm does.
 
     Args:
         table: The output of ``decision_table``.
 
     Returns:
-        A line that names an arm only when its owner score beat the noise band without a loss on
-        success or render. Otherwise the line says "no decision".
+        One line that starts with ``Pilot verdict: GO`` or ``Pilot verdict: NO-GO``.
     """
-    best: tuple[float, str] | None = None
+    best: tuple[int, float, str, str] | None = None
     for arm in ("B", "C"):
         mine = {str(r["measure"]): r for r in table if r["arm"] == arm}
-        score = mine.get("mean owner score")
-        if not score or score["verdict"] != "higher":
-            continue
         if any(
             mine.get(m, {}).get("verdict") == "lower" for m in ("success rate", "render pass rate")
         ):
             continue
-        if best is None or cast(float, score["diff"]) > best[0]:
-            best = (cast(float, score["diff"]), arm)
+        rating = mine.get("owner: mean of five")
+        if rating is None:
+            continue
+        if rating["verdict"] == "higher":
+            why, rank = "beats A on the owner's blind rating by more than the noise band", 1
+        elif rating["verdict"] == "no decision" and any(
+            mine.get(m, {}).get("verdict") == "lower"
+            for m in ("mean cost (usd)", "median latency (s)")
+        ):
+            why, rank = "equals A on rating and is cheaper or faster by more than the noise band", 0
+        else:
+            continue
+        cand = (rank, cast(float, rating["diff"]), arm, why)
+        if best is None or cand[:2] > best[:2]:
+            best = cand
     if best is None:
-        return "Recommendation: no decision. No arm beat the baseline by more than the noise band without losing on success or render."
-    return f"Recommendation: arm {best[1]} ({ARMS[best[1]]}) beat the baseline on owner score by more than the noise band. The owner decides any swap."
+        return (
+            "Pilot verdict: NO-GO. No arm beats A by more than the A to A' difference on the "
+            "owner's blind rating, or on cost per build or latency at an equal rating. Stop. "
+            "The binding stays on Sonnet 5."
+        )
+    return (
+        f"Pilot verdict: GO. Arm {best[2]} ({ARMS[best[2]]}) {best[3]}. Propose a full run with "
+        "a larger prompt set and its own preflight. The owner decides any swap."
+    )
 
 
 def _fmt(value: object) -> str:
-    return f"{value:.3f}" if isinstance(value, float) else str(value)
+    return f"{value:.3f}" if isinstance(value, float) else "" if value is None else str(value)
 
 
-def _report(rows: list[JSONDict], key: Mapping[str, JSONDict], scores: Mapping[str, int]) -> str:
+def _report(
+    rows: list[JSONDict], key: Mapping[str, JSONDict], scores: Mapping[str, Mapping[str, int]]
+) -> str:
     for label, meta in key.items():
         for r in rows:
             if (r["arm"], r["prompt_id"]) == (meta["arm"], meta["prompt_id"]):
-                r["score"] = scores[label]
+                for q in QUESTIONS:
+                    r[f"score_{q}"] = scores[label][q]
+                r["score"] = statistics.fmean(scores[label][q] for q in QUESTIONS)
     table = decision_table(rows)
     lines = [
-        "# FRE-1668 artifact builder side-by-side",
+        "# FRE-1668 artifact builder pilot",
+        "",
+        f"The sample is small: {len(load_prompts())} prompts, one build per arm and prompt. Treat the "
+        "result as a direction, not a proof. The noise band is the gap between A and A' on the same prompts.",
         "",
         "Confound: the arms differ in mode as well as in model. Sonnet 5 and Sonnet 5.5 run adaptive "
         "effort `high`. Sol runs reasoning effort `medium`. Each is its catalog default today.",
+        "",
+        "Widget check: a control that shows no reaction may act only on a later step, for example a "
+        "name field or a drag switch that applies to the next launch. Read it with the owner's score "
+        "for question 1.",
         "",
     ]
     counts_path = OUT_DIR / "prod-counts.json"
@@ -885,12 +981,16 @@ def _report(rows: list[JSONDict], key: Mapping[str, JSONDict], scores: Mapping[s
         lines += [
             f"## Arm {ARM_LABEL[arm]} — {ARMS[arm]}",
             "",
-            "| prompt | ok | reason | render | latency s | in tok | out tok | cost usd | score |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| prompt | ok | reason | render | controls found / worked / errors | latency s | in tok | out tok "
+            "| cost usd | " + " | ".join(f"Q{i}" for i in range(1, len(QUESTIONS) + 1)) + " |",
+            "|---|---|---|---|---|---|---|---|---|" + "---|" * len(QUESTIONS),
         ]
         lines += [
-            f"| {r['prompt_id']} | {r['ok']} | {r['failure_reason']} | {r['render_ok']} | {r['latency_s']} "
-            f"| {r['input_tokens']} | {r['output_tokens']} | {r['cost_usd']:.4f} | {r.get('score', '')} |"
+            f"| {r['prompt_id']} | {r['ok']} | {r['failure_reason']} | {r['render_ok']} "
+            f"| {r.get('controls_found', '')} / {r.get('controls_worked', '')} / {r.get('widget_errors', '')} "
+            f"| {r['latency_s']} | {r['input_tokens']} | {r['output_tokens']} | {r['cost_usd']:.4f} | "
+            + " | ".join(str(r.get(f"score_{q}", "")) for q in QUESTIONS)
+            + " |"
             for r in mine
         ]
         cost = [float(cast(float, r["cost_usd"])) for r in mine]
@@ -899,7 +999,19 @@ def _report(rows: list[JSONDict], key: Mapping[str, JSONDict], scores: Mapping[s
             f"Cost per build: mean {statistics.fmean(cost):.4f} usd, total {sum(cost):.4f} usd.",
             "",
         ]
+    lines += ["## Owner scores by question (mean of the rated pages)", ""]
+    lines += ["| question | A | A' | B | C | noise band |", "|---|---|---|---|---|---|"]
+    for i, text in enumerate(QUESTIONS.values(), start=1):
+        vals = {a: _measure(rows, a, f"owner: {text}") for a in ARMS}
+        a, a2 = vals["A"], vals["A2"]
+        band = _fmt(abs(a2 - a)) if a is not None and a2 is not None else ""
+        lines.append(
+            f"| Q{i} {text} | "
+            + " | ".join(_fmt(vals[x]) for x in ("A", "A2", "B", "C"))
+            + f" | {band} |"
+        )
     lines += [
+        "",
         "## Decision table",
         "",
         "| measure | arm | A | A' | arm value | diff | noise band | verdict |",
@@ -910,7 +1022,7 @@ def _report(rows: list[JSONDict], key: Mapping[str, JSONDict], scores: Mapping[s
         f"| {_fmt(r['diff'])} | {_fmt(r['noise_band'])} | {r['verdict']} |"
         for r in table
     ]
-    lines += ["", recommend(table), ""]
+    lines += ["", pilot_verdict(table), ""]
     return "\n".join(lines)
 
 
@@ -929,7 +1041,15 @@ async def _cmd_plans(ids: str | None, per_plan: Decimal) -> int:
     gate = await _gate_and_headroom(len(todo), 0, per_plan=per_plan)
     try:
         for prompt in todo:
-            plan = await make_plan(prompt)
+            try:
+                plan = await make_plan(prompt)
+            except Exception as exc:  # noqa: BLE001 — a credit error stops the run, anything else is raised
+                if is_vendor_credit_error(str(exc)) or "BudgetDenied" in str(exc):
+                    print(
+                        f"STOP: a vendor credit, quota or budget error ({type(exc).__name__}). No retry."
+                    )  # noqa: T201
+                    return 3
+                raise
             _append_jsonl(OUT_DIR / "plans.jsonl", plan.__dict__)
             print(f"{prompt.id} plan: {len(plan.plan)} chars, {plan.cost_usd:.4f} usd")  # noqa: T201
     finally:
@@ -976,6 +1096,12 @@ async def _cmd_build(ids: str | None, per_build: Decimal, retry_failed: bool = F
                 f"{plan.prompt_id} {ARM_LABEL[arm]} ok={row['ok']} render={row['render_ok']} "
                 f"{row['latency_s']}s {row['cost_usd']:.4f} usd {row['failure_reason']}"
             )
+            reason = str(row["failure_reason"])
+            if not row["ok"] and (is_vendor_credit_error(reason) or "BudgetDenied" in reason):
+                print(  # noqa: T201
+                    "STOP: a vendor credit, quota or budget error. No retry. Report it to master and the owner."
+                )
+                return 3
     finally:
         await gate.disconnect()  # type: ignore[attr-defined]
     return 0

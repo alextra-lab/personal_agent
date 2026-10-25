@@ -1,6 +1,6 @@
 # ADR-0154: What the Planner Sees and What It Decides — an Isolated Planner, Thinking Off, Asked on Every Turn of the Four Register Types
 
-**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amendment 3 accepted 2026-10-25 (owner, FRE-1678): the planner prompt `d13f0dca…`, in which the `general` worker line gains `artifact_read`, is admitted on llama.cpp b11751 without a passing D7 run. No threshold changes. Amended by [ADR-0157](ADR-0157-seshat-effort-one-level-per-session.md) (FRE-1620, 2026-10-20): the Seshat effort level sets the round budget (D3) and adds the forced-SINGLE reason `effort_fast` (D2), and D7's requalification and AC-10 bind the default level only.
+**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amendment 3 accepted 2026-10-25 (owner, FRE-1678): the planner prompt `d13f0dca…`, in which the `general` worker line gains `artifact_read`, is admitted on llama.cpp b11751 without a passing D7 run. No threshold changes. Amendment 4 accepted 2026-10-25 (owner, FRE-1696): `glm-5.3-scaleway` and `deepseek-v4.1-flash-scaleway` get a `planner` mode at `reasoning_effort: low` without a D7 run. No threshold changes. Amended by [ADR-0157](ADR-0157-seshat-effort-one-level-per-session.md) (FRE-1620, 2026-10-20): the Seshat effort level sets the round budget (D3) and adds the forced-SINGLE reason `effort_fast` (D2), and D7's requalification and AC-10 bind the default level only.
 **Date:** 2026-10-03
 **Deciders:** Owner (one ADR in place of two, 2026-10-02; the design choice, the memory digest and the measurement budget, 2026-10-03), `master` (the five ADR-0152 review findings and the scope of FRE-1537), `adr` seat at Opus 5.5 (author, the 2026-10-03 planner measurement)
 **Tags:** routing, expansion, planner, memory, decomposition, latency
@@ -495,6 +495,10 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 ### 2026-10-25 - Amendment 3 accepted
 **Changed By:** Owner (decision), build seat (author, FRE-1678)
 **Reason:** The owner, 2026-10-25, relayed by master: "Ok. Go" (recorded on FRE-1678). It answers master's recommendation to ship PR #1377 with the planner prompt `d13f0dca…` and no further D7 run. The Requalification paragraph of D7 and the Proposed entry above allow this only through an owner-approved amendment of this ADR. An independent read of the runs reached the same conclusion on the evidence in Amendment 3, 3.1.
+
+### 2026-10-25 - Amendment 4 accepted
+**Changed By:** Owner (decision), build seat (author, FRE-1696)
+**Reason:** The owner, 2026-10-25, in the build seat session (recorded on FRE-1696). The seat found that the paired rows of Amendment 1, 1.2 also block a managed deployment. The owner asked: "I don't understand. Why can't you just enable it for each model?" The seat explained that only an owner-approved amendment admits a mode without a passing run, and offered two paths. The owner chose "Enable both now (Recommended)", chose "low only (Recommended)" for DeepSeek, and added: "But test nonetheless. We will do a couple tests together".
 ---
 
 ## Amendment 1 — The planner's added delay is measured per configuration, in the D7 probe (FRE-1587, 2026-10-11)
@@ -795,6 +799,54 @@ All runs used llama.cpp b11751, `qwen3.8-flash-next` UD-IQ4_XS, the `planner` mo
 |---|---|---|---|
 | A3-1 | The pin holds the admitted hash. | `tests/personal_agent/orchestrator/test_seshat_effort_prompt_pin.py` runs with no `xfail`. | The granted surface differs from `QUALIFIED_SURFACE`, or the rendered prompt hash differs from `STANDARD_D2_PROMPT_SHA256`. |
 | A3-2 | The exception stays inside its bounds. | The terminal planner event carries the prompt hash (Requalification), so a live turn shows which prompt ran. | A prompt other than `d13f0dca…` ships without a passing D7 run. |
+
+---
+
+## Amendment 4 — GLM and DeepSeek on Scaleway get a `planner` mode without a D7 run (FRE-1696, 2026-10-25)
+
+**Status:** Accepted. The owner decided it on 2026-10-25 ("Enable both now", Status Updates). It admits two configurations. No threshold changes. Every other part of this ADR is unchanged.
+
+### Why
+
+- **The owner's direction.** On 2026-10-25 the owner wrote: "Glm needs a planner mode, as well as deepseek". Without a `planner` mode, a session on `glm-5.3-scaleway` or `deepseek-v4.1-flash-scaleway` keeps the older routing, and `planner_gate_reason` records `planner_mode_absent` (the owner's GLM turns of 2026-10-25 at 12:56Z and 12:59Z).
+- **Neither model can pass D7 as written.** Two rows block them:
+  1. **The reasoning row** requires 0 reasoning characters. On Scaleway, reasoning is always on for both models, and `reasoning_effort` is the only lever. The FRE-1680 probe of 2026-10-24 measured 6 GLM reasoning tokens at `low`.
+  2. **The two paired rows** (Amendment 1, 1.2) need a managed paired arm, and it does not exist. `replay.py` and `longhist.py` refuse `--arms paired` with `--deployment`, and the scorer fails both rows without the paired files.
+- **The current state is not measured either.** Without a `planner` mode, the older routing can still choose `HYBRID`. The planner call then runs on these models in their `default` mode, and nobody measured that mode as a planner. DeepSeek's `default` mode is `high`.
+
+### 4.1 — The exception
+
+1. D7 admits a `planner` mode on `glm-5.3-scaleway` and on `deepseek-v4.1-flash-scaleway` without a D7 run. The mode holds `reasoning_effort: low` and no other field. It applies to the current planner prompt of the default level Standard (`d13f0dca…`, Amendment 3).
+2. The exception waives every D7 row for these two configurations, with the two paired rows of Amendment 1. The reasoning row is not met by design.
+3. D4 requires thinking off. On these two deployments, the planner call runs with reasoning on, at the lowest effort that the deployment accepts. DeepSeek also accepts integers 1 to 100. The owner chose `low` ("low only", 2026-10-25), so the integer form is not used.
+4. A change to either mode, to the model id or to the provider needs a new owner decision.
+5. A later change to the planner prompt requalifies on the deployments that can run D7. For these two deployments, the ticket of that change states whether they keep their modes, and the owner decides.
+6. FRE-1696 AC-2 (the preflight) and AC-3 (the D7 result) are void by this decision.
+
+### 4.2 — The check
+
+The owner and the build seat run a few live turns together on each model after the deploy. The owner wrote, 2026-10-25: "But test nonetheless. We will do a couple tests together".
+
+- A turn of the four register types on either model records `planner_asked`, and its terminal planner event names the deployment in `planner_deployment` and the mode in `planner_mode`.
+- D6 records what the call cost: `planner_reasoning_chars`, `planner_reasoning_tokens`, `planner_completion_tokens` and `planner_duration_ms`. litellm moves Scaleway's `reasoning` field to `reasoning_content`, which `_planner_reasoning` reads.
+- **Rollback:** delete the `planner` mode of the deployment in `config/models.yaml`. Its sessions then return to the older routing with `planner_mode_absent`.
+
+### 4.3 — Risks
+
+| Risk | Effect | Mitigation |
+|---|---|---|
+| The planner's decisions on these models are not measured. | The planner can expand too often. An expanded turn starts workers on a paid model, so it is slower and costs more. | The live turns of 4.2, then the rollback. |
+| The added delay is not measured. | Each turn of the four register types makes one more paid call, with reasoning on. | `planner_duration_ms` on each live turn. |
+| Scaleway is not in `_SCHEMA_PROVIDERS`. | The planner request asks for `{"type": "json_object"}`, and nobody verified that Scaleway honours it. | An invalid plan on a `planner_asked` turn returns the turn to the tool loop with zero workers (D2, Amendment 3, 3.1). `planner_failure_reason` records it. |
+| The cost of the planner call. | At the catalog rates, 1,000 input tokens cost about 0.002 USD on GLM and 0.0007 USD on DeepSeek. Reasoning tokens bill as completion tokens. | The cost gate reserves and records each call (ADR-0065). |
+
+### 4.4 — Verification / Acceptance Criteria of this amendment
+
+| # | Criterion | How it is checked | It fails if |
+|---|---|---|---|
+| A4-1 | A GLM or DeepSeek session opens the gate. | `test_a_selected_scaleway_primary_opens_the_gate` and `test_only_a_qualified_deployment_declares_a_planner_mode` in `tests/personal_agent/request_gateway/test_fre1515_planner_gate.py`. | `primary_declares_planner_mode` returns `False` for either deployment, or another deployment declares a `planner` mode. |
+| A4-2 | The mode is the lowest effort and nothing else. | `test_the_planner_mode_is_the_lowest_effort` in `tests/personal_agent/llm_client/test_fre1680_scaleway.py`. | Either mode holds a field other than `reasoning_effort: low`. |
+| A4-3 | A live turn on each model records the planner route. | The live turns of 4.2, posted on FRE-1696. | A turn of the four register types on either model records a route other than `planner_asked`, or a `planner_deployment` other than its key. |
 
 ---
 

@@ -240,7 +240,24 @@ class TestTheGateResolvesTheTurnsPrimary:
 #: on FRE-1581 its planner mode is removed. A new planner mode needs a passing D7 run first.
 QUALIFIED_PLANNER_DEPLOYMENTS = {"qwen3.8-flash-next"}
 
+#: The deployments whose ``planner`` mode the owner admitted without a D7 run (ADR-0154
+#: Amendment 4, FRE-1696, 2026-10-25: "Enable both now"). Reasoning is always on for both on
+#: Scaleway, and no managed paired arm exists, so neither could pass D7 as written.
+EXCEPTION_PLANNER_DEPLOYMENTS = {"glm-5.3-scaleway", "deepseek-v4.1-flash-scaleway"}
+
 
 def test_only_a_qualified_deployment_declares_a_planner_mode(catalog: ModelConfig) -> None:
-    """A planner mode opens the gate, so the catalog may hold one only where D7 passed."""
-    assert set(_with_planner_mode(catalog)) == QUALIFIED_PLANNER_DEPLOYMENTS
+    """A planner mode opens the gate, so the catalog may hold one only where D7 passed.
+
+    Or where an owner-approved amendment of ADR-0154 admits it (Amendment 4).
+    """
+    assert set(_with_planner_mode(catalog)) == (
+        QUALIFIED_PLANNER_DEPLOYMENTS | EXCEPTION_PLANNER_DEPLOYMENTS
+    )
+
+
+@pytest.mark.parametrize("key", sorted(EXCEPTION_PLANNER_DEPLOYMENTS))
+def test_a_selected_scaleway_primary_opens_the_gate(catalog: ModelConfig, key: str) -> None:
+    """FRE-1696 AC-4: a GLM or DeepSeek session asks the planner."""
+    set_current_selection({"primary": key})
+    assert primary_declares_planner_mode(catalog) is True

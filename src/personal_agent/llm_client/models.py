@@ -595,6 +595,9 @@ class ModelDefinition(BaseModel):
             cloud models where quantization is managed by the provider.
         max_concurrency: Maximum concurrent requests for this model.
         default_timeout: Default timeout in seconds for requests to this model.
+        max_timeout: Ceiling on the timeout a role resolves to on this model
+            (FRE-1700). :func:`~personal_agent.config.model_loader.resolve_role_target`
+            lowers a role binding's budget to it. ``default_timeout`` must not exceed it.
         dialect: Override of the provider's default wire vocabulary (ADR-0145
             D3a). Required when the provider declares none, or when this model
             disagrees with its provider's default (the Anthropic case).
@@ -689,6 +692,15 @@ class ModelDefinition(BaseModel):
         ),
     )
     default_timeout: int = Field(..., ge=1, description="Default timeout in seconds")
+    max_timeout: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Ceiling, in seconds, on the timeout any role resolves to on this deployment "
+            "(FRE-1700). A role binding's budget (ADR-0145 D2) is lowered to it, never raised. "
+            "None = no ceiling."
+        ),
+    )
     dialect: Dialect | None = Field(
         None,
         description=(
@@ -815,6 +827,21 @@ class ModelDefinition(BaseModel):
             raise ValueError(
                 f"modes {sorted(self.modes)} declared with no default_mode — "
                 "a caller asking for the default cannot be resolved arbitrarily."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _default_timeout_within_max_timeout(self) -> "ModelDefinition":
+        """A deployment's own ``default_timeout`` must not exceed its ``max_timeout`` (FRE-1700).
+
+        ``resolve_role_target`` clamps only the timeout that a role binding sets. A default
+        above the ceiling would reach the wire through a path that skips the binding, so the
+        catalog refuses it at load.
+        """
+        if self.max_timeout is not None and self.default_timeout > self.max_timeout:
+            raise ValueError(
+                f"default_timeout {self.default_timeout} exceeds max_timeout "
+                f"{self.max_timeout} — the deployment's own default would break its own ceiling."
             )
         return self
 

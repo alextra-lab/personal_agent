@@ -1,6 +1,6 @@
 # ADR-0154: What the Planner Sees and What It Decides — an Isolated Planner, Thinking Off, Asked on Every Turn of the Four Register Types
 
-**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amendment 3 accepted 2026-10-25 (owner, FRE-1678): the planner prompt `d13f0dca…`, in which the `general` worker line gains `artifact_read`, is admitted on llama.cpp b11751 without a passing D7 run. No threshold changes. Amendment 4 accepted 2026-10-25 (owner, FRE-1696): `glm-5.3-scaleway` and `deepseek-v4.1-flash-scaleway` get a `planner` mode at `reasoning_effort: low` without a D7 run. No threshold changes. Amended by [ADR-0157](ADR-0157-seshat-effort-one-level-per-session.md) (FRE-1620, 2026-10-20): the Seshat effort level sets the round budget (D3) and adds the forced-SINGLE reason `effort_fast` (D2), and D7's requalification and AC-10 bind the default level only.
+**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amendment 3 accepted 2026-10-25 (owner, FRE-1678): the planner prompt `d13f0dca…`, in which the `general` worker line gains `artifact_read`, is admitted on llama.cpp b11751 without a passing D7 run. No threshold changes. Amendment 4 accepted 2026-10-25 (owner, FRE-1696): `glm-5.3-scaleway` and `deepseek-v4.1-flash-scaleway` get a `planner` mode at `reasoning_effort: low` without a D7 run. No threshold changes. The owner withdrew DeepSeek's mode the same day after its live turns (4.5). Amended by [ADR-0157](ADR-0157-seshat-effort-one-level-per-session.md) (FRE-1620, 2026-10-20): the Seshat effort level sets the round budget (D3) and adds the forced-SINGLE reason `effort_fast` (D2), and D7's requalification and AC-10 bind the default level only.
 **Date:** 2026-10-03
 **Deciders:** Owner (one ADR in place of two, 2026-10-02; the design choice, the memory digest and the measurement budget, 2026-10-03), `master` (the five ADR-0152 review findings and the scope of FRE-1537), `adr` seat at Opus 5.5 (author, the 2026-10-03 planner measurement)
 **Tags:** routing, expansion, planner, memory, decomposition, latency
@@ -499,6 +499,10 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 ### 2026-10-25 - Amendment 4 accepted
 **Changed By:** Owner (decision), build seat (author, FRE-1696)
 **Reason:** The owner, 2026-10-25, in the build seat session (recorded on FRE-1696). The seat found that the paired rows of Amendment 1, 1.2 also block a managed deployment. The owner asked: "I don't understand. Why can't you just enable it for each model?" The seat explained that only an owner-approved amendment admits a mode without a passing run, and offered two paths. The owner chose "Enable both now (Recommended)", chose "low only (Recommended)" for DeepSeek, and added: "But test nonetheless. We will do a couple tests together".
+
+### 2026-10-25 - Amendment 4, DeepSeek's mode withdrawn
+**Changed By:** Owner (decision), `master` (author, FRE-1696)
+**Reason:** The live turns of 4.2 showed DeepSeek at 8 to 10 s per planner call, and both of its turns expanded. One expanded turn (trace 1d2d89fe) held for 4.5 minutes on a single worker call of 274 s, and the owner stopped it with a gateway restart. Master recommended the withdrawal, and the owner answered "Yes yes" (recorded on FRE-1696). See 4.5.
 ---
 
 ## Amendment 1 — The planner's added delay is measured per configuration, in the D7 probe (FRE-1587, 2026-10-11)
@@ -847,6 +851,13 @@ The owner and the build seat run a few live turns together on each model after t
 | A4-1 | A GLM or DeepSeek session opens the gate. | `test_a_selected_scaleway_primary_opens_the_gate` and `test_only_a_qualified_deployment_declares_a_planner_mode` in `tests/personal_agent/request_gateway/test_fre1515_planner_gate.py`. | `primary_declares_planner_mode` returns `False` for either deployment, or another deployment declares a `planner` mode. |
 | A4-2 | The mode is the lowest effort and nothing else. | `test_the_planner_mode_is_the_lowest_effort` in `tests/personal_agent/llm_client/test_fre1680_scaleway.py`. | Either mode holds a field other than `reasoning_effort: low`. |
 | A4-3 | A live turn on each model records the planner route. | The live turns of 4.2, posted on FRE-1696. | A turn of the four register types on either model records a route other than `planner_asked`, or a `planner_deployment` other than its key. |
+
+### 4.5 — DeepSeek's mode is withdrawn (2026-10-25)
+
+- **The result of 4.2.** On `glm-5.3-scaleway`, both live turns gave valid plans, with planner calls of 1.6 s and 2.1 s. On `deepseek-v4.1-flash-scaleway`, planner calls took 8 to 10 s with about 650 reasoning tokens at `low`, and both turns expanded.
+- **The incident.** One DeepSeek turn (trace 1d2d89fe, 16:19Z to 16:25Z) expanded to three workers. One worker call took 274 s, inside the 600 s budget of the `sub_agent` binding. The owner stopped the turn with a gateway restart and got no answer. The turn cost 0.714 USD (FRE-1696 comment).
+- **The decision.** The owner withdrew DeepSeek's `planner` mode ("Yes yes", 2026-10-25). DeepSeek sessions return to the older routing, with `planner_mode_absent`. GLM keeps its mode.
+- **What changes in 4.4.** A4-1 and A4-2 now bind `glm-5.3-scaleway` only, and `test_only_a_qualified_deployment_declares_a_planner_mode` fails if DeepSeek declares a `planner` mode again. A new DeepSeek planner mode needs a new owner decision.
 
 ---
 

@@ -139,6 +139,7 @@ DispatchCode = Literal[
     "missing_parameter",
     "invalid_arguments",
     "invalid_json_arguments",
+    "output_cut",
     "mode_refused",
     "path_refused",
     "permission_denied",

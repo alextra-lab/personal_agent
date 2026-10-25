@@ -766,8 +766,11 @@ class OrchestratorResult(TypedDict, total=False):
         reply: Final user-facing text response.
         steps: List of OrchestratorStep records for transparency.
         trace_id: Trace ID for telemetry correlation.
+        error_category: ``ClassifiedError.category`` when the turn ended on an error. Absent
+            for a turn that did not.
     """
 
     reply: str
     steps: list[OrchestratorStep]
     trace_id: str | None
+    error_category: str

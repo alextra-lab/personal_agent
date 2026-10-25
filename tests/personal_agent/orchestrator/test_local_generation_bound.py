@@ -556,7 +556,7 @@ class TestStepLlmCallForwardsTheBound:
         assert ctx.turn_stopped_early is True
 
     @pytest.mark.asyncio
-    async def test_a_cloud_client_length_reply_is_not_stopped(self) -> None:
+    async def test_a_cloud_client_length_reply_does_not_take_the_local_bound_path(self) -> None:
         from personal_agent.llm_client.models import Placement
 
         ctx = _ctx()
@@ -570,7 +570,10 @@ class TestStepLlmCallForwardsTheBound:
         ):
             state = await ex.step_llm_call(ctx, MagicMock(), make_test_ctx("fre1562"))
 
-        assert state is TaskState.TOOL_EXECUTION
+        # FRE-1697: a cloud call cut inside a tool call returns to the model with an
+        # ``output_cut`` result (tests/personal_agent/orchestrator/test_cloud_output_cap.py). The
+        # local bound path, its event and its early stop still do not apply.
+        assert state is TaskState.LLM_CALL
         assert _bound_events(events) == []
         assert ctx.turn_stopped_early is False
 

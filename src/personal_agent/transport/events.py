@@ -344,6 +344,7 @@ class ClassifiedErrorEvent:
         "tool_failure",
         "attachment_unsupported",
         "context_window",
+        "output_cap",
         "generic",
     ]
     reason: str

@@ -220,6 +220,30 @@ class LLMInvalidResponse(LLMClientError):
     pass
 
 
+class LLMOutputCapReached(LLMClientError):
+    """Raised for a call that used its whole output cap and gave no usable result (FRE-1697).
+
+    Not a provider failure: the call succeeded and stopped with ``finish_reason: length``. The
+    executor raises it as the turn's error so the failed-turn path reports it, with the limit named.
+
+    Attributes:
+        cap: The output-token cap of the deployment, or ``None`` when it is not known.
+        tokens: Completion tokens the provider reported for the call.
+    """
+
+    def __init__(self, message: str, *, cap: int | None, tokens: int) -> None:
+        """Store the cap and the tokens the call generated.
+
+        Args:
+            message: Developer-facing description of the stop.
+            cap: The output-token cap of the deployment, or ``None`` when it is not known.
+            tokens: Completion tokens the provider reported for the call.
+        """
+        super().__init__(message)
+        self.cap = cap
+        self.tokens = tokens
+
+
 class DialectParameterRejected(LLMClientError):
     """Raised before dispatch when a call site passes a parameter the dialect rejects.
 

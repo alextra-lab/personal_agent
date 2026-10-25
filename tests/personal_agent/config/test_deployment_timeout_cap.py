@@ -119,12 +119,18 @@ class TestTheCeilingLowersTheRolesBudget:
 
     def test_a_redirect_to_the_capped_deployment_is_capped_too(self) -> None:
         """The case the incident was: the binding names one key and a selection lands on another."""
-        config = _config(600, cap=None).model_copy(
-            update={"models": {_CAPPED: _definition(180, 180), _UNCAPPED: _definition(300, None)}}
+        base = _config(600)
+        config = base.model_copy(
+            update={
+                "roles": {
+                    "sub_agent": RoleBinding(deployment=_UNCAPPED, open=True, default_timeout=600)
+                }
+            }
         )
 
-        _, definition = resolve_role_target("sub_agent", model_key=_CAPPED, config=config)
+        key, definition = resolve_role_target("sub_agent", model_key=_CAPPED, config=config)
 
+        assert key == _CAPPED
         assert definition is not None
         assert definition.default_timeout == 180
 

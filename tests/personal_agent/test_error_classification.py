@@ -16,6 +16,7 @@ from personal_agent.error_classification import ClassifiedError, classify_error
 from personal_agent.llm_client.types import (
     LLMConnectionError,
     LLMInvalidResponse,
+    LLMOutputCapReached,
     LLMRateLimit,
     LLMServerError,
     LLMTimeout,
@@ -266,3 +267,29 @@ class TestClassifyPlacementNeutral:
         assert "retry" in result.actions
         assert "local" not in (result.reason + " " + result.next_step).lower()
         assert "cloud" not in (result.reason + " " + result.next_step).lower()
+
+
+class TestOutputCapReached:
+    """FRE-1697: a call that spent its whole output cap gets its own category and names the limit."""
+
+    def test_category_and_actions(self) -> None:
+        result = classify_error(LLMOutputCapReached("cut", cap=16384, tokens=16384))
+
+        assert result.category == "output_cap"
+        assert "retry" in result.actions
+
+    def test_reason_names_the_limit(self) -> None:
+        result = classify_error(LLMOutputCapReached("cut", cap=16384, tokens=16384))
+
+        assert "output limit of 16,384 tokens" in result.reason
+
+    def test_reason_without_a_known_cap_still_says_output_limit(self) -> None:
+        result = classify_error(LLMOutputCapReached("cut", cap=None, tokens=900))
+
+        assert "output limit" in result.reason
+        assert "None" not in result.reason
+
+    def test_takes_priority_over_the_generic_server_error_text(self) -> None:
+        result = classify_error(LLMOutputCapReached("cut", cap=16384, tokens=16384))
+
+        assert "returned an error" not in result.reason

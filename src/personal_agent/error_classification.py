@@ -31,6 +31,7 @@ class ClassifiedError:
         "tool_failure",
         "attachment_unsupported",
         "context_window",
+        "output_cap",
         "generic",
     ]
     reason: str
@@ -62,6 +63,7 @@ def classify_error(error: Exception) -> ClassifiedError:
     # Import locally to avoid circular-import risk (these are leaf modules).
     from personal_agent.llm_client.types import (
         LLMConnectionError,
+        LLMOutputCapReached,
         LLMRateLimit,
         LLMServerError,
         LLMTimeout,
@@ -78,6 +80,19 @@ def classify_error(error: Exception) -> ClassifiedError:
             category="context_window",
             reason="This turn ran out of context room in the model's window.",
             next_step="Start a new turn, or ask a narrower question.",
+            actions=retry_actions,
+        )
+
+    if isinstance(error, LLMOutputCapReached):
+        limit = (
+            f"its output limit of {error.cap:,} tokens"
+            if error.cap is not None
+            else "its output limit"
+        )
+        return ClassifiedError(
+            category="output_cap",
+            reason=f"The model used {limit} before it gave an answer.",
+            next_step="Retry, or ask a narrower question.",
             actions=retry_actions,
         )
 

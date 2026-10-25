@@ -611,6 +611,10 @@ async def _process_chat_stream_background(
                     expansion_budget=expansion_budget,
                 )
                 response_content = result.get("reply", "No response generated")
+                # FRE-1697: the orchestrator returns normally when a call spends its whole output
+                # cap, so no exception stamps the ending. The owner got no answer: record it.
+                if result.get("error_category") == "output_cap":
+                    request_record.stamp_failed()
 
             except Exception as e:
                 request_record.stamp_failed()

@@ -51,6 +51,11 @@ PRIMARY_GENERATION_HIT_BOUND = "primary_generation_hit_bound"
 # name and the sizes of the cut argument and the reasoning, never their text. One event per cut call.
 PRIMARY_TOOL_CALL_CUT_AT_BOUND = "primary_tool_call_cut_at_bound"
 
+# FRE-1697: a cloud primary call stopped on its output cap (``finish_reason == "length"``) with no
+# usable result. ``cause`` is ``reasoning_only`` (no answer text, no tool call) or ``tool_call_cut``.
+# Carries sizes and the deployment, never the reasoning or argument text. One event per stop.
+PRIMARY_OUTPUT_CAP_REACHED = "primary_output_cap_reached"
+
 # ADR-0074 / FRE-376 Phase 3: orchestrator step-planning boundary.
 # Distinct from MODEL_CALL_* (which the model clients emit with the full
 # canonical shape). Before Phase 3, the orchestrator also emitted

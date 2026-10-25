@@ -77,7 +77,11 @@ from personal_agent.llm_client.models import (
     Placement,
     synthesis_retains_tools,
 )
-from personal_agent.llm_client.types import ToolCall, is_context_window_error
+from personal_agent.llm_client.types import (
+    LLMOutputCapReached,
+    ToolCall,
+    is_context_window_error,
+)
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
@@ -134,6 +138,7 @@ from personal_agent.telemetry import (
     ORCHESTRATOR_FATAL_ERROR,
     PRIMARY_CONTEXT_WINDOW_TRIMMED,
     PRIMARY_GENERATION_HIT_BOUND,
+    PRIMARY_OUTPUT_CAP_REACHED,
     PRIMARY_TOOL_CALL_CUT_AT_BOUND,
     REPLY_READY,
     STATE_TRANSITION,
@@ -3486,7 +3491,8 @@ def _local_generation_bound(llm_client: Any) -> int | None:
 
     FRE-1562: only a local deployment's catalog ``max_tokens`` is a runaway bound
     (ADR-0141 D5). A cloud client's ``max_tokens`` is a billing ceiling that already
-    existed, and a cloud ``finish_reason == "length"`` keeps its old handling.
+    existed. A cloud ``finish_reason == "length"`` takes the FRE-1697 path instead
+    (:func:`_cloud_output_cap`).
 
     Args:
         llm_client: The client that served (or will serve) the primary call.
@@ -3592,6 +3598,219 @@ def _stop_turn_for_length_bound(
         }
     )
     ctx.turn_stopped_early = True
+
+
+def _cloud_output_cap(llm_client: Any) -> int | None:
+    """Return the output-token cap of a cloud primary client, or ``None`` (FRE-1697).
+
+    The counterpart of :func:`_local_generation_bound`. A local deployment keeps its own
+    FRE-1562 handling of a ``length`` stop, so this returns ``None`` for it.
+
+    Args:
+        llm_client: The client that served (or will serve) the primary call.
+
+    Returns:
+        The cap in tokens, or ``None`` when the client is not cloud or declares none.
+    """
+    if getattr(llm_client, "placement", None) is not Placement.CLOUD:
+        return None
+    cap = getattr(llm_client, "max_tokens", None)
+    return cap if isinstance(cap, int) else None
+
+
+def _output_cap_cause(
+    raw_tool_calls: Sequence[ToolCall], response_content: str, *, cite_only_retry: bool
+) -> Literal["reasoning_only", "tool_call_cut"] | None:
+    """Name why a cloud call that stopped on its output cap gave no usable result (FRE-1697).
+
+    Reads the raw tool calls, before the cite-only filter drops them, so a capped cite-only
+    response that wrote a tool call is not mistaken for a reasoning-only one.
+
+    Args:
+        raw_tool_calls: The tool calls of the response, as the client returned them.
+        response_content: The response text.
+        cite_only_retry: Whether the call was a grounding cite-only retry (its tool calls never run).
+
+    Returns:
+        ``tool_call_cut`` when a tool call was being written, ``reasoning_only`` when the call
+        wrote neither text nor a tool call, ``None`` when the response holds usable answer text.
+    """
+    has_text = bool(response_content.strip())
+    if raw_tool_calls and (not cite_only_retry or not has_text):
+        return "tool_call_cut"
+    if not raw_tool_calls and not has_text:
+        return "reasoning_only"
+    return None
+
+
+def _log_output_cap_reached(
+    ctx: ExecutionContext,
+    *,
+    cause: str,
+    cap: int,
+    response: "LLMResponse",
+    raw_tool_calls: Sequence[ToolCall],
+    span_id: str,
+) -> None:
+    """Log one ``primary_output_cap_reached`` event (FRE-1697).
+
+    Carries the cause, the cap, the sizes and the tool names. The reasoning and the argument
+    text never reach the log: an argument can hold a whole page or a secret.
+
+    Args:
+        ctx: Execution context. ``ctx.answering_model_key`` names the deployment.
+        cause: ``reasoning_only`` or ``tool_call_cut``.
+        cap: The output-token cap of the deployment.
+        response: The capped response.
+        raw_tool_calls: The tool calls of the response, as the client returned them.
+        span_id: This step's span id.
+    """
+    usage = response.get("usage") or {}
+    log.warning(
+        PRIMARY_OUTPUT_CAP_REACHED,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        span_id=span_id,
+        deployment=ctx.answering_model_key,
+        cause=cause,
+        output_cap=cap,
+        tokens_generated=usage.get("completion_tokens"),
+        reasoning_tokens=usage.get("reasoning_tokens"),
+        tool_names=[call["name"] for call in raw_tool_calls],
+    )
+
+
+def _fail_turn_on_output_cap(
+    ctx: ExecutionContext,
+    *,
+    cause: str,
+    cap: int,
+    tokens_generated: int,
+    model_role: ModelRole,
+    trace_ctx: TraceContext,
+    span_id: str,
+) -> TaskState:
+    """End the turn as failed after a cloud call spent its output cap (FRE-1697).
+
+    Takes the failed-turn path that :func:`step_llm_call` takes for a model error: the
+    classified reason names the output limit, gathered tool results are kept in the reply, and
+    the capture is written with ``outcome="failed"``. The capped response never enters history.
+
+    Args:
+        ctx: Execution context.
+        cause: ``reasoning_only`` or ``tool_call_cut``.
+        cap: The output-token cap of the deployment.
+        tokens_generated: Completion tokens the provider reported for the call.
+        model_role: The role the call used.
+        trace_ctx: Trace context, for the planning event's parent span id.
+        span_id: This step's span id.
+
+    Returns:
+        ``TaskState.FAILED``.
+    """
+    from personal_agent.error_classification import classify_error
+
+    error = LLMOutputCapReached(
+        f"the call stopped at its output cap ({cause})", cap=cap, tokens=tokens_generated
+    )
+    ctx.error = error
+    classified = _salvage_partial_reply(
+        ctx,
+        classify_error(error),
+        lead="The model reached its output limit before it could finish, but here's what I gathered:",
+    )
+    ctx.classified_error = classified
+    ctx.steps.append(
+        {
+            "type": "warning",
+            "description": f"LLM call failed: {classified.reason}",
+            "metadata": {
+                "error": classified.reason,
+                "error_type": type(error).__name__,
+                "error_category": classified.category,
+                "span_id": span_id,
+                "cause": cause,
+            },
+        }
+    )
+    log.info(
+        STEP_PLANNING_COMPLETED,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        span_id=span_id,
+        parent_span_id=trace_ctx.parent_span_id,
+        model_role=model_role.value,
+        channel=ctx.channel.value,
+        status="error",
+        error_type=type(error).__name__,
+        error_category=classified.category,
+    )
+    return TaskState.FAILED
+
+
+def _answer_cut_tool_calls(
+    ctx: ExecutionContext,
+    assistant_message: dict[str, Any],
+    *,
+    model_role: ModelRole,
+    trace_ctx: TraceContext,
+    span_id: str,
+) -> TaskState:
+    """Answer each tool call of a cloud response that the output cap cut, then return to the model.
+
+    The assistant message is already in history, so each of its calls needs a result. None of the
+    calls runs: the last one is cut, and its arguments cannot be trusted (FRE-1697). Unlike a
+    missing-parameter failure, the result says why: the output was cut.
+
+    Args:
+        ctx: Execution context. The assistant message is its last message.
+        assistant_message: The assistant message that carries the cut tool calls.
+        model_role: The role the call used.
+        trace_ctx: Trace context, for the planning event's parent span id.
+        span_id: This step's span id.
+
+    Returns:
+        ``TaskState.LLM_CALL``.
+    """
+    for call in assistant_message["tool_calls"]:
+        name = call["function"]["name"]
+        ctx.messages.append(
+            {
+                "tool_call_id": call["id"],
+                "role": "tool",
+                "name": name,
+                "content": undispatched_failure(
+                    name,
+                    dispatch_error(
+                        "output_cut",
+                        f"Your last response was cut at the output limit while it wrote {name}, "
+                        f"so {name} did not run.",
+                        retryable=True,
+                        next_action=f"Call {name} again. Keep your reasoning short and the "
+                        "arguments small.",
+                    ),
+                    trace_id=ctx.trace_id,
+                ),
+            }
+        )
+        _record_undispatched_invocation(
+            ctx,
+            tool_name=name,
+            arguments=call["function"]["arguments"],
+            error="the response was cut at the output limit",
+        )
+    log.info(
+        STEP_PLANNING_COMPLETED,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        span_id=span_id,
+        parent_span_id=trace_ctx.parent_span_id,
+        model_role=model_role.value,
+        channel=ctx.channel.value,
+        status="output_cap_retry",
+        next_state="llm_call",
+    )
+    return TaskState.LLM_CALL
 
 
 def _select_no_tool_final_reply(
@@ -6734,6 +6953,7 @@ async def _finalize_llm_call_success(
     tool_strategy: "ToolCallingStrategy",
     step_start_time: float,
     generation_bound: int | None = None,
+    output_cap: int | None = None,
 ) -> TaskState:
     """Apply a successful primary ``respond()`` result to ``ctx`` and pick the next state.
 
@@ -6756,13 +6976,20 @@ async def _finalize_llm_call_success(
             the response stopped with ``finish_reason == "length"``, the turn ends with an
             honest reply (FRE-1562): the cut-off content and any partial tool calls are
             dropped, so neither runs nor enters history.
+        output_cap: The ``max_tokens`` a cloud primary request carried
+            (:func:`_cloud_output_cap`), or ``None`` for a local call. When set and the response
+            stopped with ``finish_reason == "length"`` (FRE-1697): a reply with no text and no
+            tool call fails the turn; a cut tool call is answered with an ``output_cut`` result
+            once, and a second one fails the turn. A reply with answer text keeps its old path.
 
     Returns:
-        TOOL_EXECUTION when the response carries tool calls, else SYNTHESIS.
+        TOOL_EXECUTION when the response carries tool calls, else SYNTHESIS. LLM_CALL after a
+        cut tool call, FAILED after an output-cap stop that gave no usable result.
     """
     # Extract response content and tool calls
     response_content = response["content"] or ""
     response_tool_calls = response["tool_calls"] or []
+    raw_tool_calls = response_tool_calls
 
     # ADR-0151 D3 (FRE-1509): the cite-only retry never executes a tool. The request
     # pins tool_choice="none", but a non-native strategy cannot carry the pin and a
@@ -6864,6 +7091,42 @@ async def _finalize_llm_call_success(
         )
         return TaskState.SYNTHESIS
 
+    # FRE-1697: a cloud call that stopped on its output cap with no answer text is not an answer.
+    # A reply that holds answer text keeps its old path.
+    answer_cut_calls = False
+    if output_cap is not None and response.get("finish_reason") == "length":
+        cut_cause = _output_cap_cause(
+            raw_tool_calls, response_content, cite_only_retry=cite_only_retry
+        )
+        if cut_cause is not None:
+            _log_output_cap_reached(
+                ctx,
+                cause=cut_cause,
+                cap=output_cap,
+                response=response,
+                raw_tool_calls=raw_tool_calls,
+                span_id=span_id,
+            )
+            # Like FRE-1676: the first cut inside a tool call returns to the model once. A cite-only
+            # retry owns no tool result, and a second cut fails the turn.
+            if (
+                cut_cause == "tool_call_cut"
+                and not cite_only_retry
+                and ctx.length_stop_retries == 0
+            ):
+                ctx.length_stop_retries += 1
+                answer_cut_calls = True
+            else:
+                return _fail_turn_on_output_cap(
+                    ctx,
+                    cause=cut_cause,
+                    cap=output_cap,
+                    tokens_generated=completion_tokens,
+                    model_role=model_role,
+                    trace_ctx=trace_ctx,
+                    span_id=span_id,
+                )
+
     # Some reasoning models may emit router-style JSON with a `response` field.
     # Unwrap it to avoid returning JSON to the user.
     response_content = _unwrap_embedded_response_json(response_content)
@@ -6886,6 +7149,11 @@ async def _finalize_llm_call_success(
             turn_id=ctx.tool_iteration_count,
         )
     ctx.messages.append(assistant_message)
+
+    if answer_cut_calls:
+        return _answer_cut_tool_calls(
+            ctx, assistant_message, model_role=model_role, trace_ctx=trace_ctx, span_id=span_id
+        )
 
     # ADR-0074 §I3: emit STEP_PLANNING_COMPLETED on every success exit so
     # the planning event pairs cleanly. Status indicates branch taken.
@@ -7734,6 +8002,7 @@ async def step_llm_call(
             tool_strategy=tool_strategy,
             step_start_time=step_start_time,
             generation_bound=_local_generation_bound(llm_client),
+            output_cap=_cloud_output_cap(llm_client),
         )
 
     except Exception as e:
@@ -7853,6 +8122,7 @@ async def step_llm_call(
                         tool_strategy=tool_strategy,
                         step_start_time=step_start_time,
                         generation_bound=_local_generation_bound(llm_client),
+                        output_cap=_cloud_output_cap(llm_client),
                     )
 
         log.error(
@@ -8784,6 +9054,7 @@ async def execute_task_safe(
                 error_type=type(ctx.error).__name__,
                 error_category=classified.category,
             )
+            result["error_category"] = classified.category
             if not ctx.final_reply:
                 # No partial work was salvaged — surface the classified message.
                 result["reply"] = f"{classified.reason} {classified.next_step}"

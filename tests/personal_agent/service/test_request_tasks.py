@@ -585,3 +585,31 @@ async def test_an_exception_that_escapes_a_stamped_task_is_still_logged(registry
     assert ended is not None
     assert ended["outcome"] == "failed"
     assert ended["error_type"] == "ValueError"
+
+
+# ── FRE-1697: an output-cap stop is a failed turn, not a completed one ─────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "outcome"),
+    [
+        ({"reply": "The model used its whole output limit.", "error_category": "output_cap"}, "failed"),
+        ({"reply": "The model server returned an error.", "error_category": "model_server"}, "completed"),
+        ({"reply": "hi"}, "completed"),
+    ],
+)
+async def test_an_output_cap_result_ends_the_task_as_failed(
+    body_mocks: _BodyMocks, result: dict[str, str], outcome: str
+) -> None:
+    """The orchestrator returns normally; only the output-cap category stamps ``failed``."""
+    body_mocks.orchestrator.handle_user_request.return_value = result
+
+    with capture_log_records() as records:
+        await _post("hello")
+        (trace_id,) = _launched_trace_ids(records)
+        assert await _wait_for(lambda: _ended(records, trace_id) is not None, timeout=3.0)
+
+    ended = _ended(records, trace_id)
+    assert ended is not None
+    assert ended["outcome"] == outcome

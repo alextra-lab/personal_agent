@@ -828,7 +828,7 @@ All runs used llama.cpp b11751, `qwen3.8-flash-next` UD-IQ4_XS, the `planner` mo
 The owner and the build seat run a few live turns together on each model after the deploy. The owner wrote, 2026-10-25: "But test nonetheless. We will do a couple tests together".
 
 - A turn of the four register types on either model records `planner_asked`, and its terminal planner event names the deployment in `planner_deployment` and the mode in `planner_mode`.
-- D6 records what the call cost: `planner_reasoning_chars`, `planner_reasoning_tokens`, `planner_completion_tokens` and `planner_duration_ms`. litellm moves Scaleway's `reasoning` field to `reasoning_content`, which `_planner_reasoning` reads.
+- The terminal planner event (D6) records what the call cost: `planner_reasoning_chars`, `planner_prompt_tokens`, `planner_completion_tokens` and `planner_duration_ms`. litellm moves Scaleway's `reasoning` field to `reasoning_content`, which `_planner_reasoning` reads. The reasoning token count is not on that event. It is on the `planner_completed` log line as `planner_reasoning_tokens`, and only on a turn whose plan parsed.
 - **Rollback:** delete the `planner` mode of the deployment in `config/models.yaml`. Its sessions then return to the older routing with `planner_mode_absent`.
 
 ### 4.3 — Risks

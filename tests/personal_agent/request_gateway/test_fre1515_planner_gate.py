@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from personal_agent.config.model_loader import load_model_config, primary_declares_planner_mode
+from personal_agent.config.model_loader import (
+    load_model_config,
+    primary_declares_planner_mode,
+    resolve_inherited_deployment,
+)
 from personal_agent.config.selection import _current_selection, set_current_selection
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client.models import ModelConfig
@@ -258,6 +262,11 @@ def test_only_a_qualified_deployment_declares_a_planner_mode(catalog: ModelConfi
 
 @pytest.mark.parametrize("key", sorted(EXCEPTION_PLANNER_DEPLOYMENTS))
 def test_a_selected_scaleway_primary_opens_the_gate(catalog: ModelConfig, key: str) -> None:
-    """FRE-1696 AC-4: a GLM or DeepSeek session asks the planner."""
+    """FRE-1696 AC-4: a GLM or DeepSeek session asks the planner.
+
+    The binding default also declares a planner mode, so the test first proves that the
+    selection, not the fallback, is the deployment the gate reads.
+    """
     set_current_selection({"primary": key})
+    assert resolve_inherited_deployment(catalog) == key
     assert primary_declares_planner_mode(catalog) is True

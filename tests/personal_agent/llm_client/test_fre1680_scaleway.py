@@ -340,6 +340,9 @@ class TestDispatch:
             (_GLM, "worker", "low"),
             (_DEEPSEEK, None, "high"),
             (_DEEPSEEK, "worker", "low"),
+            # FRE-1696: the planner call sends low, not DeepSeek's default high.
+            (_GLM, "planner", "low"),
+            (_DEEPSEEK, "planner", "low"),
         ],
     )
     async def test_the_effort_lever_reaches_the_wire_and_no_other_lever_does(

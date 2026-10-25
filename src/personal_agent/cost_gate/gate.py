@@ -48,9 +48,10 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-# Reservations live for 180 seconds — longer than the worst-case LLM call
-# (Sonnet default_timeout: 180) so commits land before reaping. The reaper
-# sweeps every 30s, so a crashed caller's headroom returns within ≤210s.
+# Reservations live for 180 seconds. The reaper sweeps every 30s, so a crashed
+# caller's headroom returns within ≤210s. A call that outlives the TTL is still
+# charged: ``commit()`` settles an ``expired`` reservation by adding the full
+# actual cost (FRE-1681).
 RESERVATION_TTL_SECONDS = 180
 
 
@@ -187,9 +188,11 @@ class CostGate:
                     )
 
                 # The reservation row references one counter (any one is
-                # fine — the reservation_id keys the audit trail; the
-                # commit/refund paths re-derive the full counter set from
-                # caps_for(role) using the role on the reservation row).
+                # fine — the reservation_id keys the audit trail) and stores
+                # every counter it incremented in ``counter_ids``; commit,
+                # refund and the reaper adjust exactly those rows, never the
+                # rows of whatever window is current at settle time (FRE-1690).
+                counter_ids = [counter_id for _, counter_id, _ in counters]
                 ref_counter_id = counters[0][1] if counters else None
                 if ref_counter_id is None:
                     # No caps at all — write a synthetic reservation row
@@ -216,9 +219,11 @@ class CostGate:
                     """
                     INSERT INTO budget_reservations (
                         counter_id, role, amount_usd, status,
-                        created_at, expires_at, trace_id, session_id, task_id
+                        created_at, expires_at, trace_id, session_id, task_id,
+                        counter_ids
                     )
-                    VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval, $6, $7, $8)
+                    VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval,
+                            $6, $7, $8, $9)
                     RETURNING reservation_id
                     """,
                     ref_counter_id,
@@ -229,6 +234,7 @@ class CostGate:
                     trace_id,
                     session_id,
                     task_id,
+                    counter_ids,
                 )
 
         reservation_id: UUID = row["reservation_id"]
@@ -259,6 +265,11 @@ class CostGate:
         which is the common case (refunds the over-estimate). The
         reservation row is marked ``committed``.
 
+        A reservation the reaper already expired (the call ran longer than
+        ``RESERVATION_TTL_SECONDS``) is settled too: the reaper took the
+        estimate off the counters, so the full ``actual_cost`` is added back.
+        The cost is real and is never denied (FRE-1681).
+
         Args:
             reservation_id: The UUID returned from ``reserve()``.
             actual_cost: Actual USD cost from ``litellm.completion_cost()``.
@@ -273,8 +284,8 @@ class CostGate:
 
         Raises:
             ValueError: If ``actual_cost`` is negative or the reservation is
-                not in ``active`` state (already committed / refunded /
-                expired).
+                neither ``active`` nor ``expired`` (already committed /
+                refunded).
             RuntimeError: If ``connect()`` was not called first.
         """
         if self.pool is None:
@@ -286,7 +297,7 @@ class CostGate:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    SELECT role, amount_usd, status
+                    SELECT role, amount_usd, status, counter_ids
                       FROM budget_reservations
                      WHERE reservation_id = $1
                        FOR UPDATE
@@ -295,21 +306,21 @@ class CostGate:
                 )
                 if row is None:
                     raise ValueError(f"unknown reservation {reservation_id}")
-                if row["status"] != ReservationStatus.ACTIVE.value:
+                status: str = row["status"]
+                if status not in (ReservationStatus.ACTIVE.value, ReservationStatus.EXPIRED.value):
                     raise ValueError(
-                        f"reservation {reservation_id} is {row['status']}, expected active"
+                        f"reservation {reservation_id} is {status}, expected active or expired"
                     )
 
                 role: str = row["role"]
                 reserved: Decimal = row["amount_usd"]
-                delta: Decimal = actual_cost - reserved
+                # An expired reservation no longer holds its estimate (the
+                # reaper freed it), so the whole actual cost is charged.
+                late = status == ReservationStatus.EXPIRED.value
+                delta: Decimal = actual_cost if late else actual_cost - reserved
 
                 if delta != 0:
-                    # Apply the delta to every counter that participated in
-                    # the original reservation (re-derived from the role +
-                    # config — caps don't change mid-call within this
-                    # implementation).
-                    counter_ids = await self._counter_ids_for_role(conn, role=role)
+                    counter_ids = await self._settle_counter_ids(conn, row)
                     for cid in counter_ids:
                         await conn.execute(
                             """
@@ -336,7 +347,7 @@ class CostGate:
                 )
 
         log.info(
-            "cost_gate_committed",
+            "cost_gate_committed_late" if late else "cost_gate_committed",
             reservation_id=str(reservation_id),
             role=role,
             actual_cost_usd=float(actual_cost),
@@ -380,7 +391,7 @@ class CostGate:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    SELECT role, amount_usd, status
+                    SELECT role, amount_usd, status, counter_ids
                       FROM budget_reservations
                      WHERE reservation_id = $1
                        FOR UPDATE
@@ -407,7 +418,7 @@ class CostGate:
                 role: str = row["role"]
                 amount: Decimal = row["amount_usd"]
 
-                counter_ids = await self._counter_ids_for_role(conn, role=role)
+                counter_ids = await self._settle_counter_ids(conn, row)
                 for cid in counter_ids:
                     await conn.execute(
                         """
@@ -460,14 +471,14 @@ class CostGate:
                            settled_at = NOW()
                      WHERE status = $2
                        AND expires_at < NOW()
-                     RETURNING reservation_id, role, amount_usd
+                     RETURNING reservation_id, role, amount_usd, counter_ids
                     """,
                     ReservationStatus.EXPIRED.value,
                     ReservationStatus.ACTIVE.value,
                 )
 
                 for row in expired:
-                    counter_ids = await self._counter_ids_for_role(conn, role=row["role"])
+                    counter_ids = await self._settle_counter_ids(conn, row)
                     for cid in counter_ids:
                         await conn.execute(
                             """
@@ -566,8 +577,9 @@ class CostGate:
     ) -> list[tuple[Any, ...]]:
         """Upsert + lock every counter row matching the given cap set.
 
-        Locks are acquired in deterministic ``id`` order to avoid deadlock
-        between concurrent reservations targeting overlapping caps.
+        Locks are acquired in ascending counter ``id`` order — the order that
+        ``commit`` / ``refund`` / the reaper update counters in — so a reserve
+        cannot deadlock with a settlement or with another reserve.
 
         Returns:
             List of ``(cap_entry, counter_id, running_total)`` tuples.
@@ -592,20 +604,21 @@ class CostGate:
                 window_start,
             )
 
-        # Now select + lock every relevant row in id order.
-        rows: list[tuple[Any, ...]] = []
+        # Find every counter id without locking, then lock in ascending id
+        # order. Locking in cap order and sorting afterwards does not set the
+        # lock order, so two transactions could take the same rows in opposite
+        # order and deadlock.
+        ids: list[tuple[Any, int]] = []
         for cap in caps:
             window_start = _window_start(cap.time_window)
-            row = await conn.fetchrow(
+            counter_id = await conn.fetchval(
                 """
-                SELECT id, running_total
-                  FROM budget_counters
+                SELECT id FROM budget_counters
                  WHERE user_id IS NOT DISTINCT FROM $1
                    AND time_window = $2
                    AND provider IS NOT DISTINCT FROM $3
                    AND role = $4
                    AND window_start = $5
-                   FOR UPDATE
                 """,
                 user_id,
                 cap.time_window,
@@ -613,12 +626,17 @@ class CostGate:
                 cap.role,
                 window_start,
             )
-            assert row is not None  # we just upserted
-            rows.append((cap, row["id"], row["running_total"]))
+            assert counter_id is not None  # we just upserted
+            ids.append((cap, counter_id))
+        ids.sort(key=lambda pair: pair[1])
 
-        # Sort by counter_id so the lock order is stable across calls;
-        # consistent ordering is what prevents deadlock.
-        rows.sort(key=lambda r: r[1])
+        rows: list[tuple[Any, ...]] = []
+        for cap, counter_id in ids:
+            running_total = await conn.fetchval(
+                "SELECT running_total FROM budget_counters WHERE id = $1 FOR UPDATE",
+                counter_id,
+            )
+            rows.append((cap, counter_id, running_total))
         return rows
 
     async def _counter_ids_for_role(
@@ -648,6 +666,30 @@ class CostGate:
             if row is not None:
                 ids.append(row["id"])
         return sorted(ids)
+
+    async def _settle_counter_ids(
+        self,
+        conn: asyncpg.Connection,
+        row: asyncpg.Record,
+    ) -> list[int]:
+        """Return the counter ids a settlement of ``row`` must adjust.
+
+        Uses the ids ``reserve()`` stored on the reservation, so the rows that
+        were incremented are the rows that are settled, even after a daily or
+        weekly boundary (FRE-1690). A row written before migration 0036 has
+        ``counter_ids`` NULL and falls back to the current-window derivation.
+
+        Args:
+            conn: Connection inside the settlement transaction.
+            row: Reservation row carrying ``role`` and ``counter_ids``.
+
+        Returns:
+            Counter ids in ascending order (the lock order of ``reserve()``).
+        """
+        stored = row["counter_ids"]
+        if stored is None:
+            return await self._counter_ids_for_role(conn, role=row["role"])
+        return sorted(stored)
 
     async def _insert_uncapped_reservation(
         self,
@@ -689,9 +731,9 @@ class CostGate:
             """
             INSERT INTO budget_reservations (
                 counter_id, role, amount_usd, status,
-                created_at, expires_at, trace_id, session_id, task_id
+                created_at, expires_at, trace_id, session_id, task_id, counter_ids
             )
-            VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval, $6, $7, $8, '{}')
             RETURNING reservation_id
             """,
             row["id"],

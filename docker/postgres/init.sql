@@ -302,7 +302,8 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
     settled_at TIMESTAMPTZ,
     trace_id UUID,
     session_id UUID,                    -- ADR-0074 §I3/FRE-693: turn joinability
-    task_id UUID                        -- sub-agent id (NULL at turn level, per route_traces)
+    task_id UUID,                       -- sub-agent id (NULL at turn level, per route_traces)
+    counter_ids BIGINT[]                -- FRE-1690: every counter reserve() incremented; NULL = pre-0036 row
 );
 -- Reaper hot-path: only scan active reservations past their TTL.
 CREATE INDEX IF NOT EXISTS idx_budget_reservations_reaper

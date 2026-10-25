@@ -369,6 +369,9 @@ class BudgetReservationModel(Base):
     trace_id = Column(PG_UUID(as_uuid=True), nullable=True)
     session_id = Column(PG_UUID(as_uuid=True), nullable=True)
     task_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    # Every budget_counters id that reserve() incremented (migration 0036, FRE-1690).
+    # NULL on rows written before the migration.
+    counter_ids: Column[list[int] | None] = Column(ARRAY(BigInteger), nullable=True)
 
 
 # ============================================================================

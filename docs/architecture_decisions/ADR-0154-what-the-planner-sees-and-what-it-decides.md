@@ -1,6 +1,6 @@
 # ADR-0154: What the Planner Sees and What It Decides — an Isolated Planner, Thinking Off, Asked on Every Turn of the Four Register Types
 
-**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amended by [ADR-0157](ADR-0157-seshat-effort-one-level-per-session.md) (FRE-1620, 2026-10-20): the Seshat effort level sets the round budget (D3) and adds the forced-SINGLE reason `effort_fast` (D2), and D7's requalification and AC-10 bind the default level only.
+**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amendment 3 accepted 2026-10-25 (owner, FRE-1678): the planner prompt `d13f0dca…`, in which the `general` worker line gains `artifact_read`, is admitted on llama.cpp b11751 without a passing D7 run. No threshold changes. Amended by [ADR-0157](ADR-0157-seshat-effort-one-level-per-session.md) (FRE-1620, 2026-10-20): the Seshat effort level sets the round budget (D3) and adds the forced-SINGLE reason `effort_fast` (D2), and D7's requalification and AC-10 bind the default level only.
 **Date:** 2026-10-03
 **Deciders:** Owner (one ADR in place of two, 2026-10-02; the design choice, the memory digest and the measurement budget, 2026-10-03), `master` (the five ADR-0152 review findings and the scope of FRE-1537), `adr` seat at Opus 5.5 (author, the 2026-10-03 planner measurement)
 **Tags:** routing, expansion, planner, memory, decomposition, latency
@@ -491,6 +491,10 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 ### 2026-10-18 - Amendment 2 accepted
 **Changed By:** Owner (decision), `adr` seat at Opus 5.5 (author, FRE-1607)
 **Reason:** The owner, 2026-10-18, relayed by master: "Do we care about adr right now? If so, approve its recommendation." Master judged yes and approved the seat's recommendation: the worker half first (ADR-0156 amendment of 2026-10-18), then the planner half (this amendment), each with its token cost and the smallest form. Codex review rounds are logged in the PR description.
+
+### 2026-10-25 - Amendment 3 accepted
+**Changed By:** Owner (decision), build seat (author, FRE-1678)
+**Reason:** The owner, 2026-10-25, relayed by master: "Ok. Go" (recorded on FRE-1678). It answers master's recommendation to ship PR #1377 with the planner prompt `d13f0dca…` and no further D7 run. The Requalification paragraph of D7 and the Proposed entry above allow this only through an owner-approved amendment of this ADR. An independent read of the runs reached the same conclusion on the evidence in Amendment 3, 3.1.
 ---
 
 ## Amendment 1 — The planner's added delay is measured per configuration, in the D7 probe (FRE-1587, 2026-10-11)
@@ -750,6 +754,47 @@ The plan schema gets no skill field, and the harness never assigns a skill to a 
 | A2-3 | The probe shows the gain, and only then does the line ship. | The 2.3 run, its scorer report with both arms, the Fisher p-value and the fingerprint, posted on the ticket before merge. | A threshold row fails, an existing D7 row fails, or the gain over the baseline has p ≥ 0.05. In the last case, the line does not ship. |
 
 Production is a floor, not a gate, as in Amendment 1, 1.4. The owner's traffic is too small to give a rate in a short window.
+
+---
+
+## Amendment 3 — The planner prompt with `artifact_read` is admitted on llama.cpp b11751 without a passing D7 run (FRE-1678, 2026-10-25)
+
+**Status:** Accepted. The owner decided it on 2026-10-25 ("Ok. Go", Status Updates). It admits one configuration. No threshold changes. Every other part of this ADR is unchanged.
+
+### Why
+
+- **The prompt changed by one tool name.** FRE-1678 gives the `general` worker the tool `artifact_read`. The `general` line of the planner prompt then lists one more tool in "Tools granted now". The prompt hash moves from `74d78c3a…` (the prompt that FRE-1622 qualified) to `d13f0dca737d388dbfb2acae3ce9b3d83028e543e0129403e70d34f95ddff5f2`. This is a routing change, so D7 requires a new passing run (Requalification).
+- **The D7 decline row did not pass on the new prompt.** Two D7 decision runs on b11751 gave 25 of 30 and 26 of 30. The thresholds need 28 of 30.
+- **The same row is also unstable on the qualified prompt.** On the same engine, the qualified prompt gave 29 of 30 in the baseline arm and 41 of 50 in the FRE-1694 control arm.
+
+### 3.1 — The evidence
+
+All runs used llama.cpp b11751, `qwen3.8-flash-next` UD-IQ4_XS, the `planner` mode, Standard with `p2` and 12 rounds. Each run used 3 draws per fixture (D7 runs) or 5 draws per fixture (the FRE-1694 arms). The source is the FRE-1678 and FRE-1694 comments of 2026-10-25.
+
+| Measure | `d13f0dca…` (with `artifact_read`) | `74d78c3a…` (qualified) |
+|---|---|---|
+| Decline-correct draws | 97 of 110 (88%): 25 of 30, 26 of 30, 46 of 50 | 70 of 80 (88%): 29 of 30, 41 of 50 |
+| Expand-correct draws | 161 of 176 (91%): 43 of 48, 46 of 48, 72 of 80 | 109 of 128 (85%): 43 of 48, 66 of 80 |
+
+- **The decline row cannot separate the two prompts on this engine.** Both prompts decline about 88% of the draws. At 88%, a run of 30 draws reaches the floor of 28 about 1 time in 4 (28%). So one run of this row passes or fails by chance, whichever prompt it tests.
+- **The expand row does not move against the new prompt.** The new prompt expanded more of its draws than the qualified prompt did.
+- **The 2 invalid plans.** They came from the 2 D7 decision runs of the new prompt. Both were on the fixture `susan_1_run_tool`, and both were `HYBRID` with an empty task list. Neither mentions `artifact_read`. Under D2, an invalid plan on a `planner_asked` turn returns the turn to the tool loop with zero workers. That is the expected result for this fixture, which must decline. The FRE-1694 study had 0 invalid plans in 810 draws.
+- **The limit of the evidence.** Each run is one set of draws at temperature 1.0. The evidence shows that the decline row has a spread that is larger than the gap between the two prompts. It does not show that the two prompts are equal.
+
+### 3.2 — The exception
+
+1. D7 admits the planner prompt `d13f0dca…` for the default level Standard on this configuration: llama.cpp b11751, `qwen3.8-flash-next` UD-IQ4_XS, the `planner` mode, `p2`, 12 rounds. It needs no new passing run.
+2. The pin `STANDARD_D2_PROMPT_SHA256` in `tests/personal_agent/orchestrator/test_seshat_effort_prompt_pin.py` takes the hash `d13f0dca…`. `QUALIFIED_SURFACE` in the same file gains `artifact_read`.
+3. The exception covers this prompt only. A later change to the planner prompt, the model, the quant, the planner mode or the engine build needs a D7 run as before.
+4. No threshold in D7 changes.
+5. The drop of the qualified prompt below the floor on b11751, and the reliability of the decline row, go to FRE-1695.
+
+### 3.3 — Verification / Acceptance Criteria of this amendment
+
+| # | Criterion | How it is checked | It fails if |
+|---|---|---|---|
+| A3-1 | The pin holds the admitted hash. | `tests/personal_agent/orchestrator/test_seshat_effort_prompt_pin.py` runs with no `xfail`. | The granted surface differs from `QUALIFIED_SURFACE`, or the rendered prompt hash differs from `STANDARD_D2_PROMPT_SHA256`. |
+| A3-2 | The exception stays inside its bounds. | The terminal planner event carries the prompt hash (Requalification), so a live turn shows which prompt ran. | A prompt other than `d13f0dca…` ships without a passing D7 run. |
 
 ---
 

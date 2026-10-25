@@ -97,6 +97,14 @@ class TestCatalogEntries:
         assert definition.resolve_mode("fast").reasoning_effort == "low"
 
     @pytest.mark.parametrize("key", _NEW_KEYS)
+    def test_the_planner_mode_is_the_lowest_effort(self, key: str) -> None:
+        """FRE-1696 (ADR-0154 Amendment 4): reasoning cannot be turned off, so the planner
+        call runs at the lowest effort the deployment accepts, with no other field.
+        """
+        mode = load_model_config().models[key].modes["planner"]
+        assert mode.model_dump(exclude_none=True) == {"reasoning_effort": "low"}
+
+    @pytest.mark.parametrize("key", _NEW_KEYS)
     def test_the_picker_only_models_declare_no_sampler_the_probe_did_not_need(
         self, key: str
     ) -> None:
@@ -332,6 +340,9 @@ class TestDispatch:
             (_GLM, "worker", "low"),
             (_DEEPSEEK, None, "high"),
             (_DEEPSEEK, "worker", "low"),
+            # FRE-1696: the planner call sends low, not DeepSeek's default high.
+            (_GLM, "planner", "low"),
+            (_DEEPSEEK, "planner", "low"),
         ],
     )
     async def test_the_effort_lever_reaches_the_wire_and_no_other_lever_does(

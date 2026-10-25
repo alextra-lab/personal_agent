@@ -662,6 +662,12 @@ models:
       # ADR-0157 D5: the Fast level's primary mode, the bottom of the dialect's range.
       fast:
         reasoning_effort: low
+      # ADR-0154 D4 (FRE-1696): the planner call's mode. Reasoning cannot be turned off here,
+      # so it runs at the lowest effort. Admitted WITHOUT a D7 run, by the owner's exception
+      # (ADR-0154 Amendment 4, "Enable both now", 2026-10-25). This mode opens the D2 gate:
+      # a GLM session asks the planner on the four register types. Rollback: delete it.
+      planner:
+        reasoning_effort: low
     # Tool calling: master's probe, finish_reason tool_calls. Vision and PDF: not
     # stated by the console or the probe, so declared false until checked.
     supports_function_calling: true
@@ -687,6 +693,11 @@ models:
       worker:
         reasoning_effort: low
       fast:
+        reasoning_effort: low
+      # ADR-0154 D4 (FRE-1696): as on glm-5.3-scaleway above. Low, not the `default` mode's
+      # high, and not the integer 1 that Scaleway lists (owner, 2026-10-25: "low only").
+      # Admitted without a D7 run (ADR-0154 Amendment 4). Rollback: delete it.
+      planner:
         reasoning_effort: low
     # Probe: one `reasoning_effort: low` call hung 120 s once in 12; the repeat answered in 0.3 s.
     # The probe's second call with a repeated prefix reported cached_tokens 0, so the

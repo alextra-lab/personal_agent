@@ -625,9 +625,8 @@ models:
   # probe of the deployed API on 2026-10-24 (FRE-1680 PR comment): glm-5.3 accepts low,
   # medium and high (200). deepseek-v4.1-flash accepts low and high (200) but returns 400
   # on medium ("DeepSeek V4.1 reasoning_effort must be low, high, xhigh, max, or an integer
-  # within [1, 100]"). So the two models differ: GLM `default` is `medium`, DeepSeek
-  # `default` is `high`, and DeepSeek's reasoning_effort_domain omits `medium`. `default`
-  # does not use `low`, which would silently cut thinking for the owner's quality comparison.
+  # within [1, 100]"). So the two models differ: GLM `default` is `low` (FRE-1699, below),
+  # DeepSeek `default` is `high`, and DeepSeek's reasoning_effort_domain omits `medium`.
   # xhigh and max are valid on DeepSeek but unmeasured and outside the dialect domain.
   #
   # Prices: the owner's console, read 2026-10-24, EUR x 1.18 (the rate the OVH chat entry
@@ -652,8 +651,11 @@ models:
     reasoning_effort_domain: [low, medium, high]
     default_mode: default
     modes:
+      # FRE-1699 (owner, 2026-10-25): low, not medium. At medium, one owner turn reached the
+      # 16,384 cap twice: 14,062 reasoning tokens cut a tool call, then 16,384 reasoning tokens
+      # left no answer (trace bff76b1d). Rollback: set this back to medium.
       default:
-        reasoning_effort: medium
+        reasoning_effort: low
       # sub_agent inherits the selected primary (config/model_roles.yaml), so a `worker` mode is required.
       worker:
         reasoning_effort: low

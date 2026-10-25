@@ -84,9 +84,12 @@ class TestCatalogEntries:
         assert definition.context_length == 262144
         assert definition.supports_function_calling is True
 
-    @pytest.mark.parametrize(("key", "default"), [(_GLM, "medium"), (_DEEPSEEK, "high")])
+    @pytest.mark.parametrize(("key", "default"), [(_GLM, "low"), (_DEEPSEEK, "high")])
     def test_modes_use_the_only_lever_the_probe_found(self, key: str, default: str) -> None:
-        """DeepSeek's default is high: master's probe got a 400 on its medium."""
+        """DeepSeek's default is high: master's probe got a 400 on its medium.
+
+        GLM's default is low (FRE-1699): at medium, its reasoning filled the 16,384 cap.
+        """
         definition = load_model_config().models[key]
         assert definition.default_mode == "default"
         assert definition.resolve_mode().reasoning_effort == default
@@ -325,7 +328,7 @@ class TestDispatch:
     @pytest.mark.parametrize(
         ("key", "mode", "effort"),
         [
-            (_GLM, None, "medium"),
+            (_GLM, None, "low"),
             (_GLM, "worker", "low"),
             (_DEEPSEEK, None, "high"),
             (_DEEPSEEK, "worker", "low"),

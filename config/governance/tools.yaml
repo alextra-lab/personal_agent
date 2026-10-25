@@ -137,6 +137,18 @@ sub_agent_tools:
       the task, and the read tool's own path rules still apply. It is a private read, so it
       goes only to the `general` type, which holds no outbound tool and no write tool.
 
+  artifact_read:
+    granted: true
+    reason: >-
+      FRE-1678, 2026-10-24. A worker whose task names an artifact could not read it: an
+      artifact has no file path (its bytes are in R2, its row in Postgres), so `read` refused
+      the path the worker invented and the worker searched the file system. `artifact_read`
+      fetches one artifact by id, scoped to the turn's user_id that a worker carries since
+      FRE-1467, so it reads no other user's artifact. It is a private read and sends nothing
+      out, so it goes only to the `general` type, which holds no outbound tool. A registry
+      test enforces that split. Like notes_search, the tool registers only when the R2
+      substrate is configured.
+
   notes_search:
     granted: true
     reason: >-

@@ -46,6 +46,7 @@ class TestRegistryShape:
             "notes_search",
             "read_skill",
             "read",  # ADR-0156 D9.4 (FRE-1580): only the files its task names
+            "artifact_read",  # FRE-1678: the artifact its task names, by id
         )
         assert spec.report_schema is None
         assert spec.default_thoroughness == "quick"

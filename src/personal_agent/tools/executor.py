@@ -257,10 +257,16 @@ def _validate_tool_arguments(
         # Check allowed paths (if specified)
         if tool_policy.allowed_paths:
             if not _validate_path_against_patterns(path, tool_policy.allowed_paths):
+                next_action = "Do not retry this path. Use a path that the path rules allow."
+                if tool_name == "read":
+                    # FRE-1678: an artifact has no file path. Without this, the model
+                    # searches the file system for the artifact it was asked about.
+                    next_action += (
+                        " An artifact has no file path. To read an artifact, "
+                        "call artifact_read with its artifact_id."
+                    )
                 return _governance_refusal(
-                    "path_refused",
-                    f"Path {path} is not in allowed paths",
-                    "Do not retry this path. Use a path that the path rules allow.",
+                    "path_refused", f"Path {path} is not in allowed paths", next_action
                 )
 
     # Check file size limits

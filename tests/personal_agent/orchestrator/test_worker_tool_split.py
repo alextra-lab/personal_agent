@@ -37,6 +37,7 @@ from personal_agent.tools.registry import ToolRegistry
 # `test_every_worker_tool_is_classified`, so the author must decide which side it is on.
 OUTBOUND = OUTBOUND_TOOLS
 # `read` reads local files (ADR-0156 D9.4: only the files a task names), so it is private.
+# `artifact_read` reads one of the turn user's artifacts (FRE-1678), so it is private too.
 PRIVATE = frozenset(
     {
         "search_memory",
@@ -45,6 +46,7 @@ PRIVATE = frozenset(
         "search_logs",
         "measure_model_latency",
         "read",
+        "artifact_read",
     }
 )
 # Reads nothing private and sends nothing out. `run_python` is here only because its
@@ -106,9 +108,7 @@ class TestTheRule:
         researcher = WORKER_TYPES[WorkerType.RESEARCHER]
         broken = {
             **WORKER_TYPES,
-            WorkerType.RESEARCHER: replace(
-                researcher, tools=(*researcher.tools, "search_logs")
-            ),
+            WorkerType.RESEARCHER: replace(researcher, tools=(*researcher.tools, "search_logs")),
         }
         assert types_holding_outbound_and_private(broken) == [WorkerType.RESEARCHER]
 
@@ -159,6 +159,7 @@ class TestToolsReachTheWorkers:
             "notes_search",
             "read_skill",
             "read",
+            "artifact_read",
         ),
     }
 
@@ -201,8 +202,8 @@ class TestToolsReachTheWorkers:
         """The F4 root cause: a granted name no registry holds never reaches the model.
 
         `run_python` and `read_skill` register with the primitive tools, which production
-        enables. `notes_search` registers only when R2 is configured, so it is excluded here
-        (the governance decision says the same).
+        enables. `notes_search` and `artifact_read` register only when R2 is configured, so
+        they are excluded here (the governance decision says the same).
         """
         from personal_agent.config import settings
 
@@ -217,7 +218,7 @@ class TestToolsReachTheWorkers:
             )
         }
         listed = {tool for spec in WORKER_TYPES.values() for tool in spec.tools}
-        conditional = {"notes_search"}
+        conditional = {"notes_search", "artifact_read"}
         assert (listed - conditional) <= offered, sorted((listed - conditional) - offered)
 
     @pytest.mark.parametrize("mode", [Mode.NORMAL, Mode.ALERT, Mode.DEGRADED, Mode.RECOVERY])

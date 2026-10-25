@@ -326,7 +326,8 @@ def _grant_error(
         retryable=False,
         next_action=(
             "Do not retry this path. Read only the files that the task names, or report "
-            "that you could not read the file."
+            "that you could not read the file. An artifact has no file path. To read an "
+            "artifact, call artifact_read with its artifact_id."
         ),
     )
 

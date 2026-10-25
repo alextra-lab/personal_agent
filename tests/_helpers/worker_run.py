@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.sub_agent import run_sub_agent
@@ -87,13 +88,17 @@ class WorkerRun:
 
 
 async def run_worker(
-    spec: SubAgentSpec, tool_calls: Sequence[tuple[str, dict[str, Any]]]
+    spec: SubAgentSpec,
+    tool_calls: Sequence[tuple[str, dict[str, Any]]],
+    *,
+    user_id: UUID | None = None,
 ) -> WorkerRun:
     """Run one worker whose model makes ``tool_calls`` in its first round, then stops.
 
     Args:
         spec: The worker spec.
         tool_calls: ``(tool_name, arguments)`` pairs. Call ids are ``c0``, ``c1`` and so on.
+        user_id: The turn's owning user, for a tool that is scoped to the user (FRE-1467).
 
     Returns:
         The run.
@@ -126,7 +131,9 @@ async def run_worker(
 
     client = AsyncMock()
     client.respond = AsyncMock(side_effect=_respond)
-    result = await run_sub_agent(spec=spec, llm_client=client, trace_id="t-1580")
+    result = await run_sub_agent(
+        spec=spec, llm_client=client, trace_id="t-1580", user_id=user_id
+    )
     # The landing call can trim old tool results, so collect them from every call. The loop
     # renames each call id to ``call_r<round>_<index>_<id>``; key by the original ``c<i>``.
     tool_messages = {

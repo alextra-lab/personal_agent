@@ -1519,7 +1519,7 @@ class TestSubAgentToolGrant:
     async def test_type_tools_outside_grant_set_are_stripped(
         self, controller: ExpansionController
     ) -> None:
-        """AC-2/AC-3: of general's seven tools, only the granted one is passed."""
+        """AC-2/AC-3: of general's nine tools, only the granted one is passed."""
         specs: list[Any] = []
         results = await _dispatch_hermetic(
             controller, _one_task_plan(), self._capture(specs), granted=("run_python",)
@@ -1534,6 +1534,7 @@ class TestSubAgentToolGrant:
             "notes_search",
             "read_skill",
             "read",
+            "artifact_read",
         )
         assert specs[0].denied_tools == denied
         assert results[0].denied_tools == denied

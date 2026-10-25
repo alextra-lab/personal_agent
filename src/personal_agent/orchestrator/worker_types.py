@@ -348,6 +348,9 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
                 # (governance/worker_read_grant.py). Held on every task so every general
                 # worker has the same tool bytes; with no file named, a read is refused.
                 "read",
+                # FRE-1678: an artifact has no file path, so `read` cannot reach it. The
+                # worker reads the artifact its task names by id, scoped to the turn's user.
+                "artifact_read",
             ),
             report_schema=None,
             default_thoroughness="quick",

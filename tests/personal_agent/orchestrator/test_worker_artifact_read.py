@@ -137,6 +137,8 @@ class TestTheWorkerReadsTheArtifactItsTaskNames:
             )
         payload = run.payload("c0")
         assert payload["ok"] is False
+        # The lookup ran and its user filter missed. A grant or governance refusal has another code.
+        assert payload["error"]["code"] == "not_found", payload
         assert "content" not in payload
 
 

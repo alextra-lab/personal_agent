@@ -441,7 +441,12 @@ def resolve_role_target(
     * **Budget** (``max_tokens``, ``default_timeout``) always applies, on any
       resolved deployment. The role owns it — it describes the job, not the
       model, so it is valid regardless of a per-turn selection or an explicit
-      ``model_key`` redirecting the role elsewhere.
+      ``model_key`` redirecting the role elsewhere. One limit applies (FRE-1700): a
+      deployment that declares ``max_timeout`` lowers the role's ``default_timeout`` to
+      that ceiling. The role still owns the number. The ceiling states the longest wait
+      that the deployment accepts, and it never raises a timeout. It binds only the
+      timeout that this function resolves. A call site that passes its own ``timeout_s``
+      skips it.
     * **Mode** (``binding.mode``) resolves against whichever deployment the
       role actually lands on: that deployment's own mode of this name, if it
       declares one. If the resolved deployment declares no mode of that name,
@@ -485,6 +490,9 @@ def resolve_role_target(
     }
 
     effective = definition.model_copy(update=overrides) if overrides else definition
+    # FRE-1700: the deployment's ceiling lowers the role's budget, never raises it.
+    if effective.max_timeout is not None and effective.default_timeout > effective.max_timeout:
+        effective = effective.model_copy(update={"default_timeout": effective.max_timeout})
     if binding.mode is not None:
         effective = with_requested_mode(effective, binding.mode, role=role, deployment_key=key)
     return key, effective

@@ -15,6 +15,8 @@
 #   context_length   Maximum context window in tokens
 #   max_concurrency  Max concurrent in-flight requests
 #   default_timeout  Request timeout in seconds
+#   max_timeout      Optional ceiling on the timeout any role resolves to here (FRE-1700);
+#                    lowers a role binding's budget, never raises it
 #
 # Local-model fields (omit for cloud models):
 #   endpoint         Base URL override (defaults to settings.slm_base_url)
@@ -644,6 +646,9 @@ models:
     # Same bound as the deepseek-v4.1-flash entry, where master's probe saw a 120 s hang.
     # The probe saw no hang on GLM.
     default_timeout: 180
+    # FRE-1700: a ceiling on any role's timeout here. The sub_agent binding asks for 600 s
+    # (FRE-1496, for local workers); one DeepSeek worker call held a turn for 274 s.
+    max_timeout: 180
     input_cost_per_token: 0.000002124    # EUR 1.80/MTok x 1.18
     output_cost_per_token: 0.00000649    # EUR 5.50/MTok x 1.18
     # reasoning_effort_domain makes the runtime gate refuse a call-site `none` or `xhigh`
@@ -682,6 +687,7 @@ models:
     max_tokens: 32768
     max_concurrency: 10
     default_timeout: 180
+    max_timeout: 180  # FRE-1700: see glm-5.3-scaleway above
     input_cost_per_token: 0.000000708    # EUR 0.60/MTok x 1.18 (cached input EUR 0.12 is not modelled)
     output_cost_per_token: 0.000002124   # EUR 1.80/MTok x 1.18
     # No `medium`: Scaleway returns 400 on it for this model (see the note above).

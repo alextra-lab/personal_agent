@@ -694,11 +694,9 @@ models:
         reasoning_effort: low
       fast:
         reasoning_effort: low
-      # ADR-0154 D4 (FRE-1696): as on glm-5.3-scaleway above. Low, not the `default` mode's
-      # high, and not the integer 1 that Scaleway lists (owner, 2026-10-25: "low only").
-      # Admitted without a D7 run (ADR-0154 Amendment 4). Rollback: delete it.
-      planner:
-        reasoning_effort: low
+      # No `planner` mode (ADR-0154 Amendment 4, 4.5). The owner withdrew it on 2026-10-25 ("Yes
+      # yes") after the AC-5 live turns of FRE-1696: 8 to 10 s per planner call, both turns
+      # expanded, and one expanded turn held 4.5 min on a 274 s worker call (trace 1d2d89fe).
     # Probe: one `reasoning_effort: low` call hung 120 s once in 12; the repeat answered in 0.3 s.
     # The probe's second call with a repeated prefix reported cached_tokens 0, so the
     # cached price was not observed.

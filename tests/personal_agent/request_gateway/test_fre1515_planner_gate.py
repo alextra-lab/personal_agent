@@ -246,8 +246,9 @@ QUALIFIED_PLANNER_DEPLOYMENTS = {"qwen3.8-flash-next"}
 
 #: The deployments whose ``planner`` mode the owner admitted without a D7 run (ADR-0154
 #: Amendment 4, FRE-1696, 2026-10-25: "Enable both now"). Reasoning is always on for both on
-#: Scaleway, and no managed paired arm exists, so neither could pass D7 as written.
-EXCEPTION_PLANNER_DEPLOYMENTS = {"glm-5.3-scaleway", "deepseek-v4.1-flash-scaleway"}
+#: Scaleway, and no managed paired arm exists, so neither could pass D7 as written. The owner
+#: withdrew DeepSeek's mode the same day after its live turns (Amendment 4, 4.5).
+EXCEPTION_PLANNER_DEPLOYMENTS = {"glm-5.3-scaleway"}
 
 
 def test_only_a_qualified_deployment_declares_a_planner_mode(catalog: ModelConfig) -> None:

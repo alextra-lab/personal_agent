@@ -197,6 +197,15 @@ def test_unsaved_choice_is_not_set_and_not_clearable() -> None:
         assert row.clearable is False
 
 
+def test_unreadable_saved_choices_are_unavailable_not_not_set() -> None:
+    """A failed read must not show a saved choice as absent, with its Clear button hidden."""
+    menu = build_menu(_inputs(saved_choices=None))
+    group = next(g for g in menu.groups if g.id == "saved_choices")
+    assert group.error == "unavailable" and group.rows == []
+    row = _row(menu, "models_per_role", "role.artifact_builder")
+    assert row.note is not None and "saved choices could not be read" in row.note
+
+
 def test_choices_that_the_turn_never_applies_say_so() -> None:
     """`attachment_cost` and `spend_threshold` pause with allow_preference=False."""
     menu = build_menu(

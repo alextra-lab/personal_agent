@@ -182,7 +182,8 @@ class MenuInputs:
         effort: The loaded Seshat effort presets.
         governance: The loaded governance files.
         budget: The running ``CostGate`` config, or ``None`` when no gate is started.
-        saved_choices: The request user's ``constraint_name`` to ``preferred_action`` map.
+        saved_choices: The request user's ``constraint_name`` to ``preferred_action`` map,
+            or ``None`` when the read failed.
         session: The open conversation's stored choices, or ``None`` with no conversation.
         location_consent: The user's stored consent, or ``None`` when it could not be read.
         grounding: ``(model_key, level)`` rows of ``grounding_enforcement_state``.
@@ -194,7 +195,7 @@ class MenuInputs:
     effort: SeshatEffortConfig | None
     governance: GovernanceConfig | None
     budget: BudgetConfig | None
-    saved_choices: Mapping[str, str]
+    saved_choices: Mapping[str, str] | None
     session: SessionInputs | None
     location_consent: bool | None
     grounding: Sequence[tuple[str, str]] | None
@@ -375,9 +376,10 @@ def _saved_choice_default(constraint: str, inp: MenuInputs) -> Overridden:
 
 
 def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
+    saved_choices = _need(inp.saved_choices)
     rows: list[SettingRow] = []
     for constraint in [*CONSTRAINT_OPTIONS, ARTIFACT_BUILDER_CONSTRAINT]:
-        saved = inp.saved_choices.get(constraint)
+        saved = saved_choices.get(constraint)
         note = (
             "The turn never applies a saved choice here. The card always asks."
             if constraint in _NEVER_APPLIED
@@ -463,6 +465,13 @@ def _artifact_builder_role_row(
     inp: MenuInputs, models: ModelConfig, default: str, note: str
 ) -> SettingRow:
     """Show the deployment that the next build uses, by the turn's own resolver."""
+    if inp.saved_choices is None:
+        return SettingRow(
+            name=f"role.{ARTIFACT_BUILDER_CONSTRAINT}",
+            value=default,
+            source="config file",
+            note=f"{note}; saved choices could not be read, so a saved choice may override this",
+        )
     saved = inp.saved_choices.get(ARTIFACT_BUILDER_CONSTRAINT)
     if saved is None or saved == "always_pause":
         return SettingRow(
@@ -705,7 +714,7 @@ async def collect_inputs(
             effort_level=str(session.seshat_effort) if session.seshat_effort is not None else None,
         )
 
-    saved: dict[str, str] = {}
+    saved: dict[str, str] | None = None
     try:
         rows = await ConstraintPreferencesRepository(db).list_for_user(user_id)
         saved = {str(r.constraint_name): str(r.preferred_action) for r in rows}

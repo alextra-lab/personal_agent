@@ -270,6 +270,28 @@ describe('session wiring', () => {
   });
 });
 
+describe('a stale session id', () => {
+  it('retries without the id and shows the defaults, so the page is never stuck', async () => {
+    mockSearchParams = new URLSearchParams('session=44444444-4444-4444-4444-444444444444');
+    mockGetSettingsMenu
+      .mockRejectedValueOnce(new Error('getSettingsMenu failed: 404'))
+      .mockResolvedValueOnce(menu());
+    render(<SettingsView view="menu" />);
+
+    expect(await screen.findByText('conversation.example')).toBeInTheDocument();
+    expect(mockGetSettingsMenu).toHaveBeenNthCalledWith(1, '44444444-4444-4444-4444-444444444444');
+    expect(mockGetSettingsMenu).toHaveBeenNthCalledWith(2, undefined);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows the load error when the retry without an id fails too', async () => {
+    mockSearchParams = new URLSearchParams('session=44444444-4444-4444-4444-444444444444');
+    mockGetSettingsMenu.mockRejectedValue(new Error('getSettingsMenu failed: 500'));
+    render(<SettingsView view="menu" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load/i);
+  });
+});
+
 describe('failure states', () => {
   it('says a group is unavailable, and still renders the other groups', async () => {
     const m = menu();

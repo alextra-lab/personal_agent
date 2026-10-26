@@ -2155,6 +2155,7 @@ async def clear_constraint_preference(
     if not is_known_constraint(constraint_name):
         raise HTTPException(status_code=422, detail=f"unknown constraint: {constraint_name}")
 
+    ctx = SystemTraceContext.new("clear_constraint_preference", user_id=request_user.user_id)
     cleared = await ConstraintPreferencesRepository(db).delete(
         request_user.user_id, constraint_name
     )
@@ -2163,6 +2164,7 @@ async def clear_constraint_preference(
         user_id=str(request_user.user_id),
         constraint=constraint_name,
         cleared=cleared,
+        trace_id=ctx.trace_id,
     )
     return {"constraint_name": constraint_name, "cleared": cleared}
 

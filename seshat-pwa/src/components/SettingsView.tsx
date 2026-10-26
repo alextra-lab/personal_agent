@@ -168,12 +168,21 @@ export function SettingsView({ view }: { view: 'menu' | 'system' }) {
   const sessionId = querySessionId ?? lastSessionId;
 
   const load = useCallback(() => {
+    const apply = (m: SettingsMenu) => {
+      setMenu(m);
+      setLoadFailed(false);
+    };
     return getSettingsMenu(sessionId)
-      .then((m) => {
-        setMenu(m);
-        setLoadFailed(false);
-      })
-      .catch(() => setLoadFailed(true));
+      .then(apply)
+      .catch(() => {
+        // A stored or linked session can be gone (404) or malformed (422). The menu must
+        // not stay stuck on it, so retry once without a session and show the defaults.
+        if (!sessionId) {
+          setLoadFailed(true);
+          return;
+        }
+        return getSettingsMenu(undefined).then(apply).catch(() => setLoadFailed(true));
+      });
   }, [sessionId]);
 
   useEffect(() => {

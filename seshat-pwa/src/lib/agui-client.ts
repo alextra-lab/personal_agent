@@ -14,7 +14,13 @@
  * See: docs/architecture_decisions/ADR-0075-websocket-transport.md
  */
 
-import type { AGUIEvent, ClientMessage, SeshatEffort, SessionConfig } from './types';
+import type {
+  AGUIEvent,
+  ClientMessage,
+  SeshatEffort,
+  SessionConfig,
+  SettingsMenu,
+} from './types';
 
 /**
  * Base URL for the Seshat backend.
@@ -844,6 +850,40 @@ export async function getConfig(): Promise<SessionConfig> {
   const resp = await fetch(`${SESHAT_API}/api/v1/config`, { headers: authHeaders() });
   if (!resp.ok) throw new Error(`getConfig failed: ${resp.status}`);
   return resp.json() as Promise<SessionConfig>;
+}
+
+/**
+ * Fetch the read-only settings menu (FRE-1702): every parameter that changes a turn,
+ * with its live value and the source that wins.
+ *
+ * @param sessionId - The open conversation, for the "This conversation" group. Omit it
+ *   to show the defaults.
+ * @returns The nine groups and the System group.
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function getSettingsMenu(sessionId?: string): Promise<SettingsMenu> {
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+  const resp = await fetch(`${SESHAT_API}/api/v1/settings${query}`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`getSettingsMenu failed: ${resp.status}`);
+  return resp.json() as Promise<SettingsMenu>;
+}
+
+/**
+ * Clear one saved constraint choice (FRE-1702). The only write in the settings menu.
+ *
+ * @param constraintName - The constraint whose saved choice is cleared.
+ * @returns The constraint name and whether a row existed and was deleted.
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function clearConstraintPreference(
+  constraintName: string,
+): Promise<{ constraint_name: string; cleared: boolean }> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/preferences/constraint?constraint_name=${encodeURIComponent(constraintName)}`,
+    { method: 'DELETE', headers: authHeaders() },
+  );
+  if (!resp.ok) throw new Error(`clearConstraintPreference failed: ${resp.status}`);
+  return resp.json() as Promise<{ constraint_name: string; cleared: boolean }>;
 }
 
 /**

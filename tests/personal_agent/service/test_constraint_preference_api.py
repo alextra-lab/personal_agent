@@ -155,3 +155,99 @@ def test_static_constraint_still_validated() -> None:
         assert bad.status_code == 422
     finally:
         _teardown()
+
+
+# ---------------------------------------------------------------------------
+# FRE-1702 — GET and DELETE on the same path (the settings menu's read + Clear)
+# ---------------------------------------------------------------------------
+
+_REPO = (
+    "personal_agent.service.repositories.constraint_preferences_repository."
+    "ConstraintPreferencesRepository"
+)
+
+
+def test_get_lists_the_users_saved_choices() -> None:
+    """GET returns each saved choice with its constraint, action and timestamp."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    stamp = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    rows = [
+        SimpleNamespace(
+            constraint_name="artifact_builder", preferred_action="claude_sonnet", updated_at=stamp
+        ),
+        SimpleNamespace(
+            constraint_name="spend_threshold", preferred_action="always_pause", updated_at=stamp
+        ),
+    ]
+    client = _client()
+    try:
+        with patch(f"{_REPO}.list_for_user", AsyncMock(return_value=rows)):
+            resp = client.get(_URL)
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "preferences": [
+                {
+                    "constraint_name": "artifact_builder",
+                    "preferred_action": "claude_sonnet",
+                    "updated_at": stamp.isoformat(),
+                },
+                {
+                    "constraint_name": "spend_threshold",
+                    "preferred_action": "always_pause",
+                    "updated_at": stamp.isoformat(),
+                },
+            ]
+        }
+    finally:
+        _teardown()
+
+
+def test_delete_clears_the_named_constraint() -> None:
+    """DELETE removes the named row for the request user and reports it."""
+    delete = AsyncMock(return_value=True)
+    client = _client()
+    try:
+        with patch(f"{_REPO}.delete", delete):
+            resp = client.delete(_URL, params={"constraint_name": "artifact_builder"})
+        assert resp.status_code == 200
+        assert resp.json() == {"constraint_name": "artifact_builder", "cleared": True}
+        delete.assert_awaited_once()
+        assert delete.await_args.args[1] == "artifact_builder"
+    finally:
+        _teardown()
+
+
+def test_delete_with_no_row_is_idempotent() -> None:
+    """Clearing a choice that is not saved is a success with cleared=false."""
+    client = _client()
+    try:
+        with patch(f"{_REPO}.delete", AsyncMock(return_value=False)):
+            resp = client.delete(_URL, params={"constraint_name": "tool_iteration_limit"})
+        assert resp.status_code == 200
+        assert resp.json() == {"constraint_name": "tool_iteration_limit", "cleared": False}
+    finally:
+        _teardown()
+
+
+def test_delete_unknown_constraint_rejected_422() -> None:
+    """DELETE validates the name as PUT does, and never reaches storage."""
+    delete = AsyncMock(return_value=True)
+    client = _client()
+    try:
+        with patch(f"{_REPO}.delete", delete):
+            resp = client.delete(_URL, params={"constraint_name": "not_a_constraint"})
+        assert resp.status_code == 422
+        delete.assert_not_awaited()
+    finally:
+        _teardown()
+
+
+def test_delete_requires_the_constraint_name() -> None:
+    """A DELETE with no constraint_name is a 422, not a delete-all."""
+    client = _client()
+    try:
+        assert client.delete(_URL).status_code == 422
+    finally:
+        _teardown()

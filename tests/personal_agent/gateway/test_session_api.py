@@ -951,6 +951,41 @@ def test_get_session_config_ac9_slice_reports_stored_selection_not_raw_default()
     assert primary["provenance"] == "server-hydrated"
 
 
+def test_get_session_config_inherit_role_shows_the_sessions_stored_primary() -> None:
+    """FRE-1702 AC-6 — a role bound to `inherit` shows the session's resolved primary.
+
+    `resolve_inherited_deployment` reads the in-turn selection, which is empty in a config
+    request, so sub_agent fell back to the primary's YAML default (qwen3.8-flash-next).
+    Turns were never affected. The payload must match what a turn would run.
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(
+                _SELECTION_GET_ALL,
+                new_callable=AsyncMock,
+                return_value={"primary": "glm-5.3-scaleway"},
+            )
+        )
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        stack.enter_context(_served_ids_patch())
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    roles = resp.json()["roles"]
+    assert roles["primary"]["resolved"] == "glm-5.3-scaleway"
+    assert roles["sub_agent"]["resolved"] == "glm-5.3-scaleway"  # NOT qwen3.8-flash-next
+    assert roles["sub_agent"]["provenance"] == "server-hydrated"
+
+
 def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> None:
     """ADR-0121 T5 (FRE-920): a row-less session falls back to the plain binding
     default for every role — the profile bridge FRE-918 relied on is retired,

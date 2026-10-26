@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +51,46 @@ class ConstraintPreferencesRepository:
         result = await self.db.execute(stmt)
         row = result.scalar_one_or_none()
         return str(row) if row is not None else None
+
+    async def list_for_user(self, user_id: UUID) -> list[UserConstraintPreferenceModel]:
+        """Return every stored preference row for a user, ordered by constraint name.
+
+        Args:
+            user_id: Owning user.
+
+        Returns:
+            The user's rows, or an empty list when the user has saved no choice.
+        """
+        stmt = (
+            select(UserConstraintPreferenceModel)
+            .where(UserConstraintPreferenceModel.user_id == user_id)
+            .order_by(UserConstraintPreferenceModel.constraint_name)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def delete(self, user_id: UUID, constraint_name: str) -> bool:
+        """Delete one (user, constraint) preference row.
+
+        Args:
+            user_id: Owning user.
+            constraint_name: Constraint whose saved choice is cleared.
+
+        Returns:
+            ``True`` when a row existed and was deleted, ``False`` when none existed.
+        """
+        stmt = (
+            sa_delete(UserConstraintPreferenceModel)
+            .where(
+                UserConstraintPreferenceModel.user_id == user_id,
+                UserConstraintPreferenceModel.constraint_name == constraint_name,
+            )
+            .returning(UserConstraintPreferenceModel.constraint_name)
+        )
+        result = await self.db.execute(stmt)
+        deleted = result.first() is not None
+        await self.db.commit()
+        return deleted
 
     async def upsert(
         self,

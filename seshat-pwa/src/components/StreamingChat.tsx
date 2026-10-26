@@ -340,6 +340,16 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
               Observe
             </Link>
 
+            {/* Settings nav link — FRE-1702: read-only menu of every parameter that changes a turn */}
+            <Link
+              href={sessionId ? `/settings?session=${sessionId}` : '/settings'}
+              onClick={() => setIsDrawerOpen(false)}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-ink-muted hover:text-ink hover:bg-surface border-b border-line/50 transition-colors"
+            >
+              <span aria-hidden="true">⚙️</span>
+              Settings
+            </Link>
+
             {/* Location consent toggle — FRE-230 (hidden when operator gate off) */}
             <LocationConsent />
 

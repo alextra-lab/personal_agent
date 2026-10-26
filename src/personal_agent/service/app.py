@@ -2089,6 +2089,150 @@ async def update_constraint_preference(
     }
 
 
+@app.get("/api/v1/preferences/constraint")
+async def list_constraint_preferences(
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict[str, list[dict[str, str]]]:
+    """List the authenticated user's saved constraint choices (FRE-1702).
+
+    A saved choice skips the decision card and applies silently on every turn, so the
+    settings menu must be able to show it.
+
+    Args:
+        request_user: Authenticated user (CF Access).
+        db: Async database session.
+
+    Returns:
+        ``{"preferences": [{"constraint_name", "preferred_action", "updated_at"}]}``,
+        ordered by constraint name. Empty when the user has saved no choice.
+    """
+    from personal_agent.service.repositories.constraint_preferences_repository import (
+        ConstraintPreferencesRepository,
+    )
+
+    rows = await ConstraintPreferencesRepository(db).list_for_user(request_user.user_id)
+    return {
+        "preferences": [
+            {
+                "constraint_name": str(row.constraint_name),
+                "preferred_action": str(row.preferred_action),
+                "updated_at": row.updated_at.isoformat(),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.delete("/api/v1/preferences/constraint")
+async def clear_constraint_preference(
+    constraint_name: str,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict[str, str | bool]:
+    """Clear one saved constraint choice for the authenticated user (FRE-1702).
+
+    After the row is gone, the next resolution of that constraint asks again (a static
+    constraint) or uses the configured default (``artifact_builder``). Clearing a choice
+    that is not saved succeeds with ``cleared: false``.
+
+    Args:
+        constraint_name: Constraint whose saved choice is cleared (query parameter).
+        request_user: Authenticated user (CF Access).
+        db: Async database session.
+
+    Returns:
+        The constraint name and whether a row existed and was deleted.
+
+    Raises:
+        HTTPException: 422 if the constraint name is unknown.
+    """
+    from personal_agent.orchestrator.constraint_options import is_known_constraint
+    from personal_agent.service.repositories.constraint_preferences_repository import (
+        ConstraintPreferencesRepository,
+    )
+
+    if not is_known_constraint(constraint_name):
+        raise HTTPException(status_code=422, detail=f"unknown constraint: {constraint_name}")
+
+    ctx = SystemTraceContext.new("clear_constraint_preference", user_id=request_user.user_id)
+    cleared = await ConstraintPreferencesRepository(db).delete(
+        request_user.user_id, constraint_name
+    )
+    log.info(
+        "constraint_preference_cleared",
+        user_id=str(request_user.user_id),
+        constraint=constraint_name,
+        cleared=cleared,
+        trace_id=ctx.trace_id,
+    )
+    return {"constraint_name": constraint_name, "cleared": cleared}
+
+
+@app.get("/api/v1/settings")
+async def get_settings_menu(
+    session_id: str | None = None,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict[str, object]:
+    """Return the read-only settings menu (FRE-1702, stage 1 of FRE-1698).
+
+    Shows every parameter that changes a turn, with its live value and the source that
+    wins. Values come from the running gateway. A secret, infrastructure or identity
+    value is never returned: the row holds ``"set"`` or ``"not set"``. The menu edits
+    nothing. The only write is ``DELETE /api/v1/preferences/constraint``.
+
+    Args:
+        session_id: The open conversation, for the "This conversation" group. Omit it
+            to show the defaults.
+        request_user: Authenticated user (CF Access). Saved choices are this user's.
+        db: Async database session.
+
+    Returns:
+        ``{"groups": [nine groups], "system": group}``. Each group holds ``id``,
+        ``title``, ``rows`` and ``error`` (``"unavailable"`` when it failed to load).
+
+    Raises:
+        HTTPException: 422 if ``session_id`` is not a UUID; 404 if the conversation
+            does not exist or belongs to another user.
+    """
+    from personal_agent.service import settings_menu
+
+    ctx = SystemTraceContext.new("get_settings_menu", user_id=request_user.user_id)
+    session_uuid: UUID | None = None
+    if session_id is not None:
+        try:
+            session_uuid = UUID(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="session_id must be a valid UUID") from exc
+
+    consent: bool | None = None
+    if settings.location_enabled:
+        try:
+            svc = _require_memory_service(ctx.trace_id)
+            consent = await svc.get_person_location_consent(str(request_user.user_id), ctx.trace_id)
+        except Exception as exc:
+            log.warning("settings_menu_consent_unavailable", error=str(exc), trace_id=ctx.trace_id)
+
+    try:
+        inputs = await settings_menu.collect_inputs(
+            db,
+            user_id=request_user.user_id,
+            session_id=session_uuid,
+            location_consent=consent,
+            trace_id=ctx.trace_id,
+        )
+    except settings_menu.SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="session not found") from exc
+    log.info(
+        "settings_menu_read",
+        user_id=str(request_user.user_id),
+        has_session=session_uuid is not None,
+        trace_id=ctx.trace_id,
+    )
+    return settings_menu.build_menu(inputs, trace_id=ctx.trace_id).model_dump(mode="json")
+
+
 @app.get("/api/v1/preferences/location")
 async def get_location_preference(
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008

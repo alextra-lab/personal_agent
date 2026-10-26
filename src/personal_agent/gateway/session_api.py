@@ -374,6 +374,8 @@ def _resolve_role_binding(
     role: str,
     config: ModelConfig,
     stored: str | None,
+    *,
+    primary_stored: str | None = None,
 ) -> tuple[str, str]:
     """Resolve a session's effective deployment for ``role``, plus provenance.
 
@@ -396,11 +398,19 @@ def _resolve_role_binding(
     (it is simply ignored: ``binding.open`` gates whether ``stored`` is
     honoured, matching AC-4a even when a row exists for a pinned role).
 
+    A role bound to ``inherit`` (ADR-0145 D1, today ``sub_agent``) resolves to the
+    session's primary. ``resolve_inherited_deployment`` reads the in-turn selection
+    ContextVar, which is empty in a config request, so this function resolves the
+    primary from ``primary_stored`` itself (FRE-1702 AC-6). A turn is not affected: it
+    sets the ContextVar.
+
     Args:
         role: The role to resolve.
         config: The loaded catalog.
         stored: This role's already-fetched selection-store value, or
             ``None`` when no row exists (or the batched read failed).
+        primary_stored: The session's stored ``primary`` selection, or ``None``. Read
+            only for a role bound to ``inherit``.
 
     Returns:
         ``(resolved_deployment_key, provenance)``.
@@ -408,12 +418,25 @@ def _resolve_role_binding(
     from personal_agent.config.model_loader import (  # noqa: PLC0415
         resolve_selected_deployment,
     )
+    from personal_agent.llm_client.models import INHERIT_DEPLOYMENT  # noqa: PLC0415
 
     binding = config.roles.get(role)
+    inherits = binding is not None and binding.deployment == INHERIT_DEPLOYMENT
     if binding is not None and binding.open and stored is not None:
         resolved = resolve_selected_deployment(role, stored, config)
-        provenance = "server-hydrated" if resolved == stored else "default"
-        return resolved, provenance
+        if resolved == stored:
+            return resolved, "server-hydrated"
+        if not inherits:
+            return resolved, "default"
+
+    if inherits:
+        primary = resolve_selected_deployment("primary", primary_stored, config)
+        provenance = (
+            "server-hydrated"
+            if primary_stored is not None and primary == primary_stored
+            else "default"
+        )
+        return primary, provenance
 
     return resolve_selected_deployment(role, None, config), "default"
 
@@ -681,7 +704,12 @@ async def get_session_config(
 
     roles: dict[str, Any] = {}
     for role, binding in config.roles.items():
-        resolved, provenance = _resolve_role_binding(role, config, stored_selections.get(role))
+        resolved, provenance = _resolve_role_binding(
+            role,
+            config,
+            stored_selections.get(role),
+            primary_stored=stored_selections.get("primary"),
+        )
         entry: dict[str, Any] = {
             "open": binding.open,
             "resolved": resolved,

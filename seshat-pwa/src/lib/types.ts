@@ -507,3 +507,45 @@ export interface ClassifiedErrorData {
   /** True when partial tool-result synthesis was salvaged into the reply. */
   partial: boolean;
 }
+
+// --------------------------------------------------------------------------
+// FRE-1702 — read-only settings menu (GET /api/v1/settings)
+// --------------------------------------------------------------------------
+
+/** The source that wins for a parameter's next-turn value. */
+export type SettingSource = 'code default' | '.env' | 'config file' | 'database row' | 'session';
+
+/** A JSON-compatible parameter value. A secret or infrastructure value is "set" or "not set". */
+export type SettingValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SettingValue[]
+  | { [key: string]: SettingValue };
+
+/** One parameter in the settings menu. */
+export interface SettingRow {
+  name: string;
+  value: SettingValue;
+  source: SettingSource;
+  /** The value this row overrides, when it overrides one. */
+  overrides: { value: SettingValue; source: SettingSource } | null;
+  /** True only for a saved choice that exists: the Clear button reads it. */
+  clearable: boolean;
+  note: string | null;
+}
+
+/** A menu group. `error` is the fixed code "unavailable" when the group failed to load. */
+export interface SettingsGroup {
+  id: string;
+  title: string;
+  rows: SettingRow[];
+  error: 'unavailable' | null;
+}
+
+/** The whole menu: nine groups, then the read-only System group. */
+export interface SettingsMenu {
+  groups: SettingsGroup[];
+  system: SettingsGroup;
+}

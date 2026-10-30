@@ -128,7 +128,7 @@ go backwards") — full retirement proceeded, plus:
 - `.env.example` had a dead `AGENT_EMBEDDING_ENDPOINT`/`AGENT_RERANKER_ENDPOINT` override
   (not a real settings field) — replaced with the actual production secrets
   (`AGENT_MANAGED_EMBEDDING_TOKEN`, `AGENT_VOYAGE_API_KEY`).
-- `docs/runbooks/embedder-managed-adoption.md` (master-owned, ADR-0112 D4/D6 adoption
+- `docs/archive/embedder-managed-adoption.md` (master-owned, ADR-0112 D4/D6 adoption
   runbook) had a stale precondition claiming production is "still `private` (local 0.6B)"
   and steps assuming the 0.6B container still exists to mirror/stop. Fixed the precondition
   and the two steps this deletion directly breaks; **left the runbook's substantive

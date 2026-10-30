@@ -309,7 +309,6 @@ personal_agent/
 ### Getting Started
 - **[Usage Guide](docs/guides/USAGE_GUIDE.md)** - Complete usage guide with examples
 - **[Configuration Guide](docs/guides/CONFIGURATION.md)** - Configuration reference
-- **[SLM Server Integration](docs/guides/SLM_SERVER_INTEGRATION.md)** - Local model server setup
 
 ### Architecture
 - **[Cognitive Architecture Redesign v2](docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)** - Current architecture specification (supersedes ADR-0017)

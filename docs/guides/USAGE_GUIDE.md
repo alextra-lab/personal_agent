@@ -455,6 +455,5 @@ models:
 ## Next Steps
 
 - See [Configuration Guide](CONFIGURATION.md) for detailed configuration
-- See [SLM Server Integration](SLM_SERVER_INTEGRATION.md) for LLM backend setup
-- See [Architecture Documentation](architecture/) for system design
+- See [Architecture Documentation](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) for system design
 - See [Contributing](../../README.md#contributing) for development setup

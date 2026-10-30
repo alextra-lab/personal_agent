@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- Agent service + inference stack running (see [EVALUATION_PHASE_GUIDE.md](../../../docs/guides/EVALUATION_PHASE_GUIDE.md)).
+- Agent service + inference stack running.
 - `PERSONAL_AGENT_EVAL=1` (harness safety gate).
 - Same model stack and config for both runs except the proactive flag.
 

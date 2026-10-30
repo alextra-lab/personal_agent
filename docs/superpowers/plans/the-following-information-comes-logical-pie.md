@@ -81,7 +81,7 @@ All issues: state **"Needs Approval"**, label **"PersonalAgent"** (state only, n
 - Project: **standalone docs hygiene** (no pillar). Covers DOC-1 + DOC-2 + DOC-3 as one batched docs PR/commit.
 - DOC-1: drop MLX/Apple-Silicon-as-required framing; reframe local inference as "backend-agnostic wrapper over an OpenAI-compatible endpoint (`LLM_BASE_URL`); current backend llama.cpp/GGUF; swappable." Touch `README.md:5,93,105,413`, `CLAUDE.md:123`, `.claude/CLAUDE.md:16`, `tools/TOOLS_OVERVIEW.md:30,122`. Leave historical ADRs (0016/0080) as-written but ensure they read as dated/superseded.
 - DOC-2: correct README `Qwen3.5→Qwen3.6`, replace the "single-brain / sole reasoning center" headline with the real hybrid (reasoning brain + sub-agent + cloud Sonnet 4.6), **preserving** the correct "no router SLM / deterministic gateway" claim. Touch `README.md:34,76`. Align with `COGNITIVE_ARCHITECTURE_REDESIGN_v2.md:72,576-601` (which is already correct). **Do not** introduce the term "context firewall" — it's the reviewer's phrasing, not a repo term; describe the sub-agent as the agent-as-tool digest-return worker it is.
-- DOC-3: one systematic README/specs↔`src/` drift sweep; output a checklist, fix in the same batched PR. Pick up `CONTEXT_INTELLIGENCE_SPEC.md:133` (stale `SLM_SERVER_INTEGRATION.md`).
+- DOC-3: one systematic README/specs↔`src/` drift sweep; output a checklist, fix in the same batched PR. Pick up `CONTEXT_INTELLIGENCE_SPEC.md:133` (stale `docs/archive/SLM_SERVER_INTEGRATION.md`).
 - Acceptance: no doc/comment implies MLX is required; no "single-brain/Qwen3.5" outside historical ADRs; drift checklist attached.
 
 ### Group C — Observability measurement items (fit the *active* L0 stream → file into Observability Foundation; sequence by owner)

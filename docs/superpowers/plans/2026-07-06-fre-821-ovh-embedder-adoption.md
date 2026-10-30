@@ -150,7 +150,7 @@ text on both endpoints — a wrong pooling mode would fail this).
    `retrieval-overlap` (top-k(10) overlap over the existing Neo4j index, fail
    loud if < 0.95). CLI shape mirrors FRE-817's `corpus_ab.py`. Credentials via
    `pass`.
-8. `docs/runbooks/embedder-managed-adoption.md` — new: master's exact deploy
+8. `docs/archive/embedder-managed-adoption.md` — new: master's exact deploy
    sequence (provision fallback container → run re-embed → set
    `AGENT_SUBSTRATE_PROFILE=managed_embedder` + `AGENT_EMBEDDING_DIMENSIONS=4096`
    together → verify both probe subcommands → stop old container → measure RAM)

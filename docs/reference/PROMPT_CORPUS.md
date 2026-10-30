@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `411a8a43` · Committed: 2026-10-14T04:55:44Z  
+> Source revision: `7369f563` · Committed: 2026-10-30T11:06:54Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -26,28 +26,28 @@
 | `tool_use_injected_prompt` | 🟢 STATIC | 202 | `src/personal_agent/orchestrator/prompts.py:163` |
 | `tool_awareness_prompt` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:201` |
 | `operator_stanza` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:368` |
-| `reflection_dspy_signature` | 🟢 STATIC | 816 | `src/personal_agent/captains_log/reflection_dspy.py:79` |
-| `reflection_manual_fallback` | 🟢 STATIC | 558 | `src/personal_agent/captains_log/reflection.py:172` |
+| `reflection_dspy_signature` | 🟢 STATIC | 769 | `src/personal_agent/captains_log/reflection_dspy.py:79` |
+| `reflection_manual_fallback` | 🟢 STATIC | 548 | `src/personal_agent/captains_log/reflection.py:294` |
 | `html_generation_system` | 🟢 STATIC | 1,607 | `src/personal_agent/tools/artifact_tools.py:1154` |
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 17,637  
+Total skill docs: 11 · Total tokens (all skills): 15,743  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
 | graph-inspection — Read the structure and exact facts of the knowledge graph | 1,756 | `skills/graph-inspection/SKILL.md` |
 | interaction-outcomes — How interactions ended, and what the reflections say | 823 | `skills/interaction-outcomes/SKILL.md` |
-| log-search — Count, break down and find agent log events | 2,229 | `skills/log-search/SKILL.md` |
+| log-search — Count, break down and find agent log events | 1,960 | `skills/log-search/SKILL.md` |
 | SKILL: Mermaid Diagrams | 3,593 | `skills/mermaid-diagrams/SKILL.md` |
-| model-latency — How slow the model calls are over a window | 825 | `skills/model-latency/SKILL.md` |
+| model-latency — How slow the model calls are over a window | 838 | `skills/model-latency/SKILL.md` |
 | sequential-thinking — Multi-Step Reasoning Procedure | 432 | `skills/sequential-thinking/SKILL.md` |
 | service-health — Is each service healthy? | 1,130 | `skills/service-health/SKILL.md` |
-| spend-and-tokens — The agent's own tokens, cost and budget | 2,559 | `skills/spend-and-tokens/SKILL.md` |
+| spend-and-tokens — The agent's own tokens, cost and budget | 2,324 | `skills/spend-and-tokens/SKILL.md` |
 | system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `skills/system-diagnostics/SKILL.md` |
 | system-metrics — CPU, memory and disk utilisation snapshot | 917 | `skills/system-metrics/SKILL.md` |
-| turn-explanation — Explain one turn end to end | 2,547 | `skills/turn-explanation/SKILL.md` |
+| turn-explanation — Explain one turn end to end | 1,144 | `skills/turn-explanation/SKILL.md` |
 
 ---
 
@@ -608,7 +608,7 @@ _Async function. Renders the operator stanza: the authenticated user's name and 
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 816 (docstring + field descriptors) |
+| **Token count** | 769 (docstring + field descriptors) |
 | **Source** | `src/personal_agent/captains_log/reflection_dspy.py:79` |
 
 ```
@@ -641,7 +641,7 @@ Focus areas:
 
 [had_errors] True when the trace contained at least one tool call failure or error event.
 
-[prompt_manifest] Snapshot of THIS turn's prompt composition: the ordered active component IDs, the cacheable static prefix hash, and a recent quality signal for the callsite (mean 0-3 rating over the trailing 7 days). Use it to notice composition problems and, when warranted, propose a prompt-composition change that names the specific component_id. Patterns to watch for: (1) A component that is always present yet never load-bearing — e.g. skill_index present but no skill content matched — propose trimming it. (2) A static prefix hash that changed recently — indicates cacheable prefix instability that erodes KV-cache reuse — propose stabilising it. (3) A declining or low mean rating for this callsite — suggest revisiting the prompt components driving those turns. When proposing a prompt change, name the component_id in proposed_change_what and set proposed_change_scope to 'llm_client' or 'orchestrator'. Empty string when no manifest is available — skip composition analysis.
+[prompt_manifest] Snapshot of THIS turn's prompt composition: the ordered active component IDs and the cacheable static prefix hash. Use it to notice composition problems and, when warranted, propose a prompt-composition change that names the specific component_id. Patterns to watch for: (1) A component that is always present yet never load-bearing — e.g. skill_index present but no skill content matched — propose trimming it. (2) A static prefix hash that changed recently — indicates cacheable prefix instability that erodes KV-cache reuse — propose stabilising it. When proposing a prompt change, name the component_id in proposed_change_what and set proposed_change_scope to 'llm_client' or 'orchestrator'. Empty string when no manifest is available — skip composition analysis.
 
 [rationale] Analysis of what happened and key observations about the execution
 
@@ -671,8 +671,8 @@ Focus areas:
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 558 |
-| **Source** | `src/personal_agent/captains_log/reflection.py:172` |
+| **Token count** | 548 |
+| **Source** | `src/personal_agent/captains_log/reflection.py:294` |
 
 ```
 You are a personal AI agent analyzing your own task execution to generate insights and improvement proposals.
@@ -708,8 +708,7 @@ Focus on:
 - Tool effectiveness (did tool calls provide value or could LLM handle directly?)
 - Mode/governance interactions
 - Opportunities for optimization (caching, parallelization, reduced tool calls)
-- Prompt composition patterns (unused components, unstable static prefix hash, low/declining
-  callsite ratings); when proposing a prompt change, name the specific component_id from the
+- Prompt composition patterns (unused components, unstable static prefix hash); when proposing a prompt change, name the specific component_id from the
   taxonomy and set scope to llm_client or orchestrator
 
 If this was a simple, successful task with no issues, keep the reflection lightweight.
@@ -1003,7 +1002,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,229 |
+| **Token count** | 1,960 |
 | **Source** | `skills/log-search/SKILL.md` |
 
 ```markdown
@@ -1013,7 +1012,7 @@ Check the result before you answer:
 
 - Answer only from a live query. Never answer from what the logs probably hold.
 - Start with the `search_logs` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
-- Use curl only for what the tool cannot do. The table below says which.
+- Use curl only for what the tool cannot do.
 - Use only the index families in this file. Never write a guessed index name.
 - A scheduled monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
 - The monitor of the local model server (`agent-monitors-slm-health`) is in the `service-health` skill.
@@ -1064,22 +1063,12 @@ run the last call above and read the buckets.
 
 ## Step 2 — When the tool cannot do it, use curl
 
-| Need | Why the tool cannot | Use |
-|---|---|---|
-| A family that is not `agent-logs`, `agent-topology` or `agent-monitors-slm-health` (captures, reflections, insights, other monitors) | `index` is a fixed list | `_search` with curl: see `references/curl-recipes.md` |
-| A field that the tool refuses and that exists | The allowlist is closed | Check the field first (below). Fields that hold conversation text are left out on purpose |
-| More than 50 hits, oldest first, or a window over 30 days | The caps | `_search` with curl |
-| ES\|QL | Not offered | `references/esql.md` |
-| The list of indices, or the fields of an index | Not offered | The two commands below |
+The tool takes only the index families `agent-logs`, `agent-topology` and
+`agent-monitors-slm-health`. It reads only the fields in its allowlist, and it leaves out the
+fields that hold conversation text on purpose. It returns at most 50 hits, newest first, and
+reads at most 30 days. It does not run ES|QL, and it does not list indices or fields.
 
-**Check a field before a curl aggregation.** Elasticsearch gives empty buckets, not an
-error, for a field that does not exist. A field missing from `fields` in this reply does not
-exist:
-
-```bash
-curl -fsS 'http://elasticsearch:9200/agent-logs-*/_field_caps?fields=event_type,level'
-curl -fsS 'http://elasticsearch:9200/_cat/indices?format=json&h=index,docs.count'
-```
+Past the tool's limits, and only with the `bash` tool: read `references/curl-steps.md`.
 
 ## Index families
 
@@ -1101,18 +1090,9 @@ A time bound must use the date field of its own family. A range on the wrong fie
 nothing and no error.
 
 A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both. Never cut a
-date off a name: a cut name such as `agent-logs-2026` looks real and is not. To classify a
-family, use the tested script:
+date off a name: a cut name such as `agent-logs-2026` looks real and is not.
 
-```bash
-curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
-  | grep '^agent-monitors-joinability-' \
-  | python3 skills/log-search/scripts/es_index_granularity.py agent-monitors-joinability
-```
-
-The script prints the daily and monthly counts, flags `MIXED`, and lists every name that it
-does not recognise. It exits 1 if its input is empty, so a failed `curl` is never read as
-"no indices".
+Past the tool's limits, and only with the `bash` tool: read `references/index-granularity.md`.
 
 ## Field notes
 
@@ -1532,7 +1512,7 @@ External resources (use for syntax lookup, not as import targets):
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 825 |
+| **Token count** | 838 |
 | **Source** | `skills/model-latency/SKILL.md` |
 
 ```markdown
@@ -1572,7 +1552,7 @@ model-call span matched in the window. It does not mean zero latency.
 
 ## Step 2 — A filter that the tool does not list
 
-Read `references/latency-recipe.md`. It holds a curl and `jq` recipe. Change the TraceQL
+Past the tool's limits, and only with the `bash` tool: read `references/latency-recipe.md`. It holds a curl and jq recipe. Change the TraceQL
 condition in `q`, and the recipe returns the same summary, with `complete` computed from the reply. Tempo answers on
 the compose network as `http://tempo:3200`. It is not reachable from the host shell.
 
@@ -1744,7 +1724,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,559 |
+| **Token count** | 2,324 |
 | **Source** | `skills/spend-and-tokens/SKILL.md` |
 
 ```markdown
@@ -1844,30 +1824,7 @@ Several factory roles share one budget cap. `budget_counter_snapshot` already ho
 pattern uses curl. The role in this event is the budget role from `config/governance/budget.yaml`,
 not the factory role of Pattern 3.
 
-```bash
-curl -fsS -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"filter": [
-      {"term": {"event_type": "budget_counter_snapshot"}},
-      {"range": {"@timestamp": {"gte": "now-5m"}}}
-    ]}},
-    "aggs": {"by_window": {
-      "terms": {"field": "time_window", "size": 5},
-      "aggs": {"by_role": {
-        "terms": {"field": "role", "size": 20},
-        "aggs": {
-          "running_total": {"max": {"field": "running_total"}},
-          "cap_usd": {"max": {"field": "cap_usd"}},
-          "utilization_ratio": {"max": {"field": "utilization_ratio"}}
-        }
-      }}
-    }}
-  }' | jq '.aggregations.by_window.buckets'
-```
-
-If the reply has no buckets, the last 5 minutes hold no snapshot. Widen `gte` to `now-30m` once.
+Past the tool's limits, and only with the `bash` tool: read `references/budget-snapshot.md`.
 
 ## Pattern 3c — Total spend by provider (last 24 hours)
 
@@ -2151,7 +2108,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,547 |
+| **Token count** | 1,144 |
 | **Source** | `skills/turn-explanation/SKILL.md` |
 
 ```markdown
@@ -2173,7 +2130,7 @@ Check the result before you answer:
 | Elasticsearch `agent-logs-*` | The calls, the tokens, the tool calls | `search_logs` (Steps 0 and 1) |
 | Gateway log | The same events, complete, with time stamps | `call_timeline.py` (Step 1b) |
 | Tempo | The duration of each span | curl on `tempo:3200` (Step 1c) |
-| Postgres `session_events` | What the browser received (`RUN_ERROR`, `STATE_DELTA`) | `psql` (Step 2) |
+| Postgres `session_events` | What the browser received (`RUN_ERROR`, `STATE_DELTA`) | psql (Step 2) |
 | R2 artifact store | The bytes of an artifact | Step 3 |
 | Inference-server log | The model server's view of each request | Step 4 |
 
@@ -2200,89 +2157,9 @@ search_logs(action="search", index="agent-logs", size=50, since="24h",
 
 The reply is newest first. Sort it by `@timestamp`. Read `input_tokens` down the primary calls.
 A big step up is context growth. The `tool_call_started` before it is the cause. A whole-file
-`read` is the usual one: file bytes divided by 4 are about the tokens (`wc -c <path>` gives the bytes).
+`read` is the usual one: file bytes divided by 4 are about the tokens.
 
-### Step 1b — The same timeline from the gateway log, with the time gaps
-
-Use this when the tool reply holds fewer events than expected, or when you need the gap in
-seconds between events. The script strips colour codes, keeps the trace, and prints one line for
-each model call, tool call and sub-agent end:
-
-```bash
-docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
-  | python3 skills/turn-explanation/scripts/call_timeline.py <trace_id>
-```
-
-Each line reads `HH:MM:SS  +Ns  CALL in=<tokens> role=<role>`, or `TOOL <name> <path>`. The
-`+Ns` is the gap since the previous line. The script exits 1 with one `error:` line when no event
-of the trace is in the window: widen `--since`, or use Step 1.
-
-### Step 1c — The spans of one trace (Tempo)
-
-Tempo answers on the compose network as `tempo:3200`. It is not reachable from the host shell.
-Write a trace id, a clock value and a number as a literal in the command. A shell variable or
-`$(...)` makes the command ask for approval.
-
-```bash
-# Each span with its duration in milliseconds, in time order (the id below is an example)
-curl -fsS 'http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '[.trace.resourceSpans[].scopeSpans[].spans[] | {name, spanId, parentSpanId, start: (.startTimeUnixNano | tonumber), durationMs: (((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)) / 1000000)}] | sort_by(.start)'
-```
-
-A span holds `name`, `spanId`, `parentSpanId` (absent for the root), `startTimeUnixNano`,
-`endTimeUnixNano`, `kind`, `attributes` and `status`. Times are in nanoseconds: divide by
-1,000,000 for milliseconds. A very large trace (more than 1000 spans) is slow: select the span
-fields with `jq` and do not print the whole trace.
-
-Recent traces. `limit` is required: a search without it fails silently.
-
-```bash
-curl -fsS 'http://tempo:3200/api/search?limit=10' | jq '.traces'
-curl -fsS 'http://tempo:3200/api/search/tags' | jq '.tagNames'
-```
-
-`q` takes TraceQL, with braces and quotes: `{ resource.service.name = "seshat-vps" }`. A bare
-`key=value` in `q` is refused with HTTP 400. `start` and `end` are Unix seconds, written as
-literals (`date +%s` gives the clock). Tempo status and version belong to the `service-health` skill.
-
-## Step 2 — What the browser received (Postgres `session_events`)
-
-```bash
-# ask: no allow rule covers docker exec, so this asks for approval.
-docker exec cloud-sim-postgres psql -U agent -d personal_agent -c \
- "select seq, event_type, payload->'data'->>'category' as cat, created_at \
-  from session_events where session_id='<session_id>' order by seq desc limit 20;"
-```
-
-## Step 3 — The bytes of an artifact, if the turn wrote one
-
-```bash
-# ask: no allow rule covers docker exec, so this asks for approval.
-docker exec cloud-sim-postgres psql -U agent -d personal_agent -t -c \
- "select r2_key from artifacts where id='<artifact_id>';"
-docker exec cloud-sim-seshat-gateway sh -c 'cd /app && /app/.venv/bin/python -c "
-import asyncio; from personal_agent.storage.artifact_store import get_artifact_store
-print(len(asyncio.run(get_artifact_store().get(\"<r2_key>\"))))"'
-```
-
-The first command gives the storage key. The second prints the size of the stored bytes.
-
-## Step 4 — Join the inference-server request log
-
-The model server writes a `request_complete` event for each request to `slm-requests-*`. It is
-tagged with the `X-Span-Id` and `X-Trace-Id` headers of the harness. Join on `span_id`
-for one call, or on `trace_id` for the turn:
-
-```bash
-# ask: the shell expands $CF_ACCESS_CLIENT_ID and $CF_ACCESS_CLIENT_SECRET here, so this is not a plain command and asks for approval.
-curl -fsS -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-  "https://es.example.com/slm-requests-*/_search?q=trace_id:<trace_id>&size=20" \
-  | jq -r '.hits.hits[]._source | [.ts, (.span_id // "?")[0:8], .prompt_tokens, .completion_tokens, .prefill_ms, .decode_ms, .total_ms, .cache_reuse] | @tsv'
-```
-
-Columns: time, span, prompt tokens, completion tokens, prefill ms, decode ms, total ms, cache
-reuse. A `cache_reuse` above 0 means the server reused a KV-cache prefix: the prompt was cheaper in
-compute than the token count shows. All times are UTC ISO-8601.
+Past the tool's limits, and only with the `bash` tool: read `references/other-substrates.md`.
 
 ## Reading the result
 
@@ -2306,12 +2183,6 @@ Check the result before you answer:
 | Failure | Cause | Next step |
 |---|---|---|
 | The tool reply holds no event for the trace | The `since` window is too short, or the id is wrong | Widen `since` to `7d` once. Check the id against Step 0 |
-| `error: no model call or tool call of trace ...` from the script | The window of `--since` is too short, or `docker logs` failed | Use `--since=2h`, or use Step 1 |
-| `docker logs` prints nothing | The container name is wrong | List the names with `docker ps` and use the gateway container |
-| Step 4 returns HTTP 401 or 403 | The access headers are missing | Say that the model server log is not reachable. Do not guess its content |
-| Step 4 cannot resolve the host | `es.example.com` is not reachable from here | Use Steps 1 to 3. They are self-contained on the gateway host |
-| A `span_id` is absent | An older turn | Match by `ts` within 5 seconds of `model_call_started` in the gateway log |
-| `could not resolve host: tempo` | The command ran on the host shell | Run it through the `bash` tool, which runs in the gateway container |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |
 ```
 

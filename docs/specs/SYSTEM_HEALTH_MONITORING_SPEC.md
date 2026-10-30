@@ -59,7 +59,7 @@ Before implementing, review these detailed specifications:
    - Integration tests
    - Error handling patterns
 
-4. **📋 Quick Reference**: `./IMPLEMENTATION_QUICK_REFERENCE.md`
+4. **📋 Quick Reference**: `../archive/IMPLEMENTATION_QUICK_REFERENCE.md`
    - Workflow guide
    - File lookup table
    - Common patterns

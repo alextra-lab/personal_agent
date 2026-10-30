@@ -1,7 +1,16 @@
 # Cognitive Architecture Redesign v2
 
 **Date**: 2026-03-16
-**Status**: Slices 1–3 Implemented — Slice 3 complete (2026-03-29). Follow-on work (context intelligence, eval baselines) is tracked in `CONTEXT_INTELLIGENCE_SPEC.md` and in Linear.
+**Status**: Partly implemented. Checked against `main` on 2026-10-30 (FRE-1707). These items shipped:
+- The 7-stage gateway pipeline in `src/personal_agent/request_gateway/`, with `TaskType`, `Complexity` and `DecompositionStrategy` (Slice 1, `6312e9e8`, 2026-03-17).
+- `MemoryProtocol` and its first implementation, `MemoryServiceAdapter` (`003df70e`). Real `store_episode()` and `promote()` (FRE-137, `b1e7e58e`). The episodic-to-semantic promote pipeline (FRE-138, `b8e979fd`).
+- Delegation composition: Stage A markdown packages (`e77216c2`) and the Stage B types `DelegationPackage` / `DelegationOutcome` (FRE-139, `baab38c0`).
+- The decomposition matrix, Stage 5 (FRE-126, `baaa2e14`), and the context budget, Stage 7 (FRE-128, `78c4dfaf`).
+- `SubAgentSpec` / `SubAgentResult` (FRE-129, `bdca31e7`). The brainstem expansion budget and contraction trigger (FRE-133, `b56eca69`).
+- Proactive memory, `suggest_relevant()` (FRE-174 to FRE-176, `13ee4f70`).
+- The tool loop gate (ADR-0062, signal severity revised by ADR-0063 §D5).
+
+Sections that carry a **Live now** note describe a design that did not ship as written. Each note names what replaced it. Follow-on work is tracked in `CONTEXT_INTELLIGENCE_SPEC.md` and in Linear.
 **Phase**: 2.4 — Cognitive Architecture Redesign
 **Supersedes**: ADR-0017 (Three-Tier Multi-Agent Orchestration)
 **Evolves**: ADR-0018 (Seshat Memory Librarian Agent)
@@ -69,8 +78,9 @@ can be made in microseconds.
 
 **2. One Brain, Many Hands**
 
-A single capable model (Qwen3.6-35B-A3B) is the reasoning center. It doesn't
-share this role. When it needs to expand, it spawns ephemeral sub-agents for
+A single primary model is the reasoning center. It doesn't share this role.
+The deployment is configuration: `config/model_roles.yaml` binds the `primary`
+role, and the owner can select another deployment for a session (ADR-0121 §4). When it needs to expand, it spawns ephemeral sub-agents for
 parallel work or delegates to external agents. Sub-agents are task-scoped
 processes, not persistent specialist identities. They expand and contract with
 demand.
@@ -86,7 +96,8 @@ compounds over time because it remembers.
 **4. Observability Is The Research Instrument**
 
 Every interaction, delegation, memory access, and self-improvement proposal is
-traced and visible in Elasticsearch/Kibana. This isn't just debugging -- it's
+traced and visible in Elasticsearch and Tempo, read through Grafana (Kibana
+was retired by FRE-1214, ADR-0129 D6 amendment). This isn't just debugging -- it's
 how you study the system. The dashboards are your microscope.
 
 **5. Expand and Contract**
@@ -131,8 +142,8 @@ are new.
 +--------------------------------v------------------------------------+
 |                      PRE-LLM GATEWAY                       [NEW]    |
 |                                                                     |
-|  Security -> Session -> Governance -> Intent -> Decomposition       |
-|                                       Classification  Assessment    |
+|  Security -> Session -> Intent -> Governance -> Decomposition       |
+|                         Classification         Assessment          |
 |                                            |         |              |
 |                                            v         v              |
 |                                       Context    Delegation         |
@@ -145,12 +156,12 @@ are new.
                                  |              |
               +------------------v--------+     |
               |      PRIMARY AGENT        |     |
-              |   Qwen3.6-35B-A3B        |     |
+              |   role: primary           |     |
               |                           |     |
               |   . Conversational core   |     |
               |   . Tool calling (MCP +   |     |
               |     native)               |     |
-              |   . Dynamic skill loading |     |
+              |   . Skills via read_skill |     |
               |   . Delegation composer   |     |
               +--+----------+--------+----+     |
                  |          |        |          |
@@ -160,7 +171,7 @@ are new.
     |  MCP Gateway  |  |         |  |  Internal sub-agents        |
     |  Native tools |  | Protocol|  |  (ephemeral, task-scoped)   |
     |  search_memory|  |  |      |  |                             |
-    |  system_health|  | Neo4j   |  |  External agents            |
+    |  read_skill   |  | Neo4j   |  |  External agents            |
     |  (extensible) |  | (+ future| |  (Claude Code, Codex, etc.) |
     |               |  |  stores)|  |                             |
     +---------------+  +----+----+  +-------------+---------------+
@@ -195,9 +206,9 @@ are new.
 | Layer | Today | After Redesign |
 |---|---|---|
 | **Interface** | CLI + `/chat` API | No change needed yet |
-| **Pre-LLM Gateway** | Heuristic routing (regex) + governance modes + memory recall detection | Full pipeline: security, session, governance, intent, decomposition assessment, context assembly, budget management |
-| **Primary Agent** | Orchestrator state machine routes to model roles (standard/reasoning/coding) via heuristic | Single 35B model as primary reasoning engine. State machine simplified -- no more role-switching mid-request. Model selection happens in gateway, not executor |
-| **Tools** | MCP Gateway + native tools (search_memory, system_health) | No structural change. Tool set grows organically |
+| **Pre-LLM Gateway** | Heuristic routing (regex) + governance modes + memory recall detection | Full pipeline: security, session, intent, governance, decomposition assessment, context assembly, budget management |
+| **Primary Agent** | Orchestrator state machine routes to model roles (standard/reasoning/coding) via heuristic | One primary model (the `primary` role in `config/model_roles.yaml`) as the reasoning engine. State machine simplified -- no more role-switching mid-request. The session's selection fixes the primary deployment before the gateway runs (ADR-0121 §4) |
+| **Tools** | MCP Gateway + native tools (search_memory, system_health) | No structural change. Tool set grows organically. Live list: `register_mvp_tools()` in `src/personal_agent/tools/__init__.py` (`system_health` was deleted by FRE-265) |
 | **Seshat / Memory** | Neo4j memory service with entity extraction, broad recall, session graph | Seshat protocol (abstract interface). Current Neo4j service becomes first implementation. Research agenda for memory types (episodic/semantic/procedural/working/derived) |
 | **Expansion** | Does not exist | Sub-agent spawning + external agent delegation + telemetry for both |
 | **Brainstem** | Homeostasis loop, sensors, scheduler, quality monitor | Adds expansion/contraction signals. Brainstem already monitors resource pressure -- now it also signals when expansion is safe or when to contract |
@@ -210,14 +221,19 @@ are new.
 
 ```
 User message
-  -> Pre-LLM Gateway: security, governance, intent: CONVERSATIONAL
+  -> Pre-LLM Gateway: security, intent: CONVERSATIONAL, governance
   -> Decomposition: SINGLE (fits in one context window)
-  -> Context Assembly: load session history + relevant memory from Seshat
-  -> Budget: trim to practical context limit
-  -> Primary Agent: respond using assembled context
+  -> Context Assembly: session history (passed in by the caller) + relevant memory from Seshat
+  -> Budget: trim the gateway's copy of the context to the practical limit
+  -> Primary Agent: the executor rebuilds the messages from the session and responds
   -> Response to user
   -> Background: TaskCapture -> ES, brainstem notified
 ```
+
+> **Live now (FRE-1135, `b0600ec3`):** the executor does not send the gateway's
+> trimmed copy of the history. It rebuilds the messages from the session
+> (`orchestrator/executor.py`, `step_init`). Stage 7 trims a copy that only
+> telemetry reads.
 
 **Flow 2: Complex Task Requiring Expansion**
 
@@ -253,6 +269,11 @@ User message: "I need a new FastAPI endpoint for session export.
   -> Capture outcome + learnings when complete
   -> Background: delegation telemetry -> ES
 ```
+
+> **Live now (FRE-1376):** DELEGATION routes to DELEGATE only when
+> `delegation_enabled` is true. The default is false. Otherwise the request
+> falls back to SINGLE, HYBRID or DECOMPOSE by complexity
+> (`request_gateway/decomposition.py`).
 
 **Flow 4: Expand -> Contract Cycle**
 
@@ -298,7 +319,7 @@ This mostly survives, but the semantics shift:
 |---|---|---|
 | **INIT** | Heuristic routing, memory recall detection | Pre-LLM Gateway handles all of this *before* the state machine starts. INIT just receives the assembled context |
 | **PLANNING** | Minimal (mostly unused) | Primary agent plans decomposition if gateway flagged DECOMPOSE. Otherwise skipped |
-| **LLM_CALL** | Selects model role, calls LLM | Always calls primary 35B model. No role selection -- model is predetermined |
+| **LLM_CALL** | Selects model role, calls LLM | Always calls the `primary` role. No role selection -- model is predetermined |
 | **TOOL_EXECUTION** | Execute tool calls from LLM | Same, plus: sub-agent spawning and external delegation are "tools" from the executor's perspective |
 | **SYNTHESIS** | Finalize reply, update session | Same, plus: capture delegation outcomes |
 | **COMPLETED** | Done | Same. Brainstem takes over for contraction phase |
@@ -311,37 +332,48 @@ complexity that was previously tangled into the executor.
 
 Within the `TOOL_EXECUTION` state, every tool call passes through `ToolLoopGate` before
 execution and reports its output afterward. The gate is a per-request registry of
-per-tool finite state machines (`ToolFSM`) and detects three loop signals:
+per-tool finite state machines (`ToolFSM`) and detects three loop signals. The signal
+severity follows ADR-0063 §D5, which revised the first design of ADR-0062:
 
 | Signal | Trigger | Gate decision |
 |--------|---------|---------------|
-| **Call identity** | Same `(tool, args_hash)` called > `loop_max_per_signature` times | `BLOCK_IDENTITY` |
+| **Call identity** | Same `(tool, args_hash)` called > `loop_max_per_signature` times | `ADVISE_IDENTITY` (advisory: the call runs, a hint is added) up to max + 2, then `BLOCK_IDENTITY` |
 | **Output identity** | Same `(tool, args_hash)` produced identical output ≥ 2 times | `BLOCK_OUTPUT` |
-| **Consecutiveness** | Same tool called N times in a row | `WARN_CONSECUTIVE` at N, `BLOCK_CONSECUTIVE` at N+1 |
+| **Consecutiveness** | Same tool called N (`loop_max_consecutive`) times in a row | `WARN_CONSECUTIVE` (advisory). `BLOCK_CONSECUTIVE` at N only for a tool with `loop_consecutive_terminal: true` |
 
-FSM states per tool: `IDLE → ACTIVE → WARNED → BLOCKED`.
+FSM states per tool: `IDLE → ACTIVE → BLOCKED`. An advisory decision leaves the tool `ACTIVE`.
 
-A `WARNED → ACTIVE` reset fires when a *different* tool runs between two calls to the
-warned tool — legitimate multi-tool workflows are not penalized.
+The consecutive count restarts at 1 when a *different* tool runs between two calls to the
+same tool, so legitimate multi-tool workflows are not penalized.
 
 Per-tool thresholds (`loop_max_per_signature`, `loop_max_consecutive`,
-`loop_output_sensitive`) live in `config/governance/tools.yaml`. Polling tools
-(`run_sysdiag`, `self_telemetry_query`, `infra_health`) set
-`loop_output_sensitive: true` so the output-identity signal is skipped for tools whose
-output legitimately changes each call.
+`loop_output_sensitive`, `loop_consecutive_terminal`) live in
+`config/governance/tools.yaml`. A tool with `loop_output_sensitive: true` skips the
+output-identity signal, because its output can change on each call. Today only `bash`
+sets it. `bash` and `run_python` set `loop_consecutive_terminal: true` (FRE-279).
 
 Every gate decision emits a structured `tool_loop_gate` log event (Level 2 observability).
 
-**ADR**: ADR-0062 — Tool Loop Gate. **Module**: `orchestrator/loop_gate.py`.
+**ADR**: ADR-0062 — Tool Loop Gate, ADR-0063 §D5. **Module**: `orchestrator/loop_gate.py`.
 
 ---
 
 ## 3. The Pre-LLM Gateway
 
-The deterministic intelligence layer -- everything that happens before the 35B
+The deterministic intelligence layer -- everything that happens before the primary
 model sees a single token. Today, pieces of this are scattered across
 `routing.py`, `executor.py`'s `step_init()`, and `mode_manager.py`. The
 redesign formalizes them into an explicit pipeline.
+
+> **Live now — stage order and events.** The pipeline is
+> `src/personal_agent/request_gateway/pipeline.py`. Stage 4 (intent) runs
+> *before* Stage 3 (governance), so that the task type is available downstream.
+> The gateway emits these events: `intent_classified`, `governance_evaluated`
+> (debug level), `decomposition_assessed`, `context_assembled`,
+> `context_budget_applied` and the summary event `gateway_output`. The event
+> names in sections 3.1 to 3.7 (`security_check`, `governance_decision`,
+> `intent_classification`, `decomposition_decision`, `context_budget`) are the
+> 2026-03 design. No code emits them.
 
 ### 3.1 Stage 1: Security [NEW]
 
@@ -353,6 +385,12 @@ redesign formalizes them into an explicit pipeline.
 Decision: ALLOW / REJECT (with reason).
 Telemetry: `security_check` event -> ES.
 
+> **Live now — not built.** Stage 1 is a pass-through stub
+> (`request_gateway/pipeline.py`, "Stage 1: Security (stub -- pass-through in
+> Slice 1)"). There is no `security.py`. The gateway runs none of the checks
+> above and emits no security event. No ADR or ticket replaced this design. It
+> stays unbuilt.
+
 ### 3.2 Stage 2: Session [EXISTS]
 
 - Load or create session (SessionManager -- exists)
@@ -361,6 +399,10 @@ Telemetry: `security_check` event -> ES.
 
 Output: `SessionContext` with history + metadata.
 Telemetry: `session_hydration` span -> ES.
+
+> **Live now (Slice 1, `6312e9e8`).** The gateway does not load the session.
+> The caller (the `/chat` path in `service/app.py`) loads the prior messages
+> and passes them in as `session_messages`. No `SessionContext` type exists.
 
 ### 3.3 Stage 3: Governance [PARTIAL]
 
@@ -376,6 +418,14 @@ Output: `GovernanceContext {mode, allowed_tools, expansion_permitted,
 cost_budget_remaining}`.
 Telemetry: `governance_decision` event -> ES.
 
+> **Live now (ADR-0063 §D1, FRE-260).** Governance is mode-only and runs after
+> Stage 4. It returns `GovernanceContext {mode, expansion_permitted,
+> expansion_budget, cost_budget_remaining}` (`request_gateway/types.py`). The
+> type has no `allowed_tools` field: each tool's `allowed_in_modes` in
+> `config/governance/tools.yaml` is the tool gate. The type declares
+> `cost_budget_remaining`, but no code sets it. Expansion is off in the ALERT,
+> DEGRADED, LOCKDOWN and RECOVERY modes (`request_gateway/governance.py`).
+
 ### 3.4 Stage 4: Intent Classification [PARTIAL -- evolves]
 
 Today: `heuristic_routing()` classifies to model roles (STANDARD, REASONING,
@@ -383,7 +433,7 @@ CODING) and a separate `is_memory_recall_query()` detects memory intent as a
 boolean flag. These are two disconnected mechanisms.
 
 Redesign: unify into **task types**, not model roles. The model is always
-the 35B -- what changes is how we prepare context and whether we expand.
+the primary -- what changes is how we prepare context and whether we expand.
 
 Task types:
 
@@ -405,7 +455,7 @@ classification -- that is the entire point. But the heuristics get richer than
 today's patterns.
 
 Output: `IntentResult {task_type, complexity, confidence, signals: list[str]}`.
-Telemetry: `intent_classification` event -> ES.
+Telemetry: `intent_classified` event -> ES (`request_gateway/pipeline.py`).
 
 ### 3.5 Stage 5: Decomposition Assessment [NEW]
 
@@ -417,14 +467,19 @@ Decision matrix:
 |---|---|---|
 | CONVERSATIONAL | any | SINGLE |
 | MEMORY_RECALL | any | SINGLE (memory-enriched) |
-| TOOL_USE | SIMPLE | SINGLE |
 | ANALYSIS | SIMPLE | SINGLE |
-| ANALYSIS | MODERATE | SINGLE or HYBRID |
+| ANALYSIS | MODERATE | HYBRID |
 | ANALYSIS | COMPLEX | DECOMPOSE |
+| PLANNING | SIMPLE | SINGLE |
 | PLANNING | MODERATE+ | HYBRID (agent plans, sub-agents research) |
-| DELEGATION | any | DELEGATE |
+| DELEGATION | any | DELEGATE when `delegation_enabled` is true. Otherwise SIMPLE → SINGLE, MODERATE → HYBRID, COMPLEX → DECOMPOSE (FRE-1376) |
 | SELF_IMPROVE | any | SINGLE (self-referential) |
-| any | any (resource pressure) | Force SINGLE + compress |
+| TOOL_USE | any | SINGLE |
+| any | governance denies expansion, expansion budget 0, `expansion_enabled` false, or the session effort level turns expansion off | Force SINGLE (checked before every row above) |
+
+The rows above are `_apply_matrix()` and `assess_decomposition()` in
+`request_gateway/decomposition.py`. `delegation_enabled` defaults to false. The
+effort level is ADR-0157 D4.
 
 For DECOMPOSE/HYBRID: the gateway does NOT plan the sub-tasks -- it just flags
 "this needs decomposition." The primary agent creates the decomposition plan.
@@ -438,8 +493,8 @@ For DECOMPOSE/HYBRID: the gateway does NOT plan the sub-tasks -- it just flags
 > applies, and the turn records `planner_gate_reason = planner_mode_absent`.
 
 Output: `DecompositionResult {strategy: SINGLE|HYBRID|DECOMPOSE|DELEGATE,
-reason, constraints}`.
-Telemetry: `decomposition_decision` event -> ES.
+reason, constraints, planner_gate_reason}`.
+Telemetry: `decomposition_assessed` event -> ES.
 
 ### 3.6 Stage 6: Context Assembly [PARTIAL]
 
@@ -467,12 +522,24 @@ Output: `AssembledContext {messages, memory_context, skills, tool_definitions,
 delegation_context}`.
 Telemetry: `context_assembly` span -> ES (with source sizes).
 
+> **Live now.** Stage 6 is `assemble_context()` in `request_gateway/context.py`.
+> It emits `context_assembled`.
+> - **Memory:** a MEMORY_RECALL turn gets broad recall (`recall_broad()`). Any
+>   other turn gets graph entity matching (FRE-1041), plus proactive
+>   suggestions when `proactive_memory_enabled` is true (FRE-174 to FRE-176).
+> - **Skills:** Stage 6 loads no skills. `AssembledContext.skills` exists, but
+>   no code sets it. ADR-0156 D2 (FRE-1577) replaced task-type skill loading:
+>   the system prompt holds a catalog line per skill, and the model loads a body
+>   with the `read_skill` tool. See section 4.2.
+
 ### 3.7 Stage 7: Context Budget [NEW]
 
 Ensure assembled context fits the practical window.
 
-Practical budget (reference hardware: M4 Max 128GB; adjust for different
-configurations) with 35B @ 8-bit:
+Practical budget as planned in 2026-03 (reference hardware: M4 Max 128GB; a
+35B model @ 8-bit). The live budget is the context length of the session's
+primary deployment, with `context_budget_max_tokens` as the fallback (FRE-978,
+`request_gateway/pipeline.py`):
 
 - Model weights: ~35 GB
 - KV cache headroom: ~60-80 GB available
@@ -497,6 +564,16 @@ constraint meets the delegation architecture.
 Output: `BudgetedContext {final_messages, token_count, trimmed: bool,
 overflow_action: str | None}`.
 Telemetry: `context_budget` event -> ES (budget vs actual, what was trimmed).
+
+> **Live now (FRE-128, then FRE-1135).** `apply_budget()` in
+> `request_gateway/budget.py` trims in three phases: drop the oldest history
+> (keep system messages and the last user message), then drop the memory
+> context, then drop the tool definitions. It does not summarize. It never
+> forces a DECOMPOSE re-entry. It returns an `AssembledContext` with
+> `token_count`, `trimmed` and `overflow_action` set. No `BudgetedContext` type
+> exists. It emits `context_budget_applied`. The executor does not send this
+> trimmed copy. It rebuilds the messages from the session (FRE-1135,
+> `b0600ec3`), so Stage 7 today feeds telemetry only.
 
 ### 3.8 Gateway Failure Modes and Graceful Degradation
 
@@ -523,20 +600,28 @@ re-entry path always produces a context that fits.
 
 **Telemetry principle:** Every degradation emits a structured event to ES with
 the stage name, failure type, and degradation path chosen. This makes failure
-patterns visible in Kibana and feeds the insights engine.
+patterns visible in the dashboards and feeds the insights engine.
+
+> **Live now.** The flags `security_degraded`, `session_ephemeral` and
+> `memory_degraded` do not exist, and there is no re-entry path from Stage 7 to
+> Stage 5. The pipeline records a `degraded_stages` list on `GatewayOutput`
+> (`request_gateway/pipeline.py`). Its one entry today is
+> `context_assembly:memory_unavailable`, set when a MEMORY_RECALL turn gets no
+> memory context. The dashboard UI is Grafana. Kibana was retired (FRE-1214,
+> ADR-0129 D6 amendment).
 
 ### 3.9 What This Replaces in Current Code
 
 | Current Code | What Happens |
 |---|---|
 | `routing.py: heuristic_routing()` | Evolves into Stage 4 (intent classification). Same regex approach, richer task types instead of model roles |
-| `routing.py: resolve_role()` | Removed. No more role resolution -- the model is always the 35B primary |
+| `routing.py: resolve_role()` | Kept as an identity mapping (ADR-0033 two-tier taxonomy). No role switching -- the user-facing path always uses the `primary` role |
 | `routing.py: is_memory_recall_query()` | Moves into Stage 4 as one of the intent classifiers (memory recall is a task type, not a separate boolean check) |
 | `routing.py: _MEMORY_RECALL_PATTERNS` | Absorbed into Stage 4 intent patterns |
 | `executor.py: step_init()` | Split: memory/routing logic moves to Stages 4-6. `step_init()` becomes thin -- just receives the gateway output |
 | `mode_manager.py` | Stays, feeds into Stage 3 (governance). Gains resource-pressure signaling |
 | `config/models.yaml: router role` | Removed or repurposed. The `liquid/lfm2.5-1.2b` router entry is no longer used for request classification. See Section 3.10 for potential future roles |
-| `orchestrator/types.py: ModelRole.ROUTER` | Removed. Intent classification returns task types, not model roles |
+| `orchestrator/types.py: ModelRole.ROUTER` | Removed. Intent classification returns task types, not model roles. `ModelRole` now lives in `llm_client/types.py` and mirrors the `bindings:` in `config/model_roles.yaml` (FRE-1037) |
 
 ### 3.10 The Router SLM Question
 
@@ -559,7 +644,7 @@ later slice.
 
 ### 4.1 The Primary Agent
 
-The 35B model is the single reasoning center. Everything **on the user-facing
+The primary model is the single reasoning center. Everything **on the user-facing
 request path** flows through it -- conversation, analysis, planning, delegation
 instructions, self-improvement proposals. Background self-analysis streams have
 their own configurable model assignment (see 4.1.1).
@@ -587,34 +672,42 @@ gateway -> primary agent -> response flow. Three background self-analysis
 streams operate outside this path and have **independently configurable model
 assignments**:
 
-| Stream | Config Key | What It Does |
-|--------|-----------|--------------|
-| Entity extraction | `entity_extraction_role` | Extracts knowledge graph entities from conversations |
-| Captain's Log reflection | `captains_log_role` | Generates self-reflection entries from task telemetry |
-| Insights analysis | `insights_role` | Detects cross-data patterns and proposes improvements |
+| Stream | Role | What It Does |
+|--------|------|--------------|
+| Entity extraction | `entity_extraction` | Extracts knowledge graph entities from conversations |
+| Captain's Log reflection | `captains_log` | Generates self-reflection entries from task telemetry |
+| Insights analysis | `insights` | Detects cross-data patterns and proposes improvements |
 
-Each key in `config/models.yaml` points to any entry in the `models:` dict.
-The dispatch code in each consumer checks the resolved model's `provider`
-field -- a cloud provider value routes to the corresponding SDK client, `None`
-routes to `LocalLLMClient`. Model assignment is a config change, not a code
-change.
+> **Live now (ADR-0099, ADR-0121, ADR-0145 D4, ADR-0141).** Each role is a
+> key in the `bindings:` table of `config/model_roles.yaml`. Each binding names a
+> deployment in the `models:` catalog of `config/models.yaml`. The 2026-03 design
+> put `*_role` keys in `models.yaml` and sent a `None` provider to
+> `LocalLLMClient`. Both are gone: `LocalLLMClient` was deleted (FRE-1367,
+> `a5b1729e`), and every role now dispatches through one `LiteLLMClient` per
+> deployment (`llm_client/factory.py`, ADR-0141). The file binds more roles than
+> these three. Read it for the live bindings. Model assignment is a config
+> change, not a code change.
 
 **Why separate:** These streams run in the background during contraction
-(brainstem-scheduled). On current hardware (single Apple Silicon GPU), running
-them on the primary 35B model would block user-facing inference. Offloading to
-a cloud model avoids this contention. This limitation is **hardware-dependent,
-not architectural** -- when local concurrency improves (second GPU, faster
-hardware, dedicated inference server), these streams should return to local
-models by changing only the `models.yaml` role assignments.
+(brainstem-scheduled). In 2026-03, running them on the local primary model
+would block user-facing inference, so they moved to cloud models. This
+limitation is **hardware-dependent, not architectural** -- a stream can return
+to a local model by a change to its binding in `config/model_roles.yaml` only.
 
-**Invariant:** The Slice 1 implementation must not collapse this indirection.
-The `models.yaml` process-role mechanism and provider-based dispatch in
-`entity_extraction.py` and `reflection.py` must be preserved through all
-refactoring. The `insights_role` key is reserved for future LLM-based
-analysis in `engine.py`; when that capability is added, it must follow the
-same pattern.
+**Invariant:** The implementation must not collapse this indirection. Each
+background stream resolves its model through its role binding, never through a
+hard-coded model.
 
 ### 4.2 Dynamic Skill Loading
+
+> **Live now — replaced by ADR-0156 D2 (FRE-1577).** The design below did not
+> ship as written. A skill is a folder `skills/<name>/` with a `SKILL.md` in the
+> Agent Skills format (`orchestrator/skills.py`). The cached system prompt holds
+> one catalog line (name and description) per skill. The model loads a skill
+> body with the `read_skill` tool. Nothing maps a task type to a skill, and the
+> gateway injects no skill content. The directories in the tree below
+> (`architecture/`, `delegation/`, `memory/` …) do not exist. The live skills
+> are the folders in `skills/`.
 
 Today, the system prompt is static -- the same instructions regardless of task
 type. In the redesign, the gateway's Context Assembly stage loads task-relevant
@@ -676,6 +769,9 @@ collaborator, its memory capabilities, and its delegation model. It should
 NOT contain task-specific instructions -- those come from skills. This
 separation keeps the base prompt stable across all task types while allowing
 rich contextual augmentation.
+
+> **Live now (ADR-0156 D2).** Skills are not part of the task-type injection.
+> The model loads them on demand with `read_skill` (section 4.2).
 
 ### 4.4 The Expansion Model
 
@@ -759,8 +855,12 @@ specialist identities. They are **task-scoped inference calls** -- the primary
 agent specifies a sub-task, the system runs a focused LLM call with a
 constrained context, and returns the result.
 
+The shipped types are in `src/personal_agent/orchestrator/sub_agent_types.py`
+(FRE-129). Their fields differ from this 2026-03 sketch. Read that file for
+the contract.
+
 ```python
-# Conceptual types -- defines the contract
+# Conceptual types -- the 2026-03 sketch of the contract
 @dataclass(frozen=True)
 class SubAgentSpec:
     """What the primary agent provides to spawn a sub-agent."""
@@ -792,14 +892,16 @@ Sub-agent characteristics:
 - Return a compressed result -- summary + key findings, not full trace.
 - Full trace goes to ES for observability, but only the summary enters the
   primary agent's context.
-- Brainstem monitors resource pressure during expansion -- if GPU/memory
+- Brainstem monitors resource pressure during expansion -- if CPU/memory
   spikes, remaining sub-agents queue rather than running in parallel.
 
 Which model runs sub-agents is a design variable:
 
-- **Default**: Same 35B model.
+- **Default**: the `sub_agent` role in `config/model_roles.yaml`. Its binding
+  `deployment: inherit` resolves to the session's primary deployment, in that
+  deployment's `worker` mode (ADR-0145 D1, FRE-1445).
 - **Optimization**: For simple sub-tasks (summarization, data gathering), a
-  smaller model (9B) could suffice with less resource pressure.
+  smaller model could suffice with less resource pressure.
 - **Research question**: Does sub-agent quality degrade meaningfully with a
   smaller model? Testable. Telemetry will answer this.
 
@@ -838,8 +940,9 @@ The brainstem gains two new signals:
 
 **Expansion Permission Signal:**
 
-Brainstem evaluates current GPU utilization, available memory headroom, active
-inference count (concurrency controller), and recent error rate. Produces
+Brainstem evaluates current CPU load, memory used and the active inference
+count (concurrency controller) — `compute_expansion_budget()` in
+`brainstem/expansion.py` (FRE-133). It reads no GPU metric and no error rate. Produces
 `expansion_budget: int` -- how many sub-agents are safe to run in this
 expansion. On the local model they run one at a time (FRE-1380). On a cloud
 deployment the budget also bounds how many run side by side (FRE-1635).
@@ -873,6 +976,9 @@ rewriting the intelligence layer.
 
 ### 5.2 What Exists Today
 
+The table records 2026-03. The five rows marked "Live now" changed after that
+date (checked 2026-10-30).
+
 | Capability | Status |
 |---|---|
 | Entity extraction from conversations | Works |
@@ -886,12 +992,12 @@ rewriting the intelligence layer.
 | Brainstem-scheduled consolidation | Works |
 | Quality monitoring | Works |
 | **Curation intelligence** | Missing |
-| **Contradiction detection** | Missing |
+| **Contradiction detection** | Live now: claim supersession, not `check_contradiction()` (`memory/supersession.py`, ADR-0098 D2, FRE-638) |
 | **Lifecycle management (forgetting)** | Missing |
-| **Confidence scoring on memories** | Missing |
-| **Memory type distinction** | Missing |
-| **Proactive surfacing** | Missing |
-| **Abstract protocol** | Missing |
+| **Confidence scoring on memories** | Live now: `KnowledgeWeight.confidence` on entity nodes (`memory/weight.py`, FRE-192) |
+| **Memory type distinction** | Live now: `MemoryType` enum (`memory/protocol.py`) |
+| **Proactive surfacing** | Live now: `suggest_relevant()` (`memory/proactive.py`, FRE-174 to FRE-176) |
+| **Abstract protocol** | Live now: `MemoryProtocol` (`memory/protocol.py`, Slice 1) |
 
 ### 5.3 Memory Types
 
@@ -916,8 +1022,9 @@ delegation templates that produce good results, query strategies that find
 relevant memory. Storage: not yet implemented.
 
 **Profile (user model -- "who you are"):** Preferences, interests and their
-evolution, working patterns, feedback history. Storage: PostgreSQL
-user_interests. Minimal today.
+evolution, working patterns, feedback history. Storage: Neo4j. No
+`user_interests` table exists. `MemoryService.get_user_interests()`
+(`memory/service.py`) derives interests from entity mention counts. Minimal today.
 
 **Derived (insights -- "what I've figured out"):** Patterns detected by
 insights engine, Captain's Log synthesis, cross-session correlations,
@@ -932,7 +1039,20 @@ core intelligence.**
 
 ### 5.4 The Seshat Protocol
 
-The abstract interface that all memory operations go through:
+The abstract interface that all memory operations go through.
+
+> **Live now.** The shipped `MemoryProtocol` (`memory/protocol.py`) is
+> narrower than the 2026-03 sketch below. Its methods are `recall`,
+> `recall_broad`, `store_episode`, `promote`, `is_connected`,
+> `suggest_relevant`, `resolve_message_entities` and `get_current_stances`.
+> All except `is_connected` take a `trace_id: str`, not a `TraceContext`. The implementation is
+> `MemoryServiceAdapter` (`memory/protocol_adapter.py`, Slice 1 `003df70e`,
+> FRE-137). Sources for the later methods: `suggest_relevant` FRE-174 to
+> FRE-176, `resolve_message_entities` FRE-1041. These sketch methods do not
+> exist anywhere: `store_procedure`, `get_working_context`, `consolidate`,
+> `demote`, `forget`, `check_contradiction`, `assess_health`,
+> `get_provenance`. A different protocol, `memory/protocols.py`, defines a
+> `store_fact`.
 
 ```python
 class MemoryProtocol(Protocol):
@@ -1190,9 +1310,10 @@ Every delegation event produces rich telemetry in Elasticsearch:
 }
 ```
 
-Kibana dashboards show: delegation success rate by agent/type/complexity,
-average rounds (trending down = learning), most common missing context, cost
-per delegation, time-to-completion trends.
+The 2026-03 plan put these views on Kibana dashboards: delegation success rate
+by agent/type/complexity, average rounds (trending down = learning), most
+common missing context, cost per delegation, time-to-completion trends. Kibana
+was retired (FRE-1214, ADR-0129 D6 amendment). Grafana is the dashboard UI now.
 
 The agent analyzes its own delegation performance through the insights engine
 and proposes improvements, which become procedural memory in Seshat.
@@ -1296,6 +1417,12 @@ Each slice cuts through the full stack, produces a working system, and teaches
 something specific. After each slice, the vision updates based on what was
 learned.
 
+> **Record note.** This section is the implementation plan of 2026-03. Its
+> checkboxes were never updated, and they are not a status. The Status header
+> at the top lists what shipped. "Primary model" below replaces the 2026-03
+> text, which named one fixed 35B model. Kibana was retired (FRE-1214). Read
+> each Kibana dashboard criterion as the plan of that date.
+
 ### 8.1 Slice 1: Foundation
 
 **Theme: "One brain, clean interface, start observing"**
@@ -1305,7 +1432,7 @@ learned.
 | Layer | Deliverable |
 |---|---|
 | **Gateway** | Formalize intent classification (evolve routing.py). Task types replace model roles. Governance stage wraps existing mode_manager. Emit intent_classification events to ES |
-| **Primary Agent** | 35B as sole entry point. Remove resolve_role() and role-switching. Remove router SLM call in executor. Simplify step_init(). System prompt varies by task type |
+| **Primary Agent** | Primary model as sole entry point. Remove resolve_role() and role-switching. Remove router SLM call in executor. Simplify step_init(). System prompt varies by task type |
 | **Seshat** | Define MemoryProtocol. Wrap existing MemoryService as first implementation. No new capabilities -- just the clean contract |
 | **Delegation** | Stage A: instruction composition. Agent produces markdown delegation packages. Manual outcome capture |
 | **Telemetry** | Intent classification dashboard. Task type distribution over time. Delegation events tracked |
@@ -1314,7 +1441,7 @@ Acceptance criteria:
 
 - [ ] All requests route through the gateway pipeline (no direct executor entry)
 - [ ] Intent classification events appear in ES with task type and confidence
-- [ ] Role-switching removed: `resolve_role()` gone, all requests use 35B
+- [ ] Role-switching removed: `resolve_role()` gone, all requests use the primary model
 - [ ] MemoryProtocol defined with at least `recall()` and `store_episode()`
 - [ ] Existing MemoryService passes as MemoryProtocol implementation (tests)
 - [ ] Agent can produce a markdown delegation instruction package for a sample task
@@ -1337,12 +1464,12 @@ Key code changes:
 | File | Change |
 |---|---|
 | `orchestrator/routing.py` | `heuristic_routing()` returns `IntentResult` (task types) instead of `HeuristicRoutingPlan` (model roles). `resolve_role()` removed. `is_memory_recall_query()` absorbed into intent classification |
-| `orchestrator/executor.py` | `step_init()` simplified -- receives `GatewayOutput` instead of performing routing/memory detection inline. Router model dispatch path removed. LLM_CALL always uses primary 35B |
-| `orchestrator/types.py` | New: `TaskType` enum, `IntentResult`, `GatewayOutput`, `DecompositionResult`. `ModelRole.ROUTER` removed |
+| `orchestrator/executor.py` | `step_init()` simplified -- receives `GatewayOutput` instead of performing routing/memory detection inline. Router model dispatch path removed. LLM_CALL always uses the primary model |
+| `orchestrator/types.py` | New: `TaskType` enum, `IntentResult`, `GatewayOutput`, `DecompositionResult`. `ModelRole.ROUTER` removed. **Shipped elsewhere:** these types live in `request_gateway/types.py`. `ModelRole` lives in `llm_client/types.py` |
 | `memory/protocol.py` | New file: `MemoryProtocol` abstract interface |
-| `memory/service.py` | Implements `MemoryProtocol` (wrapper over existing logic, no new capabilities) |
+| `memory/service.py` | Implements `MemoryProtocol` (wrapper over existing logic, no new capabilities). **Shipped as** a separate adapter, `MemoryServiceAdapter` in `memory/protocol_adapter.py` |
 | `config/models.yaml` | Router role entry removed or commented out |
-| New: `request_gateway/` | New module: gateway pipeline stages (named to avoid collision with existing `mcp/gateway.py`). Contains: `pipeline.py`, `security.py`, `intent.py`, `decomposition.py`, `context.py`, `budget.py` |
+| New: `request_gateway/` | New module: gateway pipeline stages (named to avoid collision with existing `mcp/gateway.py`). Contains: `pipeline.py`, `security.py`, `intent.py`, `decomposition.py`, `context.py`, `budget.py`. **Shipped without** `security.py`: Stage 1 is a stub in `pipeline.py` |
 
 ### 8.2 Slice 2: Expansion
 
@@ -1398,7 +1525,7 @@ loading, self-improvement loop closure.
 | Layer | Deliverable |
 |---|---|
 | **Gateway** | Memory-informed context assembly (Seshat proactive recall shapes context). Dynamic skill loading from disk. Decomposition learning (adjust thresholds from data) |
-| **Primary Agent** | Sub-agent model routing experiment (9B vs 35B for sub-tasks). Self-improvement delegation (agent packages its own approved proposals for Claude Code) |
+| **Primary Agent** | Sub-agent model routing experiment (a smaller model vs the primary for sub-tasks). Self-improvement delegation (agent packages its own approved proposals for Claude Code) |
 | **Seshat** | Proactive surfacing: suggest_relevant(). Lifecycle management: demote() + forget(). Contradiction detection. Procedural memory. Backend decision based on Slice 2 experiments |
 | **Delegation** | Stage C: programmatic orchestration via API/MCP/CLI. Context briefing generation. Delegation feedback becomes procedural memory |
 | **Self-Improvement** | Closed loop operational. Agent as architecture collaborator. Improvement ROI tracking |
@@ -1447,7 +1574,7 @@ its own self-improvement loop.
 |---|---|---|---|
 | **Theme** | One brain, clean interface | Learn to breathe | Gets smarter about itself |
 | **Gateway** | Intent classification | Decomposition + budget | Memory-informed + skills |
-| **Agent** | 35B primary, simplified | Sub-agents, synthesis | Self-improvement delegation |
+| **Agent** | Primary model, simplified | Sub-agents, synthesis | Self-improvement delegation |
 | **Seshat** | Protocol + wrapper | Episodic/semantic + Graphiti | Proactive + lifecycle |
 | **Delegation** | Stage A: composition | Stage B: structured | Stage C: programmatic |
 | **Telemetry** | Intent dashboards | Expansion + budget | Full system intelligence |
@@ -1469,8 +1596,8 @@ old specialist-agent architecture:
 | **FRE-13** | Agent base class + standard interface | Close | Replaced by SubAgentSpec/Result and DelegationPackage/Outcome |
 | **FRE-14** | Orchestrator-as-supervisor pattern | Close | Replaced by gateway decomposition + primary agent planning |
 | **FRE-15** | Coder specialist agent (devstral) | Close | No internal coding specialist. Coding delegates externally |
-| **FRE-16** | Analyst specialist agent (qwen3-8b) | Close | No internal analyst. 35B handles analysis; sub-agents for parallelism |
-| **FRE-26** | LM Studio sequential processing | Review | Partly addressed by ADR-0029. Keep if LM Studio still used |
+| **FRE-16** | Analyst specialist agent (qwen3-8b) | Close | No internal analyst. The primary model handles analysis; sub-agents for parallelism |
+| **FRE-26** | LM Studio sequential processing | Review | Partly addressed by ADR-0029. Keep if LM Studio still used. (LM Studio is no longer used: the local model runs on llama.cpp on the owner's Mac.) |
 
 New Linear issues will be created for the three slices, each broken into
 concrete tasks during implementation planning.
@@ -1527,7 +1654,7 @@ The current stack is solid for the work ahead. Pressure points to watch:
 | **PostgreSQL** | Session table growth with multi-turn conversations | If query latency degrades or table exceeds ~10M rows |
 | **Elasticsearch** | Index growth with new telemetry (delegation, expansion, sub-agents) | If cluster size exceeds disk budget. Current lifecycle policies should handle this |
 | **Neo4j** | Graph query performance as entity count grows | After Slice 2 Graphiti experiment. Data-driven decision |
-| **LM Studio** | Single-model bottleneck. Sub-agent spawning adds inference pressure | If sub-agent parallelism is limited by serving throughput. Consider vLLM, llama.cpp server, MLX serving |
+| **Local model server** (llama.cpp on the owner's Mac, at `AGENT_SLM_BASE_URL`) | Single-model bottleneck. Sub-agent spawning adds inference pressure. Sub-agents on the local model run one at a time (FRE-1380) | If sub-agent parallelism is limited by serving throughput. Cloud deployments already run sub-agents side by side (FRE-1635) |
 
 Principle: don't migrate proactively. Migrate when telemetry shows a
 bottleneck. The observability stack exists precisely to inform these decisions
@@ -1543,9 +1670,9 @@ with evidence.
 - ADR-0025: Memory Recall Intent Detection
 - ADR-0026: search_memory Native Tool
 - ADR-0029: Inference Concurrency Control
-- Cognitive Architecture Overview: `docs/architecture/COGNITIVE_AGENT_ARCHITECTURE_v0.1.md`
+- Cognitive Architecture Overview: `docs/archive/COGNITIVE_AGENT_ARCHITECTURE_v0.1.md`
 - Research: `docs/research/cognitive_architecture_principles.md`
 - Research: `docs/research/world-modeling.md`
 - Research: `docs/research/context-switching-task-segmentation.md`
 - Captain's Log: ADR-0030 (dedup and self-improvement pipeline)
-- Service Architecture: `docs/architecture/SERVICE_IMPLEMENTATION_SPEC_v0.1.md`
+- Service Architecture: `docs/archive/SERVICE_IMPLEMENTATION_SPEC_v0.1.md`

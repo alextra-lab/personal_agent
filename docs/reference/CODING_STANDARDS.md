@@ -2,8 +2,12 @@
 
 > **Purpose**: Python coding conventions, patterns, and anti-patterns for the Personal Agent project
 > **Audience**: AI assistants, future contributors, project owner
-> **Version**: 1.0
-> **Date**: 2025-12-29
+> **Version**: 1.1
+> **Date**: 2025-12-29 (examples corrected 2026-10-30, FRE-1707)
+
+> **About the code examples**: The examples illustrate the rules. A name that an example
+> cites with a `src/` path, or imports from `personal_agent`, is a real symbol on `main`.
+> Other names (for example `Planner`, `TaskGraph`, `execute_tool`) are illustrations.
 
 ---
 
@@ -21,7 +25,7 @@ These standards serve three goals:
 
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — small, logical commits.
 - **Branches:** `feat/`, `fix/`, `docs/` as appropriate for larger work.
-- **Pre-push:** `uv run pytest`, `ruff check` / `ruff format`, `mypy` where applicable; see project `AGENTS.md` for commands.
+- **Pre-push:** `uv run pytest`, `ruff check` / `ruff format`, `mypy` where applicable; see the "Commands" section of the root [`CLAUDE.md`](../../CLAUDE.md) for the `make` targets.
 
 ### Path privacy in docs and examples
 
@@ -33,7 +37,7 @@ Do not commit machine-specific filesystem paths (e.g. absolute paths under your 
 
 - **Target**: Python 3.12+
 - **Features allowed**: Type unions with `|`, `match/case`, structural pattern matching, PEP 695 type parameters
-- **No backward compatibility**: We control the environment (local Mac), no need to support older Python
+- **No backward compatibility**: We control the environment (the Debian VPS and the gateway container), no need to support older Python
 
 ---
 
@@ -76,7 +80,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import BaseModel
 
-from personal_agent.governance import PolicyConfig
+from personal_agent.config import settings
 from personal_agent.telemetry import TraceContext
 
 if TYPE_CHECKING:
@@ -119,7 +123,7 @@ tools = [
 - **No abbreviations unless universal**: `http`, `url`, `id` are OK; `mgr`, `ctx` are not
 
 ### Classes
-- **PascalCase**: `ModeManager`, `TraceContext`, `LocalLLMClient`
+- **PascalCase**: `ModeManager`, `TraceContext`, `LiteLLMClient`
 - **Nouns or noun phrases**: Classes represent things
 - **Avoid prefixes**: `ModeManager` > `CModeManager` or `ModeManagerClass`
 
@@ -297,6 +301,8 @@ class ModeManager:
 
 ### Function/Method Docstrings
 ```python
+# Illustration of the docstring shape. execute_tool is not a real function.
+# ToolError and ToolExecutionError are real: src/personal_agent/tools/contract.py.
 def execute_tool(
     name: str,
     args: dict[str, Any],
@@ -316,9 +322,8 @@ def execute_tool(
             - error: str | None
 
     Raises:
-        ToolNotFoundError: If tool name is not registered
-        PermissionDeniedError: If governance denies execution
-        ToolExecutionError: If tool execution fails
+        ToolError: If the tool reports a typed failure with a code from its code set
+        ToolExecutionError: If tool execution fails for another reason
 
     Example:
         >>> result = execute_tool(
@@ -357,39 +362,42 @@ for attempt in range(MAX_RETRIES):
 ## Error Handling
 
 ### Exception Hierarchy
-Define project-specific exceptions:
+Define project-specific exceptions. The project has no single base class. Each exception
+subclasses the built-in error that matches its meaning. The project exceptions live in many
+modules. The three below show the pattern:
 
 ```python
-# src/personal_agent/exceptions.py
+# src/personal_agent/exceptions.py — cross-cutting errors (extract)
+class MissingIdentityError(ValueError):
+    """Raised when an event sink is asked to write a row without identity."""
 
-class PersonalAgentError(Exception):
-    """Base exception for all personal agent errors."""
+class UnknownSessionError(ValueError):
+    """Raised when a transport event is appended for a session that does not exist."""
 
-class ConfigurationError(PersonalAgentError):
-    """Invalid configuration or missing required settings."""
+# src/personal_agent/tools/contract.py — tool failures
+class ToolExecutionError(Exception):
+    """Base class of every tool failure. Raise a typed ToolError subclass instead."""
 
-class GovernanceError(PersonalAgentError):
-    """Governance policy violation."""
+class ToolError(ToolExecutionError, Generic[CodeT]):
+    """A tool failure with a code from the tool's closed code set (ADR-0156 D6.1)."""
 
-class ToolExecutionError(PersonalAgentError):
-    """Tool execution failed."""
+# src/personal_agent/llm_client/types.py — LLM client failures
+class LLMClientError(Exception):
+    """Base exception for all LLM client errors."""
 
-class LLMClientError(PersonalAgentError):
-    """LLM client error."""
-
-class ModeTransitionError(PersonalAgentError):
-    """Invalid mode transition."""
+class LLMTimeout(LLMClientError):
+    """Raised when an LLM request times out."""
 ```
 
 ### Exception Raising
 ```python
 # Good: Specific exception with context
-from personal_agent.exceptions import ToolExecutionError
+from personal_agent.exceptions import UnknownSessionError
 
-if not tool_exists(name):
-    raise ToolExecutionError(
-        f"Tool '{name}' not found in registry. "
-        f"Available tools: {list(tool_registry.keys())}"
+if session is None:
+    raise UnknownSessionError(
+        f"Session '{session_id}' does not exist. "
+        "No event sequence number can be issued."
     )
 
 # Bad: Generic exception
@@ -401,12 +409,12 @@ raise "Tool not found"  # SyntaxError in Python 3
 
 ### Exception Catching
 ```python
-# Good: Specific exceptions
+# Good: Specific exceptions (ToolError, ToolExecutionError: tools/contract.py)
 try:
     result = execute_tool(name, args, ctx)
-except PermissionDeniedError:
-    log.warning("tool_permission_denied", tool=name, mode=current_mode)
-    return {"success": False, "error": "Permission denied"}
+except ToolError as e:
+    log.warning("tool_failed", tool=name, code=e.code, retryable=e.retryable)
+    return {"success": False, "error": e.message}
 except ToolExecutionError as e:
     log.error("tool_execution_failed", tool=name, error=str(e))
     return {"success": False, "error": str(e)}
@@ -615,17 +623,19 @@ class ModeConfig(BaseModel):
 Use standard `@dataclass` for simple, immutable data structures:
 
 ```python
-from dataclasses import dataclass, field
-from datetime import datetime
+# Abridged from src/personal_agent/telemetry/trace.py
+from dataclasses import dataclass
+from uuid import UUID
 
 @dataclass(frozen=True)  # Immutable
 class TraceContext:
-    """Trace context for observability."""
+    """Lightweight trace context for request correlation."""
 
     trace_id: str
-    span_id: str
-    session_id: str
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    parent_span_id: str | None = None
+    user_id: UUID | None = None
+    session_id: str | None = None
+    kind: str = "user"
 ```
 
 **When to use what**:
@@ -648,7 +658,7 @@ from personal_agent.config import settings
 
 # Good: Use settings singleton
 log_level = settings.log_level
-base_url = settings.llm_base_url
+base_url = settings.slm_base_url  # str | None: no default, an origin without /v1
 timeout = settings.llm_timeout_seconds
 
 # Bad: Direct environment variable access
@@ -675,17 +685,18 @@ log_format: Literal["json", "console"] = settings.log_format  # Literal
 Components should accept `AppConfig` as a parameter for testability:
 
 ```python
+# Illustration: LocalModelProbe is not a real class. AppConfig and settings are real.
 from personal_agent.config import AppConfig, settings
 
-class LLMClient:
+class LocalModelProbe:
     def __init__(self, config: AppConfig | None = None):
-        """Initialize LLM client with configuration.
+        """Initialize the probe with configuration.
 
         Args:
             config: Configuration (defaults to settings singleton)
         """
         self.config = config or settings
-        self.base_url = self.config.llm_base_url
+        self.base_url = self.config.slm_base_url
         self.timeout = self.config.llm_timeout_seconds
 ```
 
@@ -706,16 +717,16 @@ Override configuration in tests via dependency injection:
 ```python
 from personal_agent.config import AppConfig
 
-def test_llm_client_timeout():
+def test_local_model_probe_timeout():
     # Create test configuration
     test_config = AppConfig(
-        llm_base_url="http://test-server:1234/v1",
+        slm_base_url="http://test-server:1234",
         llm_timeout_seconds=5,
     )
 
-    # Pass to component
-    client = LLMClient(config=test_config)
-    assert client.timeout == 5
+    # Pass to component (LocalModelProbe: the illustration above)
+    probe = LocalModelProbe(config=test_config)
+    assert probe.timeout == 5
 ```
 
 ### Integration with Domain Configs
@@ -723,17 +734,15 @@ def test_llm_client_timeout():
 The unified `AppConfig` provides paths for domain-specific config loaders:
 
 ```python
-from personal_agent.config import settings
-from personal_agent.governance import load_governance_config
+from personal_agent.brainstem.mode_manager import ModeManager
+from personal_agent.config import load_governance_config, settings
 
 # AppConfig provides the path
 governance_config = load_governance_config(settings.governance_config_path)
 
 # Use both app settings and domain configs
-manager = ModeManager(
-    governance_config=governance_config,
-    poll_interval=settings.brainstem_sensor_poll_interval_seconds,
-)
+manager = ModeManager(governance_config=governance_config)
+poll_interval = settings.brainstem_sensor_poll_interval_seconds
 ```
 
 ### Anti-Patterns
@@ -744,7 +753,7 @@ import os
 api_key = os.getenv("API_KEY")  # ❌ Use settings instead
 
 # Bad: Hardcoded configuration
-base_url = "http://localhost:1234/v1"  # ❌ Use settings.llm_base_url
+base_url = "http://localhost:1234/v1"  # ❌ Use settings.slm_base_url
 
 # Bad: Creating separate config objects
 class MyConfig:
@@ -753,8 +762,8 @@ class MyConfig:
 
 # Good: Use unified settings
 from personal_agent.config import settings
-api_key = settings.api_key  # ✅ Type-safe, validated
-base_url = settings.llm_base_url  # ✅ From config
+api_key = settings.anthropic_api_key  # ✅ Type-safe, validated (one key per provider)
+base_url = settings.slm_base_url  # ✅ From config
 timeout = settings.llm_timeout_seconds  # ✅ Validated
 ```
 
@@ -765,10 +774,18 @@ See `src/personal_agent/config/AGENTS.md` for detailed patterns.
 ## Testing Patterns
 
 ### Test File Organization
+New tests mirror `src/`: `tests/personal_agent/<module>/test_<file>.py`. The older
+`tests/test_<module>/` directories still hold tests.
+
 ```
 tests/
 ├── conftest.py              # Shared fixtures
-├── test_telemetry/
+├── personal_agent/          # New tests: mirror src/personal_agent/
+│   ├── telemetry/
+│   │   └── test_otel_bootstrap.py
+│   └── orchestrator/
+│       └── test_executor_grounding.py
+├── test_telemetry/          # Older layout
 │   ├── test_logger.py
 │   └── test_trace.py
 ├── test_orchestrator/
@@ -806,19 +823,18 @@ def trace_ctx() -> TraceContext:
     """Provide test trace context."""
     return TraceContext(
         trace_id="test-trace-123",
-        span_id="test-span-456",
         session_id="test-session-789",
     )
 
 @pytest.fixture
 def mock_llm_client(monkeypatch):
     """Mock LLM client for testing."""
-    from personal_agent.llm_client import LocalLLMClient
+    from personal_agent.llm_client.litellm_client import LiteLLMClient
 
-    async def mock_generate(prompt: str) -> str:
-        return "Mocked LLM response"
+    async def mock_respond(self, role, messages, **kwargs):
+        return {"role": "assistant", "content": "Mocked LLM response"}
 
-    monkeypatch.setattr(LocalLLMClient, "generate", mock_generate)
+    monkeypatch.setattr(LiteLLMClient, "respond", mock_respond)
 ```
 
 ### Async Tests
@@ -850,10 +866,14 @@ def recorded_llm_responses():
 
 async def test_planner_with_recorded_response(recorded_llm_responses, monkeypatch):
     """Test planner with recorded LLM response."""
-    async def mock_generate(prompt: str) -> str:
-        return recorded_llm_responses.get(prompt, "Default response")
+    async def mock_respond(self, role, messages, **kwargs):
+        prompt = messages[-1]["content"]
+        content = recorded_llm_responses.get(prompt, "Default response")
+        return {"role": "assistant", "content": content}
 
-    monkeypatch.setattr("personal_agent.llm_client.LocalLLMClient.generate", mock_generate)
+    monkeypatch.setattr(
+        "personal_agent.llm_client.litellm_client.LiteLLMClient.respond", mock_respond
+    )
 
     planner = Planner(llm_client)
     plan = await planner.generate_plan(task)
@@ -1052,9 +1072,9 @@ base_url = os.getenv("BASE_URL", "http://localhost:1234")
 
 # Good: Use unified configuration manager
 from personal_agent.config import settings
-api_key = settings.api_key
+api_key = settings.anthropic_api_key
 log_level = settings.log_level
-base_url = settings.llm_base_url
+base_url = settings.slm_base_url
 ```
 
 **Rationale**: Direct `os.getenv()` access:
@@ -1155,3 +1175,4 @@ See `pyproject.toml` for full configuration.
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2025-12-29 | Initial coding standards document |
+| 1.1 | 2026-10-30 | FRE-1707: code examples name real symbols on `main` (exceptions, `LiteLLMClient`, `slm_base_url`, `TraceContext`, `load_governance_config`). The rules did not change. |

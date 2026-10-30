@@ -63,7 +63,7 @@ holds the tool from its closed tool list, as any other tool.
 src/personal_agent/tools/
 ├── __init__.py          ← add import + registration here
 ├── web.py               ← example: SearXNG web search
-├── elasticsearch.py     ← example: ES|QL + index ops
+├── telemetry_query.py   ← example: allowlisted Elasticsearch + Tempo reads
 ├── perplexity.py        ← example: Perplexity AI queries
 ├── fetch.py             ← example: URL fetch + HTML→text
 └── context7.py          ← example: library documentation
@@ -213,16 +213,25 @@ ask:
 
 | Tool | File | Replaces | ADR |
 |------|------|----------|-----|
-| `web_search` | `web.py` | `mcp_search` (DDG) | ADR-0034 |
-| `query_elasticsearch` | `elasticsearch.py` | `mcp_esql`, `mcp_list_indices`, `mcp_get_mappings`, `mcp_get_shards` | ADR-0028 Ph1 |
-| `perplexity_query` | `perplexity.py` | `mcp_perplexity_ask/reason/research` | ADR-0028 Ph2 |
-| `fetch_url` | `fetch.py` | `mcp_fetch_content` | ADR-0028 Ph3 |
-| `get_library_docs` | `context7.py` | `mcp_get-library-docs`, `mcp_resolve-library-id` | ADR-0028 Ph3 |
-| `search_memory` | `memory_search.py` | — | ADR-0026 |
-| `read_file` | `filesystem.py` | — | — |
-| `list_directory` | `filesystem.py` | — | — |
-| `system_metrics_snapshot` | `system_health.py` | — | — |
-| `self_telemetry_query` | `self_telemetry.py` | — | — |
+The registry is `register_mvp_tools()` in `src/personal_agent/tools/__init__.py`. Read it for
+the live list. Some tools register only when a setting enables them (see the last column).
+
+| Tool | File | Replaces | ADR / ticket | Registered |
+|------|------|----------|--------------|------------|
+| `web_search` | `web.py` | `mcp_search` (DDG) | ADR-0034 | always |
+| `perplexity_query` | `perplexity.py` | `mcp_perplexity_ask/reason/research` | ADR-0028 Ph2 | always |
+| `fetch_url` | `fetch.py` | `mcp_fetch_content` | ADR-0028 Ph3, FRE-1297 | always |
+| `get_library_docs` | `context7.py` | `mcp_get-library-docs`, `mcp_resolve-library-id` | ADR-0028 Ph3 | always |
+| `search_memory` | `memory_search.py` | — | ADR-0026 | always |
+| `recall_personal_history` | `personal_history.py` | — | FRE-343 | always |
+| `search_logs`, `measure_model_latency` | `telemetry_query.py` | `query_elasticsearch`, `self_telemetry_query` (deleted, FRE-265) | ADR-0156 A5.1, FRE-1564, FRE-1596 | always (skill-provided) |
+| `create_linear_issue`, `find_linear_issues`, `list_linear_projects`, `create_linear_project` | `linear.py` | — | FRE-224 | always |
+| `read_skill` | `read_skill.py` | — | ADR-0156 D3.3, FRE-1577 | always |
+| `notes_write`, `notes_search` | `notes_tools.py` | — | FRE-227 | when the three `r2_*` credentials are set |
+| `artifact_write`, `artifact_list`, `artifact_read`, `artifact_draft` | `artifact_tools.py` | — | FRE-368, ADR-0077 | when the three `r2_*` credentials are set |
+| `expand_tool_result` | `tool_result_expand.py` | — | ADR-0085, FRE-475 | when R2 is set and `tool_result_compression_enabled` is true |
+| `get_location` | `location.py` | — | FRE-230 | when `location_enabled` is true |
+| `read`, `write`, `edit`, `bash`, `run_python` | `primitives/` | `read_file`, `list_directory`, `system_metrics_snapshot` (deleted, FRE-265) | FRE-261, ADR-0156 D7.1 | when `primitive_tools_enabled` is true |
 
 ---
 

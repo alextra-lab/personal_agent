@@ -31,7 +31,7 @@ SAFE_COMMANDS = {
 
 # Containers whose psql may be reached this way. Test-stack containers are omitted on purpose:
 # they already carry blanket allow-rules in settings.json and need no shape check.
-ALLOWED_CONTAINERS = {"cloud-sim-postgres"}
+ALLOWED_CONTAINERS = {"cloud-sim-postgres", "cloud-sim-postgres-eval"}
 
 # `docker exec` flags that cannot change what the statement does.
 SAFE_DOCKER_FLAGS = {"-i", "-t", "-it", "-ti", "--interactive", "--tty"}

@@ -3,7 +3,7 @@
  * offline export (ADR-0089 Addendum A7). Runs on Chromium and WebKit.
  *
  * Fixtures are produced by `scripts/build_e2e_artifact_fixtures.py` into
- * `.fixtures/` (real KaTeX 0.16.11 + Chart.js 4.4.7 bytes, SRI-pinned). Each
+ * `.fixtures/` (real KaTeX 0.18.2 + Chart.js 4.4.7 bytes, SRI-pinned). Each
  * scenario asserts **zero CSP violations** plus *semantic* render fidelity — a
  * `.katex` node / non-blank canvas alone can pass on a broken render, so we also
  * check the KaTeX MathML annotation echoes the source TeX and the live Chart.js

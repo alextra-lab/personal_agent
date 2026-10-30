@@ -763,8 +763,8 @@ REQUIREMENTS:
   * It encourages learning or continued use: give the reader a reason to keep exploring, such as a challenge, a goal, progress, or something to discover.
 - CURATED TOOLKIT: a small, vetted /lib/ shelf is hosted on the artifact origin — it is the ONLY external origin this page may load. Reference each asset by its EXACT absolute, version-pinned URL below (a relative path will not load). Reach for one only when the document genuinely needs it; otherwise inline your own code.
   * Math (KaTeX) — render TeX/LaTeX:
-    <link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">
-    <script src="https://artifacts.example.com/lib/katex@0.16.47/katex.min.js"></script>
+    <link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.18.2/katex.min.css">
+    <script src="https://artifacts.example.com/lib/katex@0.18.2/katex.min.js"></script>
   * Data viz (Chart.js — global `Chart`) — charts/graphs from inline data:
     <script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>
   * 3-D (three.js — global `THREE`, r171) — scenes/geometry; build meshes in code and embed any textures as data: URIs, never fetch them:

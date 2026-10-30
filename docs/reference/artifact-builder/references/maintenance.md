@@ -26,7 +26,7 @@ envelope is provably applied"** — not "it renders". Two complementary gates co
 
 **1. Hermetic render harness (in-repo, CI-able) — `make verify-artifact-e2e`.**
 Builds a real, SRI-pinned fixture set (the repository's `build_e2e_artifact_fixtures.py`: KaTeX
-0.16.47 + Chart.js 4.4.7 + paged.js fetched from the substitution-map CDN twins, each
+0.18.2 + Chart.js 4.4.7 + paged.js fetched from the substitution-map CDN twins, each
 byte-verified against the pinned `sha384`), then runs `e2e/artifact-lib/` on **Chromium
 and WebKit**:
 

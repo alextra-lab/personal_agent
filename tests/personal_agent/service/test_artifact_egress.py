@@ -28,8 +28,8 @@ class TestToArtifactsEgressUrl:
                 "http://caddy:8601/abc-123",
             ),
             (
-                "https://artifacts.example.com/lib/katex@0.16.47/katex.min.css",
-                "http://caddy:8601/lib/katex@0.16.47/katex.min.css",
+                "https://artifacts.example.com/lib/katex@0.18.2/katex.min.css",
+                "http://caddy:8601/lib/katex@0.18.2/katex.min.css",
             ),
             (
                 "https://artifacts.example.com/abc-123?mode=export&v=2",

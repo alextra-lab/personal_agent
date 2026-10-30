@@ -12,12 +12,12 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.32.0"
   },
   "overrides": {
-    "fast-uri": "3.1.5",
-    "ip-address": "10.3.1",
-    "hono": "4.12.34",
-    "@hono/node-server": "1.19.15"
+    "fast-uri": "3.1.9",
+    "ip-address": "10.7.5",
+    "hono": "4.13.14",
+    "@hono/node-server": "2.1.5"
   }
 }

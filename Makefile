@@ -85,6 +85,8 @@ help:
 	@echo "  make build                SSH → pull + rebuild seshat-gateway + restart"
 	@echo "  make build-full           SSH → pull + rebuild all images + restart"
 	@echo "  make vps-bootstrap        First-time full deploy on VPS"
+	@echo ""
+	@echo "  Cloudflare tunnel (from the Mac these SSH to the VPS; on the VPS they run docker compose directly):"
 	@echo "  make tunnel-up            Start cloudflared tunnel service"
 	@echo "  make tunnel-down          Stop cloudflared tunnel service"
 	@echo "  make tunnel-status        Show cloudflared tunnel container status"

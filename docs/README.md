@@ -25,7 +25,6 @@ All project documentation, organized by purpose.
 
 - [Agent Workflow Methodology](reference/AGENT_WORKFLOW_METHODOLOGY.md) -- how this project is managed and why (reusable across projects)
 - [Coding Standards](reference/CODING_STANDARDS.md)
-- [Coding Conventions](reference/CODING_CONVENTIONS.md)
 - [PR Review Rubric](reference/PR_REVIEW_RUBRIC.md)
 - [Validation Checklist](reference/VALIDATION_CHECKLIST.md)
 - [Project Directory Structure](reference/PROJECT_DIRECTORY_STRUCTURE.md)

@@ -33,6 +33,18 @@ for name in $(compgen -e | grep '^GIT_'); do unset "$name"; done
 # A declined call drains stdin first, so the writer never sees a broken pipe.
 decline() { cat >/dev/null; exit 0; }
 
+# The git top level alone is not proof of the master role. A worker worktree is a directory
+# inside /opt/seshat, and the only thing that makes git call it a top level is its `.git` file.
+# A worker that moves that file aside makes git walk up and report /opt/seshat. Two checks that
+# a file operation in the worktree cannot change:
+#   - CLAUDE_PROJECT_DIR is set by the harness from the session's project root, so it is the
+#     worktree path for a worker seat.
+#   - The physical working directory of a worker is under .claude/worktrees/.
+[ "${CLAUDE_PROJECT_DIR:-}" = "/opt/seshat" ] || decline
+case "$(pwd -P)" in
+    /opt/seshat/.claude/worktrees|/opt/seshat/.claude/worktrees/*) decline ;;
+esac
+
 root=$(git rev-parse --show-toplevel 2>/dev/null) || decline
 [ "$root" = "/opt/seshat" ] || decline
 

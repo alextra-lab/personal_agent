@@ -9,6 +9,7 @@
 import json
 import re
 import sys
+from typing import NoReturn
 
 # Quoted text for --subject and --body. Inside single quotes bash applies no rule at all. Inside
 # double quotes bash expands `$` and the backtick, and both are rejected for the whole command
@@ -27,7 +28,7 @@ MERGE_OPTIONAL = re.compile(rf" (?:--delete-branch|--subject {QUOTED}|--body {QU
 REBUILD = re.compile(r"ENV=cloud make rebuild SERVICE=(?:seshat-gateway|seshat-pwa)")
 
 
-def decline() -> None:
+def decline() -> NoReturn:
     """Say nothing, so the normal permission flow decides."""
     raise SystemExit(0)
 

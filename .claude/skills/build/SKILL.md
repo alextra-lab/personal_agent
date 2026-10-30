@@ -66,7 +66,7 @@ Failing test first → confirm it fails → implement. Each of this ticket's cri
 or probe asserting the **outcome**, not the wiring — that is the proof master reads. Standards:
 `.claude/CLAUDE.md`; identity threading on every new `log.*` / `bus.publish` / Cypher write.
 
-**Database queries.** Run a query as `docker exec cloud-sim-postgres psql -U agent -d personal_agent -tAc "<SELECT ...>"`. Never put it inside `sh -c`. Never add `2>&1`. The direct read-only form passes without a prompt. The wrapped form stops the seat on a prompt that the owner can no longer approve from the watch.
+**Database queries.** Run a query as `docker exec cloud-sim-postgres psql -U agent -d personal_agent -tAc "<SELECT ...>"`. Never put it inside `sh -c`. Never add `2>&1`. The direct form with one single-line read-only statement passes without a prompt. The wrapped form stops the seat on a prompt that the owner can no longer approve from the watch.
 
 ## 5 — Meet the objective — fold in, don't over-ticket
 A ticket is an objective, not a box. Supporting changes needed to make this build function, and

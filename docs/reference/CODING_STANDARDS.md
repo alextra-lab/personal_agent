@@ -363,8 +363,8 @@ for attempt in range(MAX_RETRIES):
 
 ### Exception Hierarchy
 Define project-specific exceptions. The project has no single base class. Each exception
-subclasses the built-in error that matches its meaning. The project exceptions live in three
-places:
+subclasses the built-in error that matches its meaning. The project exceptions live in many
+modules. The three below show the pattern:
 
 ```python
 # src/personal_agent/exceptions.py — cross-cutting errors (extract)

@@ -219,9 +219,6 @@ class AppConfig(BaseSettings):
     )
 
     # Orchestrator
-    orchestrator_max_concurrent_tasks: int = Field(
-        default=5, ge=0, description="Maximum concurrent tasks"
-    )
     orchestrator_task_timeout_seconds: int = Field(
         default=900,
         ge=1,
@@ -363,11 +360,6 @@ class AppConfig(BaseSettings):
             "produce 8,192 tokens of unclosed JSON against a median completion of 145."
         ),
     )
-    orchestrator_max_repeated_tool_calls: int = Field(
-        default=1,
-        ge=0,
-        description="Maximum times the same tool call signature can repeat per request",
-    )
 
     # Route-trace ledger (FRE-452 / ADR-0088). The preview is a PII gate: when False
     # (default) the ledger stores only a SHA-256 pointer + counts, never raw stimulus text.
@@ -384,50 +376,11 @@ class AppConfig(BaseSettings):
         ge=0,
         description="Max stimulus-preview length when route_trace_store_preview is enabled",
     )
-    # Routing (router speed and single-model mode)
-    routing_policy: str = Field(
-        default="heuristic_then_llm",
-        description="Routing policy: heuristic_then_llm (gate then LLM if below threshold), heuristic_only, llm_only",
-    )
-    router_role: str = Field(
-        default="ROUTER",
-        description="Role used for routing: ROUTER (dedicated small model) or STANDARD (single-model mode, e.g. qwen as router+standard)",
-    )
-    enable_reasoning_role: bool = Field(
-        default=True,
-        description="If False, map REASONING -> STANDARD (single-model mode).",
-    )
-    routing_heuristic_threshold: float = Field(
-        default=0.85,
-        ge=0.0,
-        le=1.0,
-        description="Only call LLM router when heuristic confidence is below this (heuristic_then_llm).",
-    )
-    router_timeout_seconds: float = Field(
-        default=6.0,
-        gt=0,
-        le=60,
-        description="Timeout for router LLM call; on timeout fall back to heuristic.",
-    )
-
-    # Brainstem
-    brainstem_sensor_poll_interval_seconds: float = Field(
-        default=5.0, gt=0, description="Sensor polling interval"
-    )
 
     # Request Monitoring (ADR-0012)
     request_monitoring_enabled: bool = Field(
         default=True,
         description="Enable automatic request-scoped metrics monitoring for homeostasis control loops",
-    )
-    request_monitoring_interval_seconds: float = Field(
-        default=5.0,
-        gt=0,
-        description="Request monitoring polling interval (default: 5.0s per CONTROL_LOOPS_SENSORS spec)",
-    )
-    request_monitoring_include_gpu: bool = Field(
-        default=True,
-        description="Include GPU metrics in request monitoring (Apple Silicon: powermetrics)",
     )
     metrics_daemon_poll_interval_seconds: float = Field(
         default=5.0,
@@ -615,14 +568,6 @@ class AppConfig(BaseSettings):
         raise ValueError(f"Invalid gateway command type: {type(v)}")
 
     # Request Gateway & Expansion Budget (Phase 2.4)
-    context_budget_comfortable_tokens: int = Field(
-        default=64000,
-        ge=1000,
-        description=(
-            "Comfortable context budget threshold for token management. "
-            "Aligned to ~50% of the Qwen3.6-35B-A3B 131K thinking-mode window."
-        ),
-    )
     context_budget_max_tokens: int = Field(
         default=98304,
         ge=2000,
@@ -630,14 +575,6 @@ class AppConfig(BaseSettings):
             "Maximum context budget limit. Aligned to the SLM context_length "
             "(131K for qwen3.8-flash-next, FRE-1427) minus the 32768 generation "
             "reserve."
-        ),
-    )
-    context_budget_generation_reserve_tokens: int = Field(
-        default=32768,
-        ge=500,
-        description=(
-            "Reserve tokens for LLM generation in context budget calculations. "
-            "Matches the Qwen3.6-35B-A3B card's 'standard' thinking-mode output budget."
         ),
     )
     expansion_budget_max: int = Field(
@@ -724,10 +661,6 @@ class AppConfig(BaseSettings):
             "itself)."
         ),
     )
-    synthesis_timeout_seconds: float = Field(
-        default=25.0,
-        description="Max time for synthesis phase in expansion controller",
-    )
 
     # --- Embedding & Reranker configuration (ADR-0035) ---
     # Model identity (id, endpoint) lives in config/models.yaml — ADR-0031.
@@ -740,10 +673,6 @@ class AppConfig(BaseSettings):
             "managed Qwen3-Embedding-8B profile (nDCG@5 peaks at 1024, beating "
             "native 4096 -- FRE-826)"
         ),
-    )
-    embedding_batch_size: int = Field(
-        default=20,
-        description="Max items per embedding API call",
     )
     dedup_similarity_threshold: float = Field(
         default=0.92,
@@ -1214,7 +1143,6 @@ class AppConfig(BaseSettings):
     )
 
     # Service Configuration
-    service_host: str = Field(default="0.0.0.0", description="Service host address")
     service_port: int = Field(
         default=9000,
         description="Service port number (9000 to avoid conflict with LLM server on 8000)",
@@ -1247,18 +1175,6 @@ class AppConfig(BaseSettings):
     conversation_context_strategy: str = Field(
         default="truncate",
         description="Context window strategy. Supported: 'truncate'.",
-    )
-
-    # Context Compression (ADR-0038)
-    context_compression_enabled: bool = Field(
-        default=True,
-        description="Enable async context compression of evicted turns.",
-    )
-    context_compression_threshold_ratio: float = Field(
-        default=0.65,
-        gt=0.0,
-        le=1.0,
-        description="Fire compression when estimated tokens exceed this fraction of context_window_max_tokens.",
     )
 
     # Within-Session Progressive Context Compression (ADR-0061)
@@ -1317,14 +1233,6 @@ class AppConfig(BaseSettings):
             "replacement (ADR-0061 §D4)."
         ),
     )
-    within_session_compression_refire_after_messages: int = Field(
-        default=4,
-        ge=1,
-        description=(
-            "Minimum number of new messages between consecutive soft "
-            "compressions for the same session (ADR-0061 §D1)."
-        ),
-    )
 
     # Intra-turn tool-result compression (ADR-0085, FRE-475). Knobs modeled on
     # Anthropic's context-editing vocabulary. Master flag defaults OFF — the
@@ -1346,14 +1254,6 @@ class AppConfig(BaseSettings):
         description=(
             "Compress tool results whose estimated token count is at or above this "
             "(ADR-0085 §D7; open decision §1 — conservative 1.5–2k start)."
-        ),
-    )
-    tool_result_digest_keep: int = Field(
-        default=3,
-        ge=0,
-        description=(
-            "Most-recent tool results kept verbatim regardless of size "
-            "(Anthropic `keep` analogue; ADR-0085 §D4). Enforced in PR-B wiring."
         ),
     )
     tool_result_digest_min_savings_tokens: int = Field(
@@ -1703,13 +1603,6 @@ class AppConfig(BaseSettings):
         le=300,
         description="Timeout for Perplexity API requests (research mode can be slow)",
     )
-    cloud_weekly_budget_usd: float = Field(
-        default=5.0,
-        description=(
-            "Weekly spending cap across all cloud LLM providers (USD). "
-            "Shared budget; per-provider breakdown available via CostTrackerService."
-        ),
-    )
 
     # Event Bus (ADR-0041 — Redis Streams)
     event_bus_enabled: bool = Field(
@@ -1753,7 +1646,6 @@ class AppConfig(BaseSettings):
     )
 
     # Feature flags
-    use_service_mode: bool = Field(default=True, description="Enable service mode")
     enable_second_brain: bool = Field(default=False, description="Enable second brain (Phase 2.2)")
     enable_memory_graph: bool = Field(default=False, description="Enable memory graph (Phase 2.2)")
     location_enabled: bool = Field(
@@ -2127,11 +2019,6 @@ class AppConfig(BaseSettings):
         default=2,
         ge=1,
         description="Max Deepen/Too Vague response rounds per issue",
-    )
-    feedback_defer_revisit_days: int = Field(
-        default=90,
-        ge=7,
-        description="Days before revisiting a Deferred proposal (future archive hook)",
     )
     seshat_open_ticket_cap: int = Field(
         default=10,
@@ -2856,15 +2743,6 @@ class AppConfig(BaseSettings):
     )
 
     # FRE-225: Egress URL guard (domain blocklist)
-    url_guard_enabled: bool = Field(
-        default=True,
-        alias="AGENT_URL_GUARD_ENABLED",
-        description=(
-            "Enable egress URL guard. When True, fetch_url calls are checked against "
-            "a domain blocklist (URLhaus feed + bundled fallback). "
-            "Env var: AGENT_URL_GUARD_ENABLED"
-        ),
-    )
     url_guard_mode: str = Field(
         default="blocklist",
         alias="AGENT_URL_GUARD_MODE",

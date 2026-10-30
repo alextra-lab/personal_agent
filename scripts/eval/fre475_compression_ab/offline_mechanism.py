@@ -59,7 +59,6 @@ from personal_agent.orchestrator.tool_result_digest import (
 DIGEST_CONFIG: dict[str, Any] = {
     "tool_result_digest_threshold_tokens": 1500,
     "tool_result_digest_min_savings_tokens": 500,
-    "tool_result_digest_keep": 3,
     "tool_result_digest_pin_ttl_turns": 4,
     "tool_result_digest_put_timeout_ms": 2000,
     "tool_result_digest_exclude_tools": [],

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from personal_agent.config import settings
 from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
@@ -106,18 +105,16 @@ class TestRoutingHelpers:
         assert not is_memory_recall_query("")
         assert not is_memory_recall_query(None)  # type: ignore[arg-type]
 
-    def test_resolve_role_primary_maps_to_primary(self, monkeypatch: Any) -> None:
+    def test_resolve_role_primary_maps_to_primary(self) -> None:
         """Identity mapping: PRIMARY → PRIMARY (two-tier taxonomy, ADR-0033)."""
-        monkeypatch.setattr(settings, "enable_reasoning_role", False)
         assert resolve_role(ModelRole.PRIMARY) == ModelRole.PRIMARY
 
     def test_resolve_role_sub_agent_maps_to_sub_agent(self) -> None:
         """Identity mapping: SUB_AGENT → SUB_AGENT (ADR-0033)."""
         assert resolve_role(ModelRole.SUB_AGENT) == ModelRole.SUB_AGENT
 
-    def test_determine_initial_model_role_chat(self, monkeypatch: Any) -> None:
+    def test_determine_initial_model_role_chat(self) -> None:
         """Starts chat channel on PRIMARY role (two-tier taxonomy)."""
-        monkeypatch.setattr(settings, "router_role", "PRIMARY")
         ctx = MagicMock(spec=ExecutionContext)
         ctx.channel = Channel.CHAT
         assert _determine_initial_model_role(ctx) == ModelRole.PRIMARY
@@ -159,10 +156,9 @@ class TestRoutingFlow:
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
     async def test_single_model_mode_uses_primary_for_chat(
-        self, mock_client_class: Any, monkeypatch: Any
+        self, mock_client_class: Any
     ) -> None:
         """PRIMARY is always used for chat requests in two-tier model (ADR-0033)."""
-        monkeypatch.setattr(settings, "router_role", "PRIMARY")
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client

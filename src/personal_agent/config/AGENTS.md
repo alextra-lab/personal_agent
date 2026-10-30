@@ -37,8 +37,6 @@ from personal_agent.config import settings
 log_level = settings.log_level
 base_url = settings.resolved_slm_base_url
 timeout = settings.llm_timeout_seconds
-max_tasks = settings.orchestrator_max_concurrent_tasks
-poll_interval = settings.brainstem_sensor_poll_interval_seconds
 ```
 
 ### Configuration Sources and Precedence
@@ -82,10 +80,7 @@ governance_config = load_governance_config()  # Uses settings.governance_config_
 model_config = load_model_config()            # Uses model_loader.CATALOG_PATH
 
 # Components use both
-mode_manager = ModeManager(
-    governance_config=governance_config,
-    poll_interval=settings.brainstem_sensor_poll_interval_seconds,
-)
+mode_manager = ModeManager(governance_config=governance_config)
 ```
 
 **Note**: The old import paths (`from personal_agent.governance import load_governance_config`) still work but are deprecated and will be removed in v0.2.0.
@@ -113,11 +108,7 @@ The `AppConfig` class provides these configuration groups:
 - `llm_max_retries: int` - Maximum retry attempts
 
 ### Orchestrator
-- `orchestrator_max_concurrent_tasks: int` - Maximum concurrent tasks
 - `orchestrator_task_timeout_seconds: int` - Task timeout
-
-### Brainstem
-- `brainstem_sensor_poll_interval_seconds: float` - Sensor polling interval
 
 ### Paths (for domain config loaders)
 - `governance_config_path: Path` - Path to governance config directory
@@ -237,10 +228,7 @@ governance_config = load_governance_config()  # Uses settings.governance_config_
 model_config = load_model_config()            # Uses model_loader.CATALOG_PATH
 
 # Use both app settings and domain configs
-manager = ModeManager(
-    governance_config=governance_config,
-    poll_interval=settings.brainstem_sensor_poll_interval_seconds,
-)
+manager = ModeManager(governance_config=governance_config)
 
 # Model config is now typed (ModelConfig, not dict)
 router_model = model_config.models["router"]

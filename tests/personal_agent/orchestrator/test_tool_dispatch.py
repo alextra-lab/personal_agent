@@ -20,7 +20,7 @@ from personal_agent.tools.contract import dispatch_error
 from personal_agent.tools.types import ToolDefinition, ToolResult
 
 _EMPTY_GOVERNANCE_CONFIG = GovernanceConfig(
-    modes={}, tools={}, sub_agent_tools={}, mode_constraints={}
+    modes={}, tools={}, sub_agent_tools={}
 )
 
 
@@ -49,7 +49,6 @@ def _governance_config_with_ceilings(tool_name: str, **ceilings: int) -> Governa
                 granted=True, reason="test decision", param_ceilings=ceilings
             )
         },
-        mode_constraints={},
     )
 
 
@@ -353,7 +352,6 @@ def _governance_config_forcing(tool_name: str, **forced: bool) -> GovernanceConf
                 granted=True, reason="test decision", param_forced=forced
             )
         },
-        mode_constraints={},
     )
 
 

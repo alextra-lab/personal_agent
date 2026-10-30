@@ -31,9 +31,7 @@ def load_governance_config(config_dir: Path | str | None = None) -> GovernanceCo
 
     Loads configuration from the following files in config/governance/:
     - modes.yaml: Mode definitions and transition rules
-    - tools.yaml: Tool permissions and categories
-    - models.yaml: Model constraints per mode
-    - safety.yaml: Safety policies and rate limits
+    - tools.yaml: Tool permissions and the sub-agent tool decisions
 
     Args:
         config_dir: Path to governance config directory. If None, uses
@@ -84,14 +82,10 @@ def load_governance_config(config_dir: Path | str | None = None) -> GovernanceCo
     # Load all YAML files using shared loader
     modes_file = config_dir / "modes.yaml"
     tools_file = config_dir / "tools.yaml"
-    models_file = config_dir / "models.yaml"
-    safety_file = config_dir / "safety.yaml"
 
     try:
         modes_data = load_yaml_file(modes_file, error_class=GovernanceConfigError)
         tools_data = load_yaml_file(tools_file, error_class=GovernanceConfigError)
-        models_data = load_yaml_file(models_file, error_class=GovernanceConfigError)
-        safety_data = load_yaml_file(safety_file, error_class=GovernanceConfigError)
     except ConfigLoadError as e:
         raise GovernanceConfigError(f"Failed to load governance config files: {e}") from None
 
@@ -99,11 +93,8 @@ def load_governance_config(config_dir: Path | str | None = None) -> GovernanceCo
     merged_data: dict[str, Any] = {
         "modes": modes_data.get("modes", {}),
         "transition_rules": modes_data.get("transition_rules", {}),
-        "tool_categories": tools_data.get("tool_categories", {}),
         "tools": tools_data.get("tools", {}),
         "sub_agent_tools": tools_data.get("sub_agent_tools", {}),
-        "mode_constraints": models_data.get("mode_constraints", {}),
-        "safety": safety_data,
     }
 
     # Validate against Pydantic schema

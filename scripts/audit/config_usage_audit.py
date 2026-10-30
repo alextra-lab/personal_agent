@@ -80,6 +80,7 @@ log = structlog.get_logger(__name__)
 
 SETTINGS_FILE = REPO_ROOT / "src" / "personal_agent" / "config" / "settings.py"
 SUBSTRATE_MANIFEST = REPO_ROOT / "config" / "substrate.yaml"
+MODEL_CATALOG = REPO_ROOT / "config" / "models.yaml"
 CONFTEST_FILE = REPO_ROOT / "tests" / "conftest.py"
 REPORT_DOC = REPO_ROOT / "docs" / "research" / "2026-07-16-fre-893-config-parameter-usage-audit.md"
 
@@ -113,6 +114,7 @@ CATEGORIES: frozenset[str] = frozenset(
 )
 
 _MANIFEST_SETTING = re.compile(r'source:\s*"setting:(\w+)"')
+_AUTH_ENV = re.compile(r"\bauth_env:\s*[\"']?(\w+)")
 _CONFTEST_SETDEFAULT = re.compile(r'os\.environ\.setdefault\(\s*["\'](AGENT_\w+)["\']')
 
 # Matches a Bash heredoc start marker: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, or the
@@ -215,7 +217,9 @@ class FieldUsage:
     name: str
     reads: dict[str, list[str]] = dataclass_field(default_factory=dict)
     internal_self_read: bool = False
+    settings_module_read: bool = False
     manifest_read: bool = False
+    auth_env_read: bool = False
     overrides: list[tuple[str, str]] = dataclass_field(default_factory=list)
     category: str = "never-read"
 
@@ -304,6 +308,55 @@ def internal_self_read(name: str) -> bool:
 def manifest_read(name: str) -> bool:
     """Whether `config/substrate.yaml` names the field via `source: "setting:<name>"`."""
     return name in _manifest_setting_fields()
+
+
+@lru_cache(maxsize=1)
+def _settings_module_reads() -> frozenset[str]:
+    tree = ast.parse(_settings_source())
+    return frozenset(
+        field_name
+        for field_name, _lineno in collect_field_reads(tree, frozenset(AppConfig.model_fields))
+    )
+
+
+def settings_module_read(name: str) -> bool:
+    """Whether a module function in `settings.py` reads the field (FRE-1701).
+
+    For example `load_app_config()` reads `config.log_level` from a local `AppConfig()`.
+    `_ast_reads_by_field` skips `settings.py`, and `internal_self_read` sees only `self.`.
+    """
+    return name in _settings_module_reads()
+
+
+@lru_cache(maxsize=1)
+def _auth_env_fields() -> frozenset[str]:
+    if not MODEL_CATALOG.exists():
+        return frozenset()
+    return frozenset(_AUTH_ENV.findall(MODEL_CATALOG.read_text(encoding="utf-8")))
+
+
+def auth_env_read(name: str) -> bool:
+    """Whether `config/models.yaml` names the field as a provider `auth_env` (FRE-1701).
+
+    `LiteLLMClient` reads that field with `getattr(settings, provider_def.auth_env)`.
+    """
+    return name in _auth_env_fields()
+
+
+def has_production_read(name: str) -> bool:
+    """Whether production code reads the field, by any evidence source this audit knows.
+
+    The sources: an alias-aware read under `src`, a `self.<name>` read or a module-function
+    read in `settings.py`, a `config/substrate.yaml` `setting:` source, or a
+    `config/models.yaml` `auth_env`. A read under `scripts` or `tests` alone does not count.
+    """
+    return (
+        bool(external_reads(name).get("src"))
+        or internal_self_read(name)
+        or settings_module_read(name)
+        or manifest_read(name)
+        or auth_env_read(name)
+    )
 
 
 @lru_cache(maxsize=None)
@@ -451,13 +504,14 @@ def categorize(name: str, field: FieldInfo) -> FieldUsage:
     """Categorize a single field into one of the 4 buckets, with full evidence."""
     reads = external_reads(name)
     self_read = internal_self_read(name)
+    module_read = settings_module_read(name)
     manifest = manifest_read(name)
+    auth_env = auth_env_read(name)
     overrides = override_locations(name, field)
-    has_production_read = bool(reads.get("src")) or self_read or manifest
 
     if is_guardrail(name, field):
         category = "writer-pinned-guardrail"
-    elif not has_production_read:
+    elif not has_production_read(name):
         category = "never-read"
     elif not overrides:
         category = "read-but-never-overridden"
@@ -468,7 +522,9 @@ def categorize(name: str, field: FieldInfo) -> FieldUsage:
         name=name,
         reads=reads,
         internal_self_read=self_read,
+        settings_module_read=module_read,
         manifest_read=manifest,
+        auth_env_read=auth_env,
         overrides=overrides,
         category=category,
     )
@@ -492,8 +548,12 @@ def _evidence_cell(result: FieldUsage) -> str:
             parts.append(f"{root}:{len(hits)}")
     if result.internal_self_read:
         parts.append("self-read")
+    if result.settings_module_read:
+        parts.append("settings-module")
     if result.manifest_read:
         parts.append("manifest")
+    if result.auth_env_read:
+        parts.append("auth_env")
     return ", ".join(parts) if parts else "none"
 
 

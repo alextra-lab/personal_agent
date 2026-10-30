@@ -100,4 +100,4 @@ caps:
   - {time_window: weekly, role: skill_routing,     cap_usd: 5.00}
   - {time_window: weekly, role: study,             cap_usd: 5.00}
   - {time_window: weekly, role: artifact_builder,  cap_usd: 5.00}
-  - {time_window: weekly, role: _total,            cap_usd: 10.00}  # keep in sync with AGENT_CLOUD_WEEKLY_BUDGET_USD (.env)
+  - {time_window: weekly, role: _total,            cap_usd: 10.00}

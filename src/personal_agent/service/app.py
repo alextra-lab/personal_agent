@@ -2034,11 +2034,13 @@ async def update_constraint_preference(
         The stored constraint name and preferred action.
 
     Raises:
-        HTTPException: 422 if the constraint or action is unknown; 503 if the
+        HTTPException: 422 if the constraint or action is unknown, or the turn never
+            applies a saved choice for the constraint (FRE-1701); 503 if the
             computed constraint's catalog cannot be loaded to validate against.
     """
     from personal_agent.config.model_loader import ModelConfigError
     from personal_agent.orchestrator.constraint_options import (
+        PREFERENCE_NEVER_APPLIED,
         is_known_constraint,
         valid_preference_actions,
     )
@@ -2051,6 +2053,12 @@ async def update_constraint_preference(
     # than the static registry — an API contract change, not a no-op.
     if not is_known_constraint(data.constraint_name):
         raise HTTPException(status_code=422, detail=f"unknown constraint: {data.constraint_name}")
+    # FRE-1701: a saved choice that the turn never applies would change nothing.
+    if data.constraint_name in PREFERENCE_NEVER_APPLIED:
+        raise HTTPException(
+            status_code=422,
+            detail=f"the turn never applies a saved choice for {data.constraint_name}",
+        )
     try:
         valid_actions = valid_preference_actions(data.constraint_name)
     except ModelConfigError as exc:

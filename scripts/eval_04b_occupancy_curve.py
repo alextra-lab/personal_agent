@@ -60,7 +60,8 @@ from personal_agent.request_gateway.types import AssembledContext  # noqa: E402
 # ---------------------------------------------------------------------------
 CONTEXT_WINDOW_MAX: int = settings.context_window_max_tokens  # 96 000 default
 GATEWAY_CEILING: int = settings.context_budget_max_tokens  # 120 000 default
-SOFT_RATIO: float = settings.context_compression_threshold_ratio  # 0.65
+# The soft trigger and its setting were deleted (FRE-941, FRE-1701). 0.65 was its last default.
+SOFT_RATIO: float = 0.65
 HARD_RATIO: float = settings.within_session_hard_threshold_ratio  # 0.85
 
 SOFT_THRESHOLD: int = int(SOFT_RATIO * CONTEXT_WINDOW_MAX)
@@ -895,16 +896,10 @@ async def run(agent_url: str, synthetic_only: bool, live_turns: int | None) -> N
     print(f"  context_window_max_tokens            : {CONTEXT_WINDOW_MAX:,}")
     print(f"  soft threshold  ({SOFT_RATIO:.0%} × max)          : {SOFT_THRESHOLD:,}")
     print(f"  hard threshold  ({HARD_RATIO:.0%} × max)          : {HARD_THRESHOLD:,}")
-    print(
-        f"  refire_after_messages                : {settings.within_session_compression_refire_after_messages}"
-    )
     print(f"  within_session_compression_enabled   : {settings.within_session_compression_enabled}")
     print()
     print("Gateway budget (ADR-0047, Stage 7):")
     print(f"  context_budget_max_tokens            : {GATEWAY_CEILING:,}")
-    print(
-        f"  context_budget_comfortable_tokens    : {settings.context_budget_comfortable_tokens:,}"
-    )
     print()
     print("Ordering check:")
     print(

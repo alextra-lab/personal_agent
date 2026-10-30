@@ -57,6 +57,12 @@ _REAL_CATALOGS: frozenset[Path] = frozenset({CATALOG_PATH})
 #: three layers validate in one pass.
 ROLE_BINDINGS_PATH: Path = Path(__file__).resolve().parents[3] / "config" / "model_roles.yaml"
 
+#: The roles whose stored session selection a turn reads (FRE-1701). The turn launcher puts
+#: only these into the per-turn selection (``set_current_selection`` in ``service/app.py``).
+#: Other ``open`` roles are chosen elsewhere: ``artifact_builder`` by a saved constraint
+#: choice, ``sub_agent`` by inheriting the primary. The selection write refuses them.
+TURN_SELECTED_ROLES: frozenset[str] = frozenset({"primary"})
+
 #: Neutral placeholder host baked into config/models*.yaml (FRE-895) — the real
 #: SLM host never lands in tracked source. See settings.slm_base_url.
 _SLM_TUNNEL_PLACEHOLDER_HOST = "slm.example.com"

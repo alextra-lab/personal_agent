@@ -312,10 +312,8 @@ Run this after deploying the FRE-229 build. The service has an IS NULL grace cla
 
 Edit `config/governance/` files to customize:
 
-- **modes.yaml**: Operational mode thresholds
+- **modes.yaml**: Operational modes and transition rules
 - **tools.yaml**: Tool permissions and risk levels
-- **safety.yaml**: Safety policies and content filtering
-- **models.yaml**: Model-specific governance rules
 
 ## Common Tasks
 

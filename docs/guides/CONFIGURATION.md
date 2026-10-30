@@ -32,11 +32,9 @@ The environment is set via `APP_ENV` environment variable (defaults to `developm
 **Location**: `config/` directory
 
 - **`config/models.yaml`** - LLM model configurations (primary, sub_agent, compressor roles)
-- **`config/governance/`** - Governance policies (modes, safety, tools, models)
-  - `modes.yaml` - Operational mode thresholds (NORMAL, ALERT, DEGRADED, etc.)
-  - `safety.yaml` - Safety policies and constraints
+- **`config/governance/`** - Governance policies (modes, tools, budget, permissions)
+  - `modes.yaml` - Operational modes (NORMAL, ALERT, DEGRADED, etc.) and transition rules
   - `tools.yaml` - Tool permissions and allowlists
-  - `models.yaml` - Model-specific governance rules
 
 These files are tracked in git and define the agent's behavior.
 

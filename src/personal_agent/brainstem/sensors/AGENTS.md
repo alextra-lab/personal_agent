@@ -71,12 +71,6 @@ from personal_agent.config import settings
 
 # Enable/disable monitoring
 settings.request_monitoring_enabled = True  # Default: True
-
-# Adjust polling frequency
-settings.request_monitoring_interval_seconds = 5.0  # Default: 5.0
-
-# Include/exclude GPU metrics
-settings.request_monitoring_include_gpu = True  # Default: True
 ```
 
 **Usage (Automatic):**
@@ -421,11 +415,8 @@ rg "SYSTEM_METRICS_SNAPSHOT" telemetry/logs/agent.log | grep trace_id=YOUR_TRACE
 
 **High monitoring overhead:**
 ```python
-# Increase polling interval (trade-off: less granular data)
-settings.request_monitoring_interval_seconds = 10.0
-
-# Disable GPU monitoring if not needed
-settings.request_monitoring_include_gpu = False
+# Turn request monitoring off (no interval or GPU setting exists, FRE-1701)
+settings.request_monitoring_enabled = False
 ```
 
 ## Non-Negotiables

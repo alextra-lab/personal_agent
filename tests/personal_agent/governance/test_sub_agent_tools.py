@@ -41,7 +41,6 @@ def _config(sub_agent_tools: list[str]) -> GovernanceConfig:
         modes={},
         tools={},
         sub_agent_tools=_granted(*sub_agent_tools),
-        mode_constraints={},
     )
 
 
@@ -50,7 +49,6 @@ def _config_with_decisions(decisions: dict[str, SubAgentToolDecision]) -> Govern
         modes={},
         tools={},
         sub_agent_tools=decisions,
-        mode_constraints={},
     )
 
 
@@ -59,7 +57,6 @@ def _config_with_policy(tool_name: str, policy: ToolPolicy) -> GovernanceConfig:
         modes={},
         tools={tool_name: policy},
         sub_agent_tools=_granted(tool_name),
-        mode_constraints={},
     )
 
 
@@ -310,7 +307,6 @@ def _config_with_decision(tool_name: str, decision: SubAgentToolDecision) -> Gov
         modes={},
         tools={},
         sub_agent_tools={tool_name: decision},
-        mode_constraints={},
     )
 
 

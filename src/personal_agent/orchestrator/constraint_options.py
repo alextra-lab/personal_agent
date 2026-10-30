@@ -81,6 +81,11 @@ ARTIFACT_BUILDER_CONSTRAINT = "artifact_builder"
 #: pattern is designed to generalise — is a one-line addition, not a new branch.
 COMPUTED_OPTION_CONSTRAINTS: frozenset[str] = frozenset({ARTIFACT_BUILDER_CONSTRAINT})
 
+#: Constraints for which the turn never reads a saved choice: the executor pauses them with
+#: ``allow_preference=False``, so the card always asks (FRE-1701). The preference write
+#: refuses them, and the settings menu notes it on their rows.
+PREFERENCE_NEVER_APPLIED: frozenset[str] = frozenset({"attachment_cost", "spend_threshold"})
+
 
 @dataclass(frozen=True)
 class ComputedConstraintOption:

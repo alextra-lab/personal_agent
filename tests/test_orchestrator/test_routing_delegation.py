@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator import Channel, Orchestrator
@@ -422,11 +421,9 @@ class TestHeuristicBypass:
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
     async def test_high_confidence_heuristic_skips_router_llm(
-        self, mock_client_class: Any, monkeypatch: Any
+        self, mock_client_class: Any
     ) -> None:
         """High-confidence heuristic must result in exactly one LLM call (no router LLM call)."""
-        monkeypatch.setattr(settings, "routing_policy", "heuristic_then_llm")
-        monkeypatch.setattr(settings, "routing_heuristic_threshold", 0.8)
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client

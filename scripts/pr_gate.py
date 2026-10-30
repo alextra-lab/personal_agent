@@ -36,9 +36,10 @@ import subprocess  # noqa: S404 - runs trusted, argv-built `gh` commands, no she
 from collections.abc import Sequence
 from typing import Literal, Protocol
 
-# The GitHub App login a dependabot-authored PR carries (identity only — no merge
+# The GitHub App logins a dependabot-authored PR carries (identity only — no merge
 # implication; whether a bump is safe is master's judgment, ADR-0117 Decision 1).
-_DEPENDABOT_LOGIN = "dependabot[bot]"
+# The REST API reports "dependabot[bot]"; `gh pr view` reports "app/dependabot".
+DEPENDABOT_LOGINS = frozenset({"dependabot[bot]", "app/dependabot"})
 
 UNKNOWN = "UNKNOWN"
 
@@ -150,7 +151,7 @@ def parse_author_identity(stdout: str, returncode: int) -> dict[str, object]:
     if not isinstance(author, dict):
         return {"is_dependabot_author": UNKNOWN}
     login = str(author.get("login", ""))
-    return {"is_dependabot_author": login == _DEPENDABOT_LOGIN}
+    return {"is_dependabot_author": login in DEPENDABOT_LOGINS}
 
 
 def _load_obj(stdout: str, returncode: int) -> dict[str, object] | None:

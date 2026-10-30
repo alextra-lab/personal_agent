@@ -20,10 +20,10 @@ make build           # SSH → pull + rebuild seshat-gateway
 make build-full      # SSH → pull + rebuild all images
 make tunnel-up       # start cloudflared tunnel
 make tunnel-status   # show tunnel container status
-ENV=cloud make ps    # check VPS container status
+ENV=cloud make ps    # container status from the cloud compose file (runs docker compose where you run it; no SSH)
 
 # Chat CLI
-uv run agent "Your message here"
+uv run agent chat "Your message here"
 uv run agent chat "Start fresh" --new
 uv run agent session
 ```
@@ -32,7 +32,7 @@ uv run agent session
 
 ```bash
 make test                  # fast unit tests only (no LLM, safe for agents)
-make test-file FILE=tests/test_tools/test_web.py   # single file
+make test-file FILE=tests/test_tools/test_web_search.py   # single file
 make test-k K=test_intent  # filter by name pattern
 make test-cov              # with coverage report
 make test-verbose          # verbose output
@@ -65,16 +65,16 @@ CLI / API /chat
     ↓
 Pre-LLM Gateway (request_gateway/)   ← deterministic 7-stage pipeline
     Stage 1: security stub
-    Stage 2: session hydration
+    Stage 2: session (the caller passes the session messages in; no hydration here)
+    Stage 4: intent classification → TaskType enum (runs before Stage 3)
     Stage 3: governance (mode + expansion gating)
-    Stage 4: intent classification → TaskType enum
     Stage 5: decomposition assessment → SINGLE/HYBRID/DECOMPOSE/DELEGATE
     Stage 6: context assembly (memory + session history)
-    Stage 7: token-aware budget trimming
+    Stage 7: token-aware budget trimming (trims the gateway's own copy of the history; the executor does not send that copy)
     ↓ GatewayOutput
 Orchestrator (orchestrator/executor.py)
     ↓ calls LLM
-LocalLLMClient → SLM Server on :8000 (separate repo, MLX-optimized)
+LiteLLMClient → the deployment bound to the role (config/model_roles.yaml); local models run on llama.cpp on the owner's Mac, at AGENT_SLM_BASE_URL
     ↓ tool calls
 Tools: native Python tools (tools/) + MCP gateway (mcp/)
     ↓
@@ -100,13 +100,13 @@ Key settings:
 - `AGENT_SERVICE_PORT=9000`
 - `AGENT_DATABASE_URL` — PostgreSQL (asyncpg)
 - `AGENT_ELASTICSEARCH_URL=http://localhost:9200`
-- `LLM_BASE_URL=http://localhost:8000/v1` — SLM Server
+- `AGENT_SLM_BASE_URL` — local model server (llama.cpp); no default, an origin without `/v1`
 
 ### Memory types (`memory/protocol.py`)
 
 `MemoryType` enum: `WORKING` · `EPISODIC` · `SEMANTIC` · `PROCEDURAL` · `PROFILE` · `DERIVED`
 
-Promotion pipeline: episodic interactions → entity extraction (qwen3-8b) → semantic facts in Neo4j.
+Promotion pipeline: episodic interactions → entity extraction (the `entity_extraction` role in `config/model_roles.yaml`) → semantic facts in Neo4j.
 
 ### Current status — see the authoritative sources
 

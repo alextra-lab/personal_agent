@@ -1,16 +1,29 @@
 # Personal Agent - Cognitive Architecture
 
-> **⚠️ Research & Learning Project**: This is a **learning and research project** exploring cognitive architectures, agentic systems, and biologically-inspired AI design. It is not production-ready software and should be used for educational and experimental purposes.
+> **⚠️ Research & Learning Project**: This is a **learning and research project** that explores cognitive architectures, agentic systems, and biologically-inspired AI design. It is not production-ready software. Use it for educational and experimental purposes.
 
-A personal AI assistant with persistent memory, cognitive architecture, and Apple Silicon optimized local LLM inference. This project serves as a research platform for understanding:
+A personal AI assistant with persistent memory and a cognitive architecture. The project is a research platform for these topics:
 
 - Cognitive architectures and biologically-inspired system design
 - Agentic AI orchestration and tool integration patterns
-- Local LLM inference and model routing strategies
+- Model routing across local and cloud models
 - Knowledge graph construction and memory consolidation
 - Safety and governance in autonomous systems
 
 See the [`docs/research/`](docs/research/) directory for research notes and analysis.
+
+## How it runs today
+
+- **Gateway**: the FastAPI service runs in Docker on a VPS. The gateway listens on port 9001. The cloud stack is defined in [`docker-compose.cloud.yml`](docker-compose.cloud.yml).
+- **Clients**: the PWA (`seshat-pwa/`) is a web client. The CLI is a second client. The CLI form is `uv run agent chat "<message>"`.
+- **Models**: the file [`config/model_roles.yaml`](config/model_roles.yaml) binds each role to a model deployment. It is the source for the role bindings. The deployments are listed in [`config/models.yaml`](config/models.yaml). Most roles use cloud models. The primary role can use a local model, and the owner can choose another primary model per session.
+- **Local model server**: local models run on llama.cpp on the owner's Mac. The service reaches that server through `AGENT_SLM_BASE_URL`. This setting has no default. No local model server runs on the VPS.
+- **Data stores**: PostgreSQL stores sessions, metrics, and cost. Elasticsearch stores traces and logs. Neo4j stores the knowledge graph.
+- **Schema changes**: the schema is in `docker/postgres/init.sql`. Schema changes go into `docker/postgres/init.sql` and `docker/postgres/migrations/`. The project does not use Alembic.
+
+### Grounding
+
+The design rule (ADR-0138) is that a model may generate but may not assert. Code for the verification of model claims exists in `src/personal_agent/grounding/`. The setting `grounding_verification_mode` is `off` in production today (`src/personal_agent/config/settings.py:2453`). With this value, no verification runs. The other values are `observe` and `enforce`. See [ADR-0138](docs/architecture_decisions/ADR-0138-the-model-may-generate-but-may-not-assert.md).
 
 ## Architecture
 
@@ -19,31 +32,32 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
 ```
 +---------------------------------------------------------------------+
 |                        INTERFACE LAYER                               |
-|  CLI . API /chat (port 9000) . Future: mobile, voice                |
+|  PWA . CLI . API /chat (VPS gateway :9001, `make dev` :9000)        |
 +--------------------------------+------------------------------------+
                                  |
 +--------------------------------v------------------------------------+
 |                      PRE-LLM GATEWAY (7 stages)                     |
 |                                                                     |
-|  Security -> Session -> Governance -> Intent Classification         |
+|  Security -> Session -> Intent Classification -> Governance         |
 |     -> Decomposition Assessment -> Context Assembly -> Budget       |
 +--------------------------------+------------------------------------+
                                  |
               +------------------v--------+
               |      PRIMARY AGENT        |
-              |   Qwen3.5-35-A3B         |
+              |   (role: primary, see     |
+              |   config/model_roles.yaml)|
               |                           |
               |   Conversational core     |
-              |   Tool calling (MCP +     |
-              |     native)               |
+              |   Tool calling (native    |
+              |     tools + MCP)          |
               |   Delegation composer     |
               +--+----------+--------+----+
                  |          |        |
     +------------v--+  +---v-----+  +v---------------------------+
     |   TOOLS       |  |  SESHAT |  |   EXPANSION LAYER          |
     |               |  | MEMORY  |  |                             |
-    |  MCP Gateway  |  |         |  |  Internal sub-agents        |
-    |  Native tools |  | Protocol|  |  (ephemeral, task-scoped)   |
+    |  Native tools |  |         |  |  Internal sub-agents        |
+    |  MCP Gateway  |  | Protocol|  |  (ephemeral, task-scoped)   |
     |  (extensible) |  | Neo4j   |  |  External delegation        |
     |               |  |         |  |  (Claude Code, Codex, etc.) |
     +---------------+  +----+----+  +-------------+---------------+
@@ -63,47 +77,48 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
               +------------------------v-------------------------+
               |              INFRASTRUCTURE                      |
               |  PostgreSQL (sessions, metrics, cost)            |
-              |  Elasticsearch (traces, logs, insights)          |
+              |  Elasticsearch (traces, logs)                    |
               |  Neo4j (knowledge graph, memory)                 |
               +--------------------------------------------------+
 ```
 
 ## Features
 
-### Cognitive Architecture Redesign v2 (Slices 1 & 2 Implemented)
+### Cognitive Architecture Redesign v2 (Slices 1 to 3 implemented)
 
-- **Pre-LLM Gateway**: 7-stage deterministic pipeline (security, session, governance, intent classification, decomposition assessment, context assembly, budget management) — all requests processed before the LLM sees them
-- **Single-Brain Architecture**: Qwen3.5-35B as sole reasoning center — no role-switching, no router SLM
-- **Intent Classification**: Task-type routing (CONVERSATIONAL, MEMORY_RECALL, ANALYSIS, PLANNING, DELEGATION, SELF_IMPROVE, TOOL_USE) replaces model-role routing
-- **Decomposition & Expansion**: SINGLE/HYBRID/DECOMPOSE/DELEGATE strategies with sub-agent spawning and concurrent execution
-- **Delegation (Stage B)**: Structured handoffs via `DelegationPackage`/`DelegationOutcome` types with telemetry
-- **Seshat Memory Protocol**: Abstract `MemoryProtocol` interface with episodic-to-semantic promotion pipeline
-- **Expansion Budget**: Brainstem signals expansion safety based on GPU/memory/concurrency state
-- **Context Budget**: Token-aware context trimming with priority-based overflow handling
-- **Insights Engine**: Delegation pattern analysis across sessions
+- **Pre-LLM Gateway**: a 7-stage deterministic pipeline (security, session, intent classification, governance, decomposition assessment, context assembly, budget management). The pipeline runs before the LLM sees a request.
+- **Role-bound models**: each role (primary, entity extraction, embedding, reranker, and others) is bound to a model deployment in `config/model_roles.yaml`.
+- **Intent Classification**: task-type routing (CONVERSATIONAL, MEMORY_RECALL, ANALYSIS, PLANNING, DELEGATION, SELF_IMPROVE, TOOL_USE).
+- **Decomposition & Expansion**: SINGLE/HYBRID/DECOMPOSE/DELEGATE strategies with sub-agent spawning and concurrent execution.
+- **Delegation**: structured handoffs through the `DelegationPackage` and `DelegationOutcome` types, with telemetry.
+- **Seshat Memory Protocol**: the abstract `MemoryProtocol` interface, with an episodic-to-semantic promotion pipeline.
+- **Expansion Budget**: the brainstem signals expansion safety from CPU, memory, and active inference count.
+- **Context Budget**: token-aware context trimming with priority-based overflow handling.
+- **Insights Engine**: delegation pattern analysis across sessions.
 
-*Status: Evaluation phase — building real usage traces before Slice 3 (Intelligence)*
+Slice 3 was completed on 2026-03-29. Follow-on work is tracked in Linear.
 
-### Foundation (Complete)
+### Foundation
 
 - **Knowledge Graph**: Neo4j-based persistent memory with entity extraction
-- **Service Architecture**: FastAPI-based persistent service (port 9000)
+- **Service Architecture**: FastAPI-based persistent service
 - **Session Management**: PostgreSQL storage with async SQLAlchemy
-- **Structured Logging**: Elasticsearch with Grafana dashboards
-- **Local LLM Inference**: Multi-model routing via SLM Server (MLX-optimized)
-- **MCP Gateway**: Tool discovery and execution
-- **Brainstem**: Homeostasis loop, sensors, consolidation scheduler, quality monitoring
-- **Captain's Log**: Self-improvement data capture and reflection
+- **Structured Logging**: Elasticsearch, with Grafana dashboards
+- **Tools**: native Python tools, with an MCP gateway for tool discovery and execution
+- **Brainstem**: homeostasis loop, sensors, consolidation scheduler, quality monitoring
+- **Captain's Log**: self-improvement data capture and reflection
 - **Persistent Cost Tracking**: PostgreSQL-backed API cost monitoring
 
 ## Quick Start
 
+The steps below start a local development stack. The production gateway runs from `docker-compose.cloud.yml`.
+
 ### Prerequisites
 
 - Python 3.12+
-- Docker Desktop (for PostgreSQL, Elasticsearch, Neo4j)
-- Apple Silicon Mac (for MLX-optimized models)
-- [SLM Server](https://github.com/alextra-lab/slm_server) (separate project)
+- [uv](https://docs.astral.sh/uv/)
+- Docker (for PostgreSQL, Elasticsearch, Neo4j)
+- A llama.cpp model server, if you want local models. Set `AGENT_SLM_BASE_URL` to its origin, without `/v1`. Cloud-bound roles need the provider keys that `config/model_roles.yaml` lists under `required_secrets`.
 
 ### Installation
 
@@ -115,40 +130,35 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
    uv sync --extra dev
    ```
 
-2. **Start infrastructure services**
+2. **Create the configuration files**
 
    ```bash
-   ./scripts/init-services.sh
+   cp .env.example .env
+   cp config/governance/budget.yaml.example config/governance/budget.yaml
    ```
 
-   This starts PostgreSQL, Elasticsearch, Grafana, and Neo4j.
-
-3. **Start SLM Server** (separate terminal)
-
-   First, clone and set up the SLM Server:
+3. **Start infrastructure services**
 
    ```bash
-   git clone https://github.com/alextra-lab/slm_server.git
-   cd slm_server
-   uv sync
-   ./start.sh
+   make up
    ```
 
-   This starts the local LLM inference backend on port 8000.
+   This starts the services in `docker-compose.yml`. Run `make help` for the other targets.
 
-4. **Start Personal Agent Service** (separate terminal)
+4. **Start the Personal Agent service**
 
    ```bash
-   cd personal_agent
-   uv run uvicorn personal_agent.service.app:app --reload --port 9000
+   make dev
    ```
 
-5. **Chat with the agent from terminal**
+   This starts the service with hot reload on port 9000.
+
+5. **Chat with the agent from the terminal**
 
    ```bash
-   # Uses service client, creates/reuses session automatically
-   uv run agent "Hello, what should I focus on today?"
-   uv run agent "Summarize that into 3 bullets"
+   # The CLI creates or reuses a session automatically
+   uv run agent chat "Hello, what should I focus on today?"
+   uv run agent chat "Summarize that into 3 bullets"
    ```
 
 ### Verify Installation
@@ -157,35 +167,22 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
 # Check service health
 curl http://localhost:9000/health
 
-# Check SLM Server
-curl http://localhost:8000/health
-
 # View API documentation
 open http://localhost:9000/docs
 ```
 
-## Service URLs
-
-| Service | URL | Purpose |
-|---------|-----|---------|
-| Personal Agent API | <http://localhost:9000> | Main service endpoints |
-| API Documentation | <http://localhost:9000/docs> | Swagger UI |
-| SLM Server | <http://localhost:8000> | LLM inference |
-| Grafana | <http://localhost:3000> | Log/trace visualization |
-| Neo4j Browser | <http://localhost:7474> | Knowledge graph (Phase 2.2) |
-
 ## Usage Examples
 
-### Primary Interface (Conversation CLI)
+### Conversation CLI
 
 ```bash
-uv run agent "Hello"
-uv run agent "Follow up on that"
+uv run agent chat "Hello"
+uv run agent chat "Follow up on that"
 uv run agent chat "Start new conversation" --new
 uv run agent session
 ```
 
-Set target service with `AGENT_SERVICE_URL` if needed:
+Set the target service with `AGENT_SERVICE_URL`:
 
 ```bash
 export AGENT_SERVICE_URL=https://agent.example.com
@@ -207,12 +204,6 @@ curl -X POST "http://localhost:9000/chat?message=Hello&session_id=YOUR_SESSION_I
 curl http://localhost:9000/sessions
 ```
 
-### Check System Health
-
-```bash
-curl http://localhost:9000/health
-```
-
 ### Query Memory with Feedback Telemetry
 
 ```bash
@@ -230,68 +221,50 @@ This emits `memory_query_quality_metrics` events to Elasticsearch (`agent-logs-*
 
 ## Configuration
 
-Configuration is managed via environment variables and `.env` file:
-
-```bash
-# Copy example configuration
-cp .env.example .env
-
-# Per-role LLM spend caps — the real file is gitignored (operational config,
-# not source), so a fresh clone must create it from the template. The tests
-# and the cost gate both need it present.
-cp config/governance/budget.yaml.example config/governance/budget.yaml
-
-# Edit as needed
-vim .env
-```
+Configuration comes from environment variables and the `.env` file. All code reads it through `personal_agent.config.settings`.
 
 **Key Settings:**
 
-- `AGENT_SERVICE_PORT=9000` - API service port
+- `AGENT_SERVICE_PORT=9000` - API service port for `make dev`
 - `AGENT_DATABASE_URL=postgresql+asyncpg://...` - PostgreSQL connection
 - `AGENT_ELASTICSEARCH_URL=http://localhost:9200` - Elasticsearch URL
-- `LLM_BASE_URL=http://localhost:8000/v1` - SLM Server endpoint
+- `AGENT_SLM_BASE_URL` - origin of the local llama.cpp model server (no default, no `/v1`)
+
+The file `config/governance/budget.yaml` holds the per-role LLM spend caps. The real file is gitignored. A fresh clone must create it from `config/governance/budget.yaml.example`. The tests and the cost gate both need it.
+
+See the [Configuration Guide](docs/guides/CONFIGURATION.md) for the full reference.
 
 ## Development
 
 ### Running Tests
 
 ```bash
-# Run all tests
-uv run pytest
+# Fast unit tests (no LLM needed)
+make test
 
-# Run with coverage
-uv run pytest --cov=src/personal_agent
+# One test file
+make test-file FILE=tests/test_tools/test_web_search.py
 
-# Run specific test file
-uv run pytest tests/test_service/test_session_repository.py
+# With coverage
+make test-cov
 ```
 
 ### Code Quality
 
 ```bash
-# Type checking
-uv run mypy src/
-
-# Linting
-uv run ruff check src/
-
-# Formatting
-uv run ruff format src/
+make mypy
+make ruff-check
+make ruff-format
 ```
 
-### Database Migrations
+### Database Schema Changes
 
-```bash
-# Create migration
-alembic revision --autogenerate -m "Description"
+The project does not use Alembic. Put schema changes in these places:
 
-# Apply migrations
-alembic upgrade head
+- `docker/postgres/init.sql` for a fresh database
+- `docker/postgres/migrations/` for an existing database
 
-# Rollback
-alembic downgrade -1
-```
+Run migrations as the `agent` superuser (`AGENT_DATABASE_ADMIN_URL`). The restricted application role cannot run DDL.
 
 ## Project Structure
 
@@ -299,46 +272,36 @@ alembic downgrade -1
 personal_agent/
 ├── src/personal_agent/
 │   ├── service/              # FastAPI service layer
-│   │   ├── app.py           # Main application
-│   │   ├── models.py        # Data models
-│   │   ├── database.py      # DB connection
-│   │   └── repositories/    # Data access layer
-│   ├── request_gateway/     # Pre-LLM Gateway (7-stage pipeline)
-│   │   ├── pipeline.py      # Gateway orchestration
-│   │   ├── types.py         # TaskType, IntentResult, GatewayOutput
-│   │   ├── intent.py        # Deterministic intent classification
-│   │   ├── decomposition.py # SINGLE/HYBRID/DECOMPOSE/DELEGATE
-│   │   ├── context.py       # Multi-source context assembly
-│   │   ├── budget.py        # Token-aware context trimming
-│   │   ├── governance.py    # Mode + expansion gating
-│   │   ├── delegation.py    # Delegation instruction composition
-│   │   └── delegation_types.py  # DelegationPackage/DelegationOutcome
-│   ├── orchestrator/        # Request orchestration + sub-agents + HYBRID expansion
-│   ├── memory/              # Seshat memory (protocol, service, promotion)
-│   ├── insights/            # Cross-data analysis engine
-│   ├── brainstem/           # Homeostasis & monitoring
-│   ├── llm_client/          # LLM API client
-│   ├── mcp/                 # MCP Gateway integration
-│   ├── tools/               # Tool registry
-│   ├── telemetry/           # Logging & metrics
-│   ├── captains_log/        # Self-improvement
-│   ├── config/              # Configuration management
-│   └── ui/                  # CLI client
-├── docker/                  # Docker configurations
-│   ├── postgres/            # PostgreSQL init scripts
-│   └── elasticsearch/       # ES templates and policies
-├── scripts/                 # Utility scripts
-│   ├── init-services.sh    # Initialize all services
-│   └── setup-elasticsearch.sh
-├── tests/                   # Test suite
-├── docs/                    # Documentation
-│   ├── architecture/        # Architecture specifications
-│   ├── architecture_decisions/ # ADRs and design decisions
-│   ├── research/            # Research notes and analysis
-│   ├── plans/               # Implementation plans
-│   └── SLM_SERVER_INTEGRATION.md
-├── docker-compose.yml       # Infrastructure services
-└── pyproject.toml          # Python dependencies
+│   ├── gateway/              # HTTP access control for the service
+│   ├── request_gateway/      # Pre-LLM Gateway (7-stage pipeline)
+│   ├── orchestrator/         # Request orchestration, sub-agents, HYBRID expansion
+│   ├── grounding/            # Claim verification code (mode: see Grounding)
+│   ├── memory/               # Seshat memory (protocol, service, promotion)
+│   ├── insights/             # Cross-data analysis engine
+│   ├── brainstem/            # Homeostasis & monitoring
+│   ├── llm_client/           # LLM client (LiteLLM, role-bound)
+│   ├── mcp/                  # MCP Gateway integration
+│   ├── tools/                # Native tools
+│   ├── telemetry/            # Logging & metrics
+│   ├── captains_log/         # Self-improvement
+│   ├── config/               # Configuration management
+│   └── ui/                   # CLI client
+├── seshat-pwa/               # PWA web client
+├── config/                   # model_roles.yaml, models.yaml, governance
+├── docker/                   # Docker configurations
+│   ├── postgres/             # init.sql and migrations/
+│   └── elasticsearch/        # ES templates and policies
+├── scripts/                  # Utility scripts
+├── tests/                    # Test suite
+├── docs/                     # Documentation
+│   ├── architecture_decisions/ # ADRs
+│   ├── guides/               # Usage and configuration guides
+│   ├── research/             # Research notes and analysis
+│   ├── specs/                # Technical specifications
+│   └── plans/                # Plans and owner directives
+├── docker-compose.yml        # Local infrastructure services
+├── docker-compose.cloud.yml  # Production stack on the VPS
+└── pyproject.toml            # Python dependencies
 ```
 
 ## Documentation
@@ -346,51 +309,49 @@ personal_agent/
 ### Getting Started
 - **[Usage Guide](docs/guides/USAGE_GUIDE.md)** - Complete usage guide with examples
 - **[Configuration Guide](docs/guides/CONFIGURATION.md)** - Configuration reference
-- **[SLM Server Integration](docs/SLM_SERVER_INTEGRATION.md)** - LLM backend setup
+- **[SLM Server Integration](docs/guides/SLM_SERVER_INTEGRATION.md)** - Local model server setup
 
 ### Architecture
 - **[Cognitive Architecture Redesign v2](docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)** - Current architecture specification (supersedes ADR-0017)
-- **[Service Implementation Spec](docs/architecture/SERVICE_IMPLEMENTATION_SPEC_v0.1.md)** - Phase 2.1 foundation specification
 - **[ADR-0016](docs/architecture_decisions/ADR-0016-service-cognitive-architecture.md)** - Service architecture decision
+- **[ADR-0138](docs/architecture_decisions/ADR-0138-the-model-may-generate-but-may-not-assert.md)** - The model may generate but may not assert
 - **[Research Knowledge Base](docs/research/README.md)** - Research notes and external system analysis
 
 ### Development
-- **[Slice 1: Foundation](docs/superpowers/plans/2026-03-16-slice-1-foundation.md)** - Gateway + single agent + protocol
-- **[Slice 2: Expansion](docs/superpowers/plans/2026-03-18-slice-2-expansion.md)** - Decomposition + sub-agents + memory types + Stage B
 - **[Phase 2.1 Complete](docs/plans/completed/PHASE_2.1_COMPLETE.md)** - Service foundation complete
 - **[Phase 2.2 Complete](docs/plans/completed/PHASE_2.2_COMPLETE.md)** - Memory implementation complete
-- **[Coding Conventions](docs/reference/CODING_CONVENTIONS.md)** - Code style and standards
+- **[Coding Standards](docs/reference/CODING_STANDARDS.md)** - Code style and standards
 
 ## Troubleshooting
 
-### Service won't start
+### Service will not start
 
 ```bash
 # Check if services are running
-docker-compose ps
+make ps
 
 # Check logs
-docker-compose logs postgres
-docker-compose logs elasticsearch
+make logs SERVICE=postgres
+make logs SERVICE=elasticsearch
 
 # Restart infrastructure
-docker-compose down && ./scripts/init-services.sh
+make down && make up
 ```
 
 ### Port conflicts
 
-- Personal Agent Service: Port 9000 (changed from 8000 due to SLM Server)
-- SLM Server uses port 8000
-- Check with: `lsof -i :9000` and `lsof -i :8000`
+- `make dev` uses port 9000.
+- The VPS gateway uses port 9001.
+- Check a port with `lsof -i :9000`.
 
 ### Database connection issues
 
 ```bash
 # Test PostgreSQL connection
-docker-compose exec postgres psql -U agent -d personal_agent
+docker compose exec postgres psql -U agent -d personal_agent
 
 # Check if tables exist
-docker-compose exec postgres psql -U agent -d personal_agent -c "\dt"
+docker compose exec postgres psql -U agent -d personal_agent -c "\dt"
 ```
 
 ### Elasticsearch not connecting
@@ -405,9 +366,9 @@ curl http://localhost:9200/_cluster/health
 
 ## Contributing
 
-See [CODING_CONVENTIONS.md](docs/reference/CODING_CONVENTIONS.md) and [PR_REVIEW_RUBRIC.md](docs/reference/PR_REVIEW_RUBRIC.md).
+See [CODING_STANDARDS.md](docs/reference/CODING_STANDARDS.md) and [PR_REVIEW_RUBRIC.md](docs/reference/PR_REVIEW_RUBRIC.md).
 
-Path hygiene: do not commit machine-specific absolute paths or home layouts that fingerprint one machine. See [PATH_PRIVACY.md](docs/reference/PATH_PRIVACY.md). Run `uv run python scripts/check_no_personal_paths.py` (also wired in [`.pre-commit-config.yaml`](.pre-commit-config.yaml) via `pre-commit install`).
+Path hygiene: do not commit machine-specific absolute paths or home layouts that fingerprint one machine. See [PATH_PRIVACY.md](docs/reference/PATH_PRIVACY.md). Run `uv run python scripts/check_no_personal_paths.py`. The check also runs from [`.pre-commit-config.yaml`](.pre-commit-config.yaml) after `pre-commit install`.
 
 ## License
 
@@ -415,8 +376,8 @@ MIT License - See [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-- **MLX**: Apple's machine learning framework for Apple Silicon
-- **FastAPI**: Modern async web framework
-- **PostgreSQL + pgvector**: Vector database capabilities
-- **Elasticsearch**: Scalable logging and search
-- **Neo4j**: Graph database for knowledge representation
+- **llama.cpp**: local model inference
+- **FastAPI**: modern async web framework
+- **PostgreSQL + pgvector**: vector database capabilities
+- **Elasticsearch**: scalable logging and search
+- **Neo4j**: graph database for knowledge representation

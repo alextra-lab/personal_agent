@@ -317,7 +317,7 @@ See the project structure in `README.md` and `.claude/CLAUDE.md` for detailed ru
 
 ### 3. Captain's Log as Improvement Engine
 
-The agent writes **structured proposals** to `architecture_decisions/captains_log/`:
+The agent writes **structured proposals** to `telemetry/captains_log/`:
 
 ```yaml
 entry_id: "CL-2025-12-28-001"

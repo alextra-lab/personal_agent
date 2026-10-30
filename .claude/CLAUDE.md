@@ -11,7 +11,7 @@ Project-specific rules, policies, and non-obvious patterns. Architecture and com
 **Personal Agent** — cognitive architecture research project: biologically-inspired agentic AI with persistent memory, knowledge graphs, and local LLM inference.
 
 - **Type**: Research & Learning (not production-ready)
-- **Dev environment**: VPS at `/opt/seshat` (Debian); SLM Server is separate (MLX/Apple Silicon)
+- **Dev environment**: VPS at `/opt/seshat` (Debian); the local model server (llama.cpp) runs on the owner's Mac, not on the VPS
 - **Development Model**: Linear issue tracking (FrenchForest team) with approval gates
 
 ---
@@ -40,7 +40,7 @@ Linear MCP: Team `FrenchForest` · `save_issue` to create · `get_issue` to veri
 | `/docs/reference/` | Standards, policies, checklists |
 | `/docs/specs/` | Technical specifications |
 | `/docs/plans/` | OWNER_CONSOLE, LAST_SESSION (project-level only). `DEV_TRACKER.md` is dormant (last change 2026-07-31) |
-| `/docs/plans/sessions/` | **Dormant** (last log 2026-04-16) — do not write session logs; reasoning goes on the Linear ticket, the session overlay in `LAST_SESSION.md` |
+| `/docs/plans/sessions/` | **Dormant** (last log 2026-07-04) — do not write session logs; reasoning goes on the Linear ticket, the session overlay in `LAST_SESSION.md` |
 | `/docs/architecture_decisions/` | ADRs |
 | `/docs/superpowers/plans/` | Implementation plans (canonical location) |
 | `/config/` | Runtime configuration templates |
@@ -107,7 +107,7 @@ Before starting implementation:
 
 ### Port conflicts
 
-Personal Agent `:9000` · SLM Server `:8000`. Service triage is `make ps` / `make logs SERVICE=<name>`.
+The VPS gateway listens on `:9001`. `:9000` is the default port of `make dev` on a local machine. No local model server runs on the VPS. Service triage is `make ps` / `make logs SERVICE=<name>`.
 
 ---
 

@@ -22,6 +22,7 @@ as governance. These two limits can make an unread field look read.
 from __future__ import annotations
 
 import ast
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -48,7 +49,9 @@ def _yields_policy(value: ast.expr) -> bool:
 
 
 def _annotated_policy(annotation: ast.expr | None) -> bool:
-    return annotation is not None and "ToolPolicy" in ast.unparse(annotation)
+    return (
+        annotation is not None and re.search(r"\bToolPolicy\b", ast.unparse(annotation)) is not None
+    )
 
 
 def _policy_names(tree: ast.AST) -> set[str]:

@@ -6,7 +6,7 @@ This document tracks known dependency vulnerabilities and mitigations.
 
 | Package      | CVE            | Status | Notes |
 |-------------|----------------|--------|--------|
-| cryptography | CVE-2026-26007 | **Fixed** | Overridden to `>=46.0.5` in `[tool.uv]` (pyproject.toml). |
+| cryptography | CVE-2026-26007 | **Fixed** | Overridden to `>=50.0.0` in `[tool.uv] override-dependencies` (pyproject.toml). |
 | diskcache    | CVE-2025-69872 | **No fix yet** | Transitive via `dspy`. Unsafe pickle deserialization; no patched release on PyPI. |
 
 ## diskcache (CVE-2025-69872)

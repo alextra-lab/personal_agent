@@ -1,167 +1,189 @@
 # Configuration Guide
 
-This document explains how to configure the Personal Agent for your local environment.
+This document explains how to configure the Personal Agent. Each fact names the file that states it. The settings class is `AppConfig` in `src/personal_agent/config/settings.py`. In this guide, "settings.py" means that file.
 
 ## Quick Start
 
-The agent is pre-configured with sensible defaults. To get started:
+1. Copy `.env.example` to `.env`. Source: `.env.example`, `src/personal_agent/config/env_loader.py`.
+2. Set `AGENT_SLM_BASE_URL` to the origin of your llama.cpp server. Use an origin with no `/v1` suffix. Source: `settings.py`, field `slm_base_url`.
+3. Add the API keys for the cloud models that you use. See "Secrets".
+4. Start the service. Source: `Makefile`, target `dev`.
 
-1. **Review `.env` file** - A minimal configuration file has been created with defaults
-2. **Update LLM endpoint** (if needed) - Edit `LLM_BASE_URL` in `.env` if not using LM Studio on default port
-3. **Run the agent** - The system will work with defaults for everything else
+The field has no default. If the deployment profile is `cloud` or `eval` and `AGENT_SLM_BASE_URL` is not set, the service does not start. The error message names the setting. In the `local` profile, the start succeeds, and the first call that needs the local model server raises an error. Source: `settings.py`, field `slm_base_url`, function `enforce_slm_endpoint_declared` and property `resolved_slm_base_url`.
+
+## Setting names
+
+Every setting is read from an environment variable with the prefix `AGENT_`. The name is the field name in upper case. For example, the field `llm_timeout_seconds` is read from `AGENT_LLM_TIMEOUT_SECONDS`. Source: `settings.py`, `SettingsConfigDict(env_prefix="AGENT_")`.
+
+A name without the prefix is ignored. The exceptions are the fields that declare an alias. Three examples:
+
+| Variable | Field | Default | Source |
+|---|---|---|---|
+| `APP_DEBUG` | `debug` | `false` | `settings.py`, field `debug` |
+| `APP_LOG_LEVEL` | `log_level` | `INFO` | `settings.py`, field `log_level` |
+| `APP_LOG_FORMAT` | `log_format` | `json` | `settings.py`, field `log_format` |
+
+Other fields that declare an alias are listed in `settings.py`. Search for `alias=`.
+
+The variable `APP_ENV` selects the environment. The environment loader reads it directly, because the settings do not exist yet. The loader also reads `PERSONAL_AGENT_INTEGRATION` and `PYTEST_VERSION` directly. Source: `src/personal_agent/config/env_loader.py`, function `get_environment`.
+
+| `APP_ENV` value | Environment |
+|---|---|
+| `production` or `prod` | production |
+| `staging` or `stage` | staging |
+| `test` | test |
+| any other value, or not set | development |
 
 ## Configuration Files
 
-### Environment Variables (`.env` files)
+### Environment files (`.env`)
 
-**Location**: Project root
+**Location**: the project root.
 
-- **`.env`** - Your local configuration (gitignored, safe for secrets)
-- **`.env.example`** - Template showing all available options (tracked in git)
+- **`.env`** - Your local configuration. Git ignores it. It can hold secrets.
+- **`.env.example`** - The template. It lists the settings with comments. Git tracks it.
 
-**Priority order** (highest to lowest):
-1. `.env.{environment}.local` (e.g., `.env.development.local`) - gitignored
-2. `.env.{environment}` (e.g., `.env.production`) - can be tracked
-3. `.env.local` - gitignored
-4. `.env` - your main local config (gitignored)
+**Priority order** (highest first). Source: `env_loader.py`, function `load_env_files`.
+1. `.env.{environment}.local`
+2. `.env.{environment}`
+3. `.env.local`
+4. `.env`
 
-The environment is set via `APP_ENV` environment variable (defaults to `development`).
+A variable that is already set in the process environment wins over every file. Source: `env_loader.py` (the loader calls `load_dotenv` with `override=False`).
 
-### YAML Configuration Files
+### YAML files
 
-**Location**: `config/` directory
+**Location**: the `config/` directory. Git tracks these files.
 
-- **`config/models.yaml`** - LLM model configurations (primary, sub_agent, compressor roles)
-- **`config/governance/`** - Governance policies (modes, tools, budget, permissions)
-  - `modes.yaml` - Operational modes (NORMAL, ALERT, DEGRADED, etc.) and transition rules
-  - `tools.yaml` - Tool permissions and allowlists
+| File | Content | Source |
+|---|---|---|
+| `config/models.yaml` | The model catalog. Each key is a deployment. | `src/personal_agent/config/model_loader.py` |
+| `config/model_roles.yaml` | The role bindings. Each role names one deployment. | `config/model_roles.yaml` |
+| `config/governance/modes.yaml` | The operating modes and the transition rules. | `src/personal_agent/config/governance_loader.py` |
+| `config/governance/tools.yaml` | The tool policies. | `src/personal_agent/config/governance_loader.py` |
+| `config/governance/permissions.yaml` | The permission rules. A second file can add rules: field `extra_permission_rules_path`. | `src/personal_agent/tools/executor.py`, `settings.py` |
+| `config/governance/budget.yaml.example` | The template for the budget file. | `config/governance/` |
 
-These files are tracked in git and define the agent's behavior.
+The path to the governance directory is the field `governance_config_path`. The default is `config/governance`. Source: `settings.py`, field `governance_config_path`.
 
-## What You Should Configure
+A role is a job, such as `primary` or `entity_extraction`. To change the model for a role, edit the binding in `config/model_roles.yaml`. Do not add a `*_role` key to `models.yaml`.
 
-### Essential (Required)
+## What You Must Configure
 
-**LLM Endpoint** - Update if not using LM Studio on default port:
-
-```bash
-# In .env file
-LLM_BASE_URL=http://localhost:1234/v1
-```
-
-Common alternatives:
-- **LM Studio**: `http://localhost:1234/v1` (default)
-- **Ollama**: `http://localhost:11434/v1`
-- **OpenAI**: `https://api.openai.com/v1` (requires API key)
-
-### Recommended (Optional)
-
-**Log Format** - Use console format for easier reading during development:
+### Local model server
 
 ```bash
-# In .env file
-APP_LOG_FORMAT=console  # Default: json (structured)
+# In .env
+AGENT_SLM_BASE_URL=<origin of the llama.cpp server>
 ```
 
-**Log Level** - Increase verbosity for debugging:
+- The local model runs on llama.cpp. Source: `config/models.yaml`, provider `slm_local`.
+- The value is an origin: scheme, host and optional port. Do not add `/v1`. Callers add their own path. Source: `settings.py`, field `slm_base_url`.
+- The cloud compose file uses the internal Caddy egress block. Source: `.env.example`, the comment above `AGENT_SLM_BASE_URL`.
+
+### Secrets
+
+Add API keys to `.env` only. Never commit them.
 
 ```bash
-# In .env file
-APP_LOG_LEVEL=DEBUG  # Default: INFO
+# In .env
+AGENT_OPENAI_API_KEY=...
+AGENT_ANTHROPIC_API_KEY=...
+AGENT_VOYAGE_API_KEY=...
 ```
 
-### Advanced (Optional)
+Source: `settings.py`, fields `openai_api_key`, `anthropic_api_key` and `voyage_api_key`. The keys that each deployment profile (`local`, `cloud`, `eval`) needs are listed under `required_secrets:` in `config/model_roles.yaml`.
 
-**LLM Timeouts** - Adjust if requests are timing out:
+Some secrets are not read by `AppConfig`. The compose files and `config/gateway_access.yaml` read them without the `AGENT_` prefix. Examples are `CLOUDFLARE_TUNNEL_TOKEN` and `GATEWAY_TOKEN_PWA`. Source: `docker-compose.cloud.yml`, `config/gateway_access.yaml`, `.env.example`.
+
+## Common Settings
+
+### Logging
 
 ```bash
-# In .env file
-LLM_TIMEOUT_SECONDS=180  # Default: 120 (2 minutes)
-LLM_MAX_RETRIES=5        # Default: 3
+# In .env
+APP_LOG_FORMAT=console  # Default: json
+APP_LOG_LEVEL=DEBUG     # Default: INFO
 ```
 
-**Orchestrator Limits** - Control task execution:
+The log directory is `AGENT_LOG_DIR`. The default is `telemetry/logs`. Source: `settings.py`, fields `log_dir`, `log_level` and `log_format`.
+
+### Model calls
 
 ```bash
-# In .env file
-ORCHESTRATOR_TASK_TIMEOUT_SECONDS=600 # Default: 300 (5 minutes)
-ORCHESTRATOR_MAX_TOOL_ITERATIONS=5    # Default: 3 (prevents loops)
+# In .env
+AGENT_LLM_TIMEOUT_SECONDS=180  # Default: 120
+AGENT_LLM_MAX_RETRIES=5        # Default: 3
 ```
 
-**MCP Gateway** - Enable Model Context Protocol integration:
+Source: `settings.py`, fields `llm_timeout_seconds` and `llm_max_retries`.
+
+### Orchestrator limits
 
 ```bash
-# In .env file
-MCP_GATEWAY_ENABLED=true              # Default: false
-MCP_GATEWAY_TIMEOUT_SECONDS=60        # Default: 30
+# In .env
+AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS=600  # Default: 900
+AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS=10    # Default: 25
 ```
 
-**Request Monitoring** - Control system metrics collection:
+The first value is the wall-clock limit for one turn. The second value is the maximum number of tool iterations for one request. Source: `settings.py`, fields `orchestrator_task_timeout_seconds` and `orchestrator_max_tool_iterations`.
+
+### MCP gateway
 
 ```bash
-# In .env file
-REQUEST_MONITORING_ENABLED=true       # Default: true
-REQUEST_MONITORING_INCLUDE_GPU=true   # Default: true (Apple Silicon)
+# In .env
+AGENT_MCP_GATEWAY_ENABLED=true        # Default: false
+AGENT_MCP_GATEWAY_TIMEOUT_SECONDS=90  # Default: 60, range 1 to 300
 ```
 
-### Secrets (Never Commit)
+The command that starts the gateway is `AGENT_MCP_GATEWAY_COMMAND`. The default is `docker mcp gateway run`. Source: `settings.py`, fields `mcp_gateway_enabled`, `mcp_gateway_command` and `mcp_gateway_timeout_seconds`. Tier 3 (MCP) tools need an ADR. See `docs/reference/TOOL_INTEGRATION_GUIDE.md`.
 
-Add API keys to `.env` file only (never commit):
+### Request monitoring
 
 ```bash
-# In .env file
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
+# In .env
+AGENT_REQUEST_MONITORING_ENABLED=true  # Default: true
 ```
+
+Source: `settings.py`, field `request_monitoring_enabled`. ADR-0012 describes the feature.
+
+### Service port
+
+The field `service_port` has the default `9000`. This is the port of `make dev` on a local machine. The cloud gateway listens on `9001`. Source: `settings.py`, field `service_port`, `Dockerfile.gateway`, `docker-compose.cloud.yml`.
 
 ## Configuration Reference
 
-### All Available Settings
+### All available settings
 
-See `.env.example` for complete list with descriptions. Key categories:
-
-1. **Environment** - `APP_ENV`, `APP_DEBUG`
-2. **Application** - `PROJECT_NAME`, `VERSION`
-3. **Telemetry** - `LOG_DIR`, `APP_LOG_LEVEL`, `APP_LOG_FORMAT`
-4. **LLM Client** - `LLM_BASE_URL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES`
-5. **Orchestrator** - `ORCHESTRATOR_TASK_TIMEOUT_SECONDS`
-6. **Request Monitoring** - `REQUEST_MONITORING_ENABLED`
-7. **MCP Gateway** - `MCP_GATEWAY_ENABLED`, `MCP_GATEWAY_COMMAND`
-8. **Paths** - `GOVERNANCE_CONFIG_PATH`, `MODEL_CONFIG_PATH`
+`.env.example` lists the settings with comments. `settings.py` is the source of truth for the names, types and defaults. The reference table of every field is in `docs/reference/CONFIG_INVENTORY.md`.
 
 ### Validation
 
-All configuration values are validated at startup using Pydantic:
+Pydantic validates all values when the service starts. Source: `settings.py`.
 
-- **Type checking** - Values must match expected types (int, bool, string, etc.)
-- **Range validation** - Numeric values must be within allowed ranges
-- **Enum validation** - Log levels, formats, environments must be valid options
-- **Path validation** - Paths are resolved to absolute paths
+- **Type checking** - A value must match the field type.
+- **Range checking** - A numeric field can have limits, such as `ge=1`.
+- **Enum checking** - The log level, the log format and the environment must be valid options.
 
-**Invalid configuration will prevent startup** - this is intentional (fail-fast principle).
+A configuration that is not valid stops the start. This is intended (fail-fast).
 
 ## Environment-Specific Configuration
 
-For different environments (development, staging, production):
-
-1. **Set environment**:
+1. Set the environment:
    ```bash
    export APP_ENV=production
    ```
-
-2. **Create environment-specific file**:
+2. Create the environment file:
    ```bash
    cp .env .env.production
-   # Edit .env.production with production settings
    ```
-
-3. **Run agent** - It will automatically load `.env.production` when `APP_ENV=production`
+3. Edit `.env.production`. The loader reads it when `APP_ENV=production`. Source: `env_loader.py`.
 
 ## Troubleshooting
 
-### Configuration Not Loading
+### The configuration does not load
 
-Check log output for configuration loading messages:
+Read the log output. These events show the loading steps:
 
 ```json
 {"event": "loading_app_config", "environment": "development"}
@@ -169,28 +191,32 @@ Check log output for configuration loading messages:
 {"event": "app_config_loaded", "environment": "development", "log_level": "INFO"}
 ```
 
-### Validation Errors
+### Validation errors
 
-If you see validation errors at startup:
+If the service reports a validation error at start:
 
-1. Check the error message for which field is invalid
-2. Verify the value in your `.env` file
-3. Consult `.env.example` for valid values and formats
-4. Check ADR-0007 for detailed validation rules
+1. Read the error message. It names the invalid field.
+2. Check the value in your `.env` file.
+3. Check `.env.example` for the valid values.
+4. Read ADR-0007 for the validation rules.
 
-### Direct Environment Variable Access
+If the message says that `AGENT_SLM_BASE_URL` is not set, set it. See "Local model server". Source: `settings.py`, function `enforce_slm_endpoint_declared`.
 
-**Never use `os.getenv()` or `os.environ` in code** - always use `settings`:
+### Direct environment variable access
+
+Do not use `os.getenv()` or `os.environ` in code. Use `settings`.
 
 ```python
-# ❌ Wrong
+# Wrong
 import os
-log_level = os.getenv("LOG_LEVEL")
+log_level = os.getenv("APP_LOG_LEVEL")
 
-# ✅ Correct
+# Correct
 from personal_agent.config import settings
 log_level = settings.log_level
 ```
+
+`env_loader.py` is the exception. It reads `APP_ENV` before the settings exist.
 
 ## Error Pattern Monitoring (ADR-0056)
 
@@ -215,21 +241,22 @@ Four flags ship with Phase 1 (all enabled by default except governance):
 
 **Flip procedure for governance:** verify `XLEN stream:graph.quality_anomaly ≥ 1` in Redis, confirm `telemetry/graph_quality/GQ-*.jsonl` files are growing daily, and check the Linear project false-positive rate before setting `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED=true` and restarting `seshat-gateway`.
 
+Source for the three sections above: `settings.py`, fields `context_quality_stream_enabled`, `context_quality_governance_enabled`, `graph_quality_stream_enabled`, `freshness_tier_reranking_enabled`, `freshness_tier_factors` and `graph_quality_governance_enabled`.
+
 ## Architecture
 
-Configuration management follows **ADR-0007: Unified Configuration Management**.
+ADR-0007 defines configuration management.
 
-Key principles:
-
-- **Single source of truth** - All config through `personal_agent.config.settings`
-- **Type safety** - Pydantic validation catches errors at startup
-- **Clear precedence** - Environment variables > YAML files > Defaults
-- **Security** - Secrets in `.env` files (gitignored), never in code
-- **Fail fast** - Invalid config prevents startup
+- **Single source of truth** - All configuration goes through `personal_agent.config.settings`.
+- **Type safety** - Pydantic validation finds errors at start.
+- **Clear precedence** - Environment variables > YAML files > defaults.
+- **Security** - Secrets stay in `.env` files that Git ignores. Secrets never enter code.
+- **Fail fast** - A configuration that is not valid stops the start.
 
 ## References
 
-- **ADR-0007**: `architecture_decisions/ADR-0007-unified-configuration-management.md`
-- **Config Module**: `src/personal_agent/config/AGENTS.md`
+- **ADR-0007**: `docs/architecture_decisions/ADR-0007-unified-configuration-management.md`
+- **Config module**: `src/personal_agent/config/AGENTS.md`
 - **Template**: `.env.example`
 - **Code**: `src/personal_agent/config/settings.py`
+- **Field reference**: `docs/reference/CONFIG_INVENTORY.md`

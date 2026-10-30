@@ -220,13 +220,13 @@ section used to describe as the only option.
 
 **The `max_tokens >= 4000` floor belongs to Qwen3.6, not the model we now run.**
 Flash-Next needs about 1077 tokens for a 600-word answer at `medium` and spends 20-23
-tokens of reasoning on trivial prompts, against Qwen3.6's 143-154. Our primary omits
-`max_tokens` entirely (backend default 49152) and the instruct entry sets 2048 with
-thinking hard-off, where section 3 says there is no floor problem. Both are safe. Anyone
+tokens of reasoning on trivial prompts, against Qwen3.6's 143-154. Our primary sets
+`max_tokens: 12288` (`config/models.yaml`, FRE-1562 runaway bound). The instruct entry was deleted
+(FRE-1445), and a non-thinking preset replaced it, where section 3 says there is no floor problem. Both are safe. Anyone
 citing "4000" against the current model is quoting the retired one.
 
-**Context is 262144 per request, pooled.** Section 11 is why `context_length` is 262144 on
-both flash-next entries and not `262144 / 3`. The binding constraint is aggregate KV across
+**Context is pooled across concurrent requests.** Section 11 is why `context_length` is 131072 on
+both flash-next entries (FRE-1427, down from 262144) and not `262144 / 3`. The model's native window is 262144. The binding constraint is aggregate KV across
 concurrent requests, which a per-deployment integer cannot express.
 
 ## References

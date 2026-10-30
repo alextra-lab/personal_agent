@@ -1,6 +1,6 @@
 # Chart.js → charts / data visualization (MIT, global `Chart`)
 
-Part of the `artifact-design` skill. Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
+Part of the artifact builder's source documents (`docs/reference/artifact-builder/`; it is not an agent skill). Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
 
 ```html
 <script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>

@@ -119,7 +119,7 @@ For detailed specs (e.g., `ORCHESTRATOR_CORE_SPEC_v0.1.md`).
 
 ## 📊 Experiment Specification Checks
 
-For hypothesis-driven experiments (`experiments/E-XXX-*.md`).
+For hypothesis-driven experiments (`docs/architecture_decisions/experiments/E-XXX-*.md`).
 
 ### ✅ Experiment-Specific Requirements
 
@@ -165,7 +165,7 @@ For planning documents (`plans/PROJECT_PLAN_v0.1.md`).
 
 ## 🧪 Captain's Log Proposal Checks
 
-For agent-generated improvement proposals (`captains_log/CL-*.md`).
+For agent-generated improvement proposals (JSON entries in `telemetry/captains_log/`, also stored in Elasticsearch).
 
 ### ✅ Captain's Log Requirements
 
@@ -199,7 +199,7 @@ Validate **relationships between documents**.
 | Component Spec | ADRs, System Architecture, Interface definitions |
 | Experiment | HYPOTHESIS_LOG, related ADRs |
 | Captain's Log | Governance configs, HYPOTHESIS_LOG |
-| Project Plan | ROADMAP, Functional Spec milestones |
+| Project Plan | `docs/plans/`, Functional Spec milestones |
 
 ### ✅ Consistency Validation Steps
 

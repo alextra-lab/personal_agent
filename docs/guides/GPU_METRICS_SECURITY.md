@@ -114,7 +114,7 @@ Directly use macOS private APIs (IOKit, CoreGraphics) to access GPU metrics prog
 The code currently supports:
 
 - ✅ `powermetrics` (requires sudo, fallback method)
-- 📝 `macmon` detection (detected but not parsed - interactive tool)
+- ✅ `macmon` (no sudo; parsed and tried first, before `powermetrics`)
 - 📝 `socpowerbud` support (recommended for future implementation)
 
 ## Recommendation

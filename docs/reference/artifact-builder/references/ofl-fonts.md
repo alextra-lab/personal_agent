@@ -1,6 +1,6 @@
 # OFL fonts → publishing-grade prose (SIL OFL, variable woff2)
 
-Part of the `artifact-design` skill. Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
+Part of the artifact builder's source documents (`docs/reference/artifact-builder/`; it is not an agent skill). Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
 
 Declare each face with `@font-face`, then wire it into the design-system custom properties:
 

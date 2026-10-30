@@ -1,6 +1,6 @@
 # three.js → 3-D / spatial / physics (MIT, global `THREE`, r171)
 
-Part of the `artifact-design` skill. Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
+Part of the artifact builder's source documents (`docs/reference/artifact-builder/`; it is not an agent skill). Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
 
 ```html
 <script src="https://artifacts.example.com/lib/three@0.171.0/three.iife.min.js"></script>

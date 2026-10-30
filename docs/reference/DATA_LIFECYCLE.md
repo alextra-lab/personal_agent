@@ -20,7 +20,7 @@ Automated retention, archival, and cleanup for file-based telemetry and Captain'
 | File Logs | 7d | 14d | 30d | Recent logs for debugging; archive then delete to limit size. |
 | Task Captures | 14d | 14d | 90d | Hot for consolidation; keep archives 2 weeks then delete after 90d. |
 | Reflections | 14d | 14d | 180d | Higher value; keep 6 months then delete. |
-| ES indices | — | — | per-family, 30d–365d | Governed entirely by Elasticsearch ILM per family (FRE-1036) — no client-side retention policy or sweep. |
+| ES indices | — | — | per-family, 123d–365d (30d for `slm-requests`) | Governed entirely by Elasticsearch ILM per family (FRE-1036) — no client-side retention policy or sweep. |
 | Neo4j Graph | 365d | 730d | Never | Knowledge graph is long-term; no automated deletion. |
 
 Defaults are defined in `src/personal_agent/telemetry/lifecycle.py` (`RETENTION_POLICIES`). Configuration is via application settings (e.g. `AGENT_DISK_USAGE_ALERT_PERCENT`, `AGENT_DATA_LIFECYCLE_ENABLED`).
@@ -90,12 +90,12 @@ not a rollover alias. Each family has its own ILM policy under `docker/elasticse
 <family>-ilm-policy.json` (`docker/elasticsearch/ilm-policy.json` for `agent-logs` specifically),
 wired to its index template in `scripts/setup-elasticsearch.sh`. Policies are retention-only:
 `warm` (min_age 32d, forcemerge — chosen so a still-open monthly index is never merged; skipped
-for `agent-logs`, whose 30d retention is shorter than that) then `delete` (min_age = the family's
-retention, 30d–365d depending on family). No policy has a `rollover` action.
+for `agent-logs` and `slm-requests`, which have no warm phase) then `delete` (min_age = the family's
+retention, 123d–365d depending on family, and 30d for `slm-requests`). No policy has a `rollover` action.
 
 Captain's Log **files** on disk use longer retention (90d / 180d) than they used to be paired
-with in ES — `agent-captains-captures`/`agent-captains-reflections` ES retention was raised to
-match those same values (90d/180d) in FRE-1036, since the two stores are not interchangeable
+with in ES — `agent-captains-captures` has ES retention of 123d and `agent-captains-reflections` has 180d
+(FRE-1036; the 123d floor is the owner rule of 2026-10-03), since the two stores are not interchangeable
 copies of the same data (ES is the durable source of truth; the disk copy is not authoritative
 alone).
 

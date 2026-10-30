@@ -64,8 +64,8 @@ Rules that keep them safe on a shared tree:
   That is the hard session boundary.
 - **File-domain partition** (backend vs PWA vs docs) so two streams don't edit the same file on the
   shared tree; genuinely cross-cutting tickets route through `master` to serialize.
-- **One `pytest` at a time** — a pre-tool hook enforces a global test lock (the full suite is ~7 min;
-  parallel runs saturate the 8-vCPU VPS).
+- **One `pytest` at a time** — a convention, not enforced: the pre-tool hook that enforced a global test lock
+  was removed on 2026-07-18 (the full suite is ~7 min; parallel runs saturate the 8-vCPU VPS).
 - Merges happen **server-side from the primary tree**; deploys go **one at a time** from `main`.
 
 Net effect: up to three change-streams in flight, converging through a single reviewed, gated merge point.
@@ -191,7 +191,7 @@ Honest gaps and items worth external eyes, in priority order:
    deploy-hold tickets. The guardian compensates manually; a hard rule (disable auto-close, or gate
    Done on a deploy event) would remove the human-in-the-loop dependency.
 3. **Shared mutable substrate** — three worktrees share one VPS tree + one Docker stack. Isolation is
-   by file-domain convention + a pytest lock, not by container/tenant boundaries. Acceptable for a
+   by file-domain convention + the one-pytest-at-a-time convention, not by container/tenant boundaries. Acceptable for a
    single-owner research system; name it explicitly if it scales.
 4. **Standing supply-chain debt** — open Dependabot alerts on `main` should be triaged into a tracked
    ticket rather than living as a repo banner.

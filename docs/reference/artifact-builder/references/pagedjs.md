@@ -1,6 +1,6 @@
 # paged.js → book / print layout (MIT) — **experimental, gated**
 
-Part of the `artifact-design` skill. Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
+Part of the artifact builder's source documents (`docs/reference/artifact-builder/`; it is not an agent skill). Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
 
 paged.js is on the shelf **but is `eval_gated`**: it may require `eval` under the live CSP
 (which omits `'unsafe-eval'`), pending runtime confirmation. Treat it as an

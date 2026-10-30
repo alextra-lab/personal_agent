@@ -130,14 +130,13 @@ Agent/human reviews → In Review → [HUMAN closes] → Done (closed)
 | Label | Purpose |
 |-------|---------|
 | `PersonalAgent` | Scopes issues to this project (required on all issues) |
-| `Needs Approval` | Belt-and-suspenders gate alongside status |
-| `Review OK` | Review agent verified the work |
-| `Review Needs Work` | Review found issues |
+
+Approval is state-only. The `Needs Approval` state is the gate. The FrenchForest team has no `Needs Approval`, `Review OK` or `Review Needs Work` label.
 
 ### Cursor rules that enforce this
 
 - **`linear-implement-gate.mdc`** (alwaysApply): Every created issue gets
-  `state: "Needs Approval"` and `labels: ["Needs Approval", "PersonalAgent"]`.
+  `state: "Needs Approval"` and `labels: ["PersonalAgent"]`.
   Every implementation starts with a status check -- only `Approved` issues
   can be implemented.
 
@@ -189,7 +188,7 @@ role separation.)
 | Role | Cursor Rule | Responsibility |
 |------|-------------|----------------|
 | **Implementer** | `session-orientation.mdc`, `linear-implement-gate.mdc` | Read `OWNER_CONSOLE.md` -> query Linear for approved issues -> read spec -> implement -> test -> mark Done |
-| **Reviewer** | `agent-review.mdc` | Query Linear for Done issues -> validate against spec + acceptance criteria -> label Review OK or Review Needs Work |
+| **Reviewer** | `agent-review.mdc` | Query Linear for Done issues -> validate against spec + acceptance criteria -> report the result in a comment |
 | **Planner** | `agent-planning.mdc` | Create issues from specs -> ensure all issues have spec/ADR links (there is no plan document to maintain — ADR-0131) |
 
 ### Why separate roles
@@ -319,7 +318,7 @@ this maps to **`.cursor/rules/*.mdc`** files:
    (e.g. change `PersonalAgent` to `MyOtherProject`)
 5. **Create `.cursor/hooks.json`** with afterFileEdit and stop hooks
    (adjust the language-specific check for your stack)
-6. **Create Linear labels**: `<ProjectName>`, `Needs Approval`, `Review OK`, `Review Needs Work`
+6. **Create the Linear label** `<ProjectName>`, and the workflow state `Needs Approval`
 
 ### What to customize per project
 

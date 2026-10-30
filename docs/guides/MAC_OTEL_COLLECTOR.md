@@ -127,8 +127,8 @@ file is left in place; remove it separately if you are decommissioning.
 `verbosity: basic` — counts only, deliberately: `normal`/`detailed` would write every span attribute
 into a persistent local log, and it would grow fastest while the downstream is unreachable.
 
-**Buffering, and its bound (AC-4).** With the downstream unreachable — today's real state, since the
-ingress host does not exist until FRE-1223 — the producer still receives `200` and the log shows
+**Buffering, and its bound (AC-4).** With the downstream unreachable — for example during a tunnel
+outage; the ingress host exists since FRE-1223 — the producer still receives `200` and the log shows
 export retries at a widening interval. `max_elapsed_time: 0` means retries never stop.
 
 The Collector's own metrics are the direct way to watch this, on `127.0.0.1:8888`:
@@ -156,9 +156,10 @@ extension from the contrib distribution, which is deliberately out of scope here
 
 ## Related
 
-- **FRE-1223** — the Cloudflare half: tunnel ingress rule and the Access application. When it lands,
-  `OTLP_HOST` must be set and Caddy recreated — **and Filebeat recreated in the same pass**, or the
-  new host's access lines never ship and this hop's evidence trail starts dark.
+- **FRE-1223** — the Cloudflare half: tunnel ingress rule and the Access application (done).
+  `OTLP_HOST` is set in `docker-compose.cloud.yml` and used by the Caddy site block. After a change
+  of `OTLP_HOST`, recreate Caddy — **and Filebeat in the same pass**, or the new host's access
+  lines never ship and this hop's evidence trail starts dark.
 - **FRE-1239** — the Caddy site block (merged): path-allowlisted, `remote_ip`-restricted, 20MiB
   request cap, and it redacts the Access credential headers from its own access log.
 - **FRE-1230** — the Mac-side acceptance procedure and the `slm_server` restart gate.

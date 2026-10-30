@@ -63,8 +63,10 @@ ticket asked to confirm both `metrics` and `consolidation_attempts` together.
 `budget_reservations`) / `route_traces` — **KEEP**, document design intent (don't "fix")
 
 All persist via **raw asyncpg**, deliberately **outside** `service/repositories/`
-(which only holds `constraint_preferences_repository.py`, `metrics_repository.py`,
-`session_model_selection_repository.py`, `session_repository.py`):
+(which holds `constraint_preferences_repository.py`, `grounding_compliance_repository.py`,
+`grounding_enforcement_repository.py`, `metrics_repository.py`,
+`session_model_selection_repository.py`, `session_repository.py` as of 2026-10-30; the two
+grounding repositories came after this audit):
 
 - `llm_client/cost_tracker.py` (`api_costs`)
 - `observability/route_trace/ledger.py` (`route_traces`)

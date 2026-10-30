@@ -14,7 +14,7 @@ The agent can call tools exposed by the **MCP Gateway** (containerized MCP serve
 ## 1. Configuration
 
 - **Unified settings:** Use `personal_agent.config.settings` — MCP-related fields follow ADR-0007 (no raw `os.environ` in code).
-- **Typical env (example):** `MCP_GATEWAY_COMMAND` as a JSON list for the gateway CLI, e.g. `["docker", "mcp", "gateway", "run", ...]` — see `config/` templates and `.env.example` if present.
+- **Typical env (example):** `AGENT_MCP_GATEWAY_COMMAND` as a JSON list for the gateway CLI, e.g. `["docker", "mcp", "gateway", "run", ...]` — see `config/` templates and `.env.example` if present.
 - **Governance:** Tool allowlists and risk levels live under `config/governance/` (see ADR-0005 patterns).
 
 ---
@@ -22,7 +22,7 @@ The agent can call tools exposed by the **MCP Gateway** (containerized MCP serve
 ## 2. Run the gateway
 
 1. Ensure Docker is running and the MCP Gateway image/command you use is available.
-2. Start (or attach) the gateway process defined in your `MCP_GATEWAY_COMMAND`.
+2. Start (or attach) the gateway process defined in your `AGENT_MCP_GATEWAY_COMMAND`.
 3. Confirm the agent process can reach the gateway socket/stdio as configured.
 
 ---
@@ -39,7 +39,7 @@ The agent can call tools exposed by the **MCP Gateway** (containerized MCP serve
 
 | Symptom | Check |
 |--------|--------|
-| No MCP tools listed | Gateway running? `MCP_GATEWAY_COMMAND` valid JSON list? Network/socket path? |
+| No MCP tools listed | Gateway running? `AGENT_MCP_GATEWAY_COMMAND` valid JSON list? Network/socket path? |
 | Tool denied | `config/governance/tools.yaml` and current mode |
 | Async/timeouts | MCP client timeouts vs. model timeouts in `config/models.yaml` |
 

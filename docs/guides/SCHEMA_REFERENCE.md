@@ -1,9 +1,9 @@
 # Seshat Schema Reference
 
-> **Last updated**: 2026-04-26  
-> **Applies to**: service/app.py, transport/agui/, config/, infrastructure/terraform/
+> **Last updated**: 2026-10-30
+> **Applies to**: `src/personal_agent/service/app.py`, `src/personal_agent/transport/`, `config/`, `docker/postgres/init.sql`
 
-Formal definitions for every schema boundary in Seshat: API endpoints, AG-UI wire events, configuration YAML files, the PostgreSQL database, and Terraform variables.
+Formal definitions for the schema boundaries in Seshat: the API endpoints, the AG-UI wire events, the configuration YAML files and the PostgreSQL database. Each section names its source files.
 
 ---
 
@@ -11,139 +11,125 @@ Formal definitions for every schema boundary in Seshat: API endpoints, AG-UI wir
 
 1. [API Endpoint Schemas](#1-api-endpoint-schemas)
    - [POST /chat/stream](#post-chatstream)
+   - [WS /ws/{session_id}](#ws-wssession_id)
    - [POST /chat (synchronous, CLI)](#post-chat-synchronous-cli)
-   - [GET /stream/{session_id}](#get-streamsession_id)
-   - [POST /stream/{session_id}/resume](#post-streamsession_idresume)
    - [Session CRUD](#session-crud)
    - [GET /health](#get-health)
 2. [AG-UI Wire Event Schema](#2-ag-ui-wire-event-schema)
 3. [Configuration YAML Schemas](#3-configuration-yaml-schemas)
-   - [Execution Profile (config/profiles/*.yaml)](#execution-profile-configprofilesyaml)
-   - [Model Definitions (config/models.yaml)](#model-definitions-configmodelsyaml)
-   - [Cloud Model Overrides (config/models.cloud.yaml)](#cloud-model-overrides-configmodelscloudyaml)
+   - [Model catalog (config/models.yaml)](#model-catalog-configmodelsyaml)
+   - [Role bindings (config/model_roles.yaml)](#role-bindings-configmodel_rolesyaml)
 4. [PostgreSQL Schema](#4-postgresql-schema)
-5. [Terraform Variable Schema](#5-terraform-variable-schema)
+5. [Infrastructure as code](#5-infrastructure-as-code)
 
 ---
 
 ## 1. API Endpoint Schemas
 
-Base URL: `http(s)://<host>` (Caddy reverse-proxies `/chat*` and `/stream*` to port 9001).
+Base URL: `http(s)://<host>`. Caddy reverse-proxies `/api/*`, `/chat`, `/chat/stream`, `/ws/*`, `/docs` and `/openapi.json` to the gateway on port 9001. Source: `config/cloud-sim/Caddyfile` (the `routing` snippet).
 
 ### `POST /chat/stream`
 
 **Content-Type**: `application/x-www-form-urlencoded`
 
-Fire-and-forget streaming endpoint for the PWA. Returns immediately; events arrive via `GET /stream/{session_id}`.
+Fire-and-forget endpoint for the PWA. It returns at once. The events arrive on `WS /ws/{session_id}`.
 
 #### Request fields (form-encoded)
 
-| Field | Type | Required | Default | Constraints | Description |
-|-------|------|----------|---------|-------------|-------------|
-| `message` | string | yes | — | non-empty | User's message text |
-| `session_id` | string | yes | — | UUID v4 | Client-generated session identifier |
-| `profile` | string | no | `"local"` | `"local"` \| `"cloud"` | Execution profile to activate |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `message` | string | yes | none | The text of the user message |
+| `session_id` | string | yes | none | The target session |
+| `primary_selection` | string | no | none | A deployment key from `config/models.yaml`. The server uses it only to set up a new session. |
+| `seshat_effort` | `fast` \| `standard` \| `deep` | no | none | The effort level of the turn |
+| `client_msg_id` | string | no | none | A client-generated message identifier |
+| `attachments` | JSON string | no | none | The attachments of the message |
+
+Source: `src/personal_agent/service/app.py`, function `chat_stream_endpoint`. The type `EffortLevel` is in `src/personal_agent/config/seshat_effort.py`.
 
 #### Response (200 OK)
 
 ```json
 {
-  "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
-  "trace_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
-  "status": "streaming"
+  "session_id": "<id>",
+  "status": "streaming",
+  "primary_selection": "<deployment key>",
+  "selection_provenance": "<how the selection was chosen>",
+  "seshat_effort": "<level>",
+  "effort_provenance": "<how the level was chosen>"
 }
 ```
 
-`trace_id` identifies this specific request turn in Elasticsearch traces and Captain's Log entries. The PWA can store it on the optimistic message object for future "view trace" affordances.
+The response has no `trace_id`. The `trace_id` of the turn arrives in the `DONE` event and in other events.
 
 #### Errors
 
 | Code | Condition |
 |------|-----------|
-| `422` | `session_id` is not a valid UUID v4 |
-| `503` | Anthropic API key not configured (cloud path only) |
+| `503` | A budget cap stopped the turn (`error: "budget_denied"`) |
+
+Source: `seshat-pwa/src/lib/agui-client.ts`, function `sendChatMessage`.
+
+There is no `profile` field. The system has no execution profiles.
+
+---
+
+### `WS /ws/{session_id}`
+
+The WebSocket carries all AG-UI events. The client first mints a ticket with `POST /api/ws-ticket`, and then connects to `/ws/{session_id}?ticket=<ticket>`. The first client message must be `CONNECT`.
+
+The messages, the close codes and the replay rules are in [AG-UI Streaming Reference](AGUI_STREAMING_REFERENCE.md). Source: `src/personal_agent/transport/agui/ws_endpoint.py`, `service/app.py` (function `mint_ws_ticket_endpoint`).
+
+#### `POST /api/ws-ticket`
+
+**Request body** (`application/json`): `{"session_id": "<UUID>"}`
+
+**Response** (200): `{"ticket": "<ticket>", "expires_in": 30}`
+
+| Code | Condition |
+|------|-----------|
+| `422` | `session_id` is not a valid UUID |
+| `404` | The session does not exist for this user |
 
 ---
 
 ### `POST /chat` (synchronous, CLI)
 
-**Content-Type**: `application/x-www-form-urlencoded` or query params
+**Content-Type**: query parameters
 
-Synchronous endpoint used by the CLI (`uv run agent "..."` via `service_client.py`). Runs the full pipeline and returns the response inline.
+The CLI command `uv run agent chat "<message>"` calls this endpoint. The endpoint runs the full pipeline and returns the reply in the response. Source: `src/personal_agent/ui/service_cli.py`, `service/app.py`, function `chat`.
 
-#### Request parameters (query string or form)
+#### Request parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `message` | string | yes | — | User's message text |
-| `session_id` | string | no | auto-generated | Existing session UUID. Creates new session if omitted |
+| `message` | string | yes | none | The text of the user message |
+| `session_id` | string | no | none | An existing session UUID |
+| `model` | string | no | none | A deployment key for this turn |
+| `channel` | string | no | `CHAT` | The client channel |
+| `seshat_effort` | `fast` \| `standard` \| `deep` | no | none | The effort level of the turn |
 
 #### Response (200 OK)
 
 ```json
 {
+  "session_id": "<id>",
   "response": "The assistant's reply text",
-  "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
+  "trace_id": "<trace id>",
+  "primary_selection": "<deployment key>",
+  "seshat_effort": "<level>"
 }
 ```
-
----
-
-### `GET /stream/{session_id}`
-
-**Content-Type**: `text/event-stream`
-
-SSE stream that delivers AG-UI events for the given session. Call immediately after `POST /chat/stream`.
-
-#### Path parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `session_id` | UUID string | The `session_id` returned from `POST /chat/stream` |
-
-#### Response
-
-A sequence of SSE data lines. Each line is a JSON-encoded AG-UI event (see [Section 2](#2-ag-ui-wire-event-schema)).
-
-```
-data: {"type": "TEXT_DELTA", "data": {"text": "Hello"}, "session_id": "..."}
-
-data: {"type": "DONE"}
-```
-
-The stream ends when:
-- A `DONE` event is sent (normal completion)
-- The client disconnects (server detects via `request.is_disconnected()`)
-
-**Keepalive**: `: keepalive` SSE comment every 30 seconds when queue is idle.
-
----
-
-### `POST /stream/{session_id}/resume`
-
-**Content-Type**: `application/json`
-
-Resumes a paused session after an `INTERRUPT` event. Currently partially wired — `InterruptEvent` is defined but the orchestrator resume path is not yet complete.
-
-#### Request body
-
-```json
-{
-  "choice": "approve"
-}
-```
-
-| Field | Type | Values | Description |
-|-------|------|--------|-------------|
-| `choice` | string | One of the strings from `event.data.options` | The human's selection |
 
 ---
 
 ### Session CRUD
 
+Source: `service/app.py` (routes under `/sessions`), `src/personal_agent/service/models.py` (classes `SessionCreate`, `SessionUpdate`, `SessionResponse`), `src/personal_agent/gateway/session_api.py` (routes under `/api/v1/sessions`).
+
 #### `POST /sessions`
 
-Create a new session. The PWA does not need to call this — `POST /chat/stream` creates sessions with the client-provided UUID automatically. This is available for explicit session management.
+Create a new session. `POST /chat/stream` also creates a session for a new `session_id`.
 
 **Request body** (`application/json`):
 
@@ -151,429 +137,290 @@ Create a new session. The PWA does not need to call this — `POST /chat/stream`
 {
   "channel": "pwa",
   "mode": "NORMAL",
-  "metadata": {}
+  "metadata": {},
+  "seshat_effort": "standard"
 }
 ```
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `channel` | string \| null | no | `null` | Client identifier (`"pwa"`, `"cli"`, etc.) |
-| `mode` | string | no | `"NORMAL"` | Session mode (`"NORMAL"` \| `"DEBUG"`) |
+| `channel` | string \| null | no | `null` | The client identifier, such as `pwa` or `CLI` |
+| `mode` | string | no | `"NORMAL"` | The session mode |
 | `metadata` | object | no | `{}` | Arbitrary client metadata |
+| `seshat_effort` | `fast` \| `standard` \| `deep` \| null | no | `null` | The stored effort level. `null` stores the default level from `config/seshat_effort.yaml`. |
 
-**Response** (`SessionResponse`, 201):
+**Response** (`SessionResponse`, 200):
 
 ```json
 {
-  "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
-  "created_at": "2026-04-16T12:00:00Z",
-  "last_active_at": "2026-04-16T12:00:00Z",
+  "session_id": "<UUID>",
+  "created_at": "2026-10-30T12:00:00Z",
+  "last_active_at": "2026-10-30T12:00:00Z",
   "mode": "NORMAL",
   "channel": "pwa",
   "metadata": {},
-  "messages": []
+  "messages": [],
+  "primary_model_at_creation": "<deployment key>",
+  "model_config_path": "<path>",
+  "purged_at": null
 }
 ```
 
 #### `GET /sessions/{session_id}`
 
-Retrieve session by UUID. Returns `SessionResponse` (same shape as above).
+Return the session by UUID. The response has the shape of `SessionResponse`.
 
 #### `PATCH /sessions/{session_id}`
 
-Update session fields.
-
-**Request body** (`application/json`):
+Update session fields. All fields are optional. The server updates only the fields that the request contains.
 
 ```json
 {
-  "mode": "DEBUG",
+  "mode": "NORMAL",
   "channel": "cli",
   "metadata": {"key": "value"},
   "messages": [{"role": "user", "content": "Hello", "timestamp": "..."}]
 }
 ```
 
-All fields are optional; only provided fields are updated.
+#### `GET /sessions`
+
+Return a list of sessions (`list[SessionResponse]`). This is the local service path.
 
 #### `GET /api/v1/sessions`
 
-List recent sessions, ordered by `last_active_at DESC`. Requires `sessions:read` scope.
+Return the recent sessions, ordered by `last_active_at` in descending order. The call needs the `sessions:read` scope.
 
 **Query parameters**: `limit` (default 20)
 
-**Response** (`list[SessionSummary]`, 200):
+**Response** (200):
 
 ```json
 [
   {
-    "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
-    "created_at": "2026-04-26T10:00:00Z",
-    "last_active_at": "2026-04-26T10:05:00Z",
+    "session_id": "<UUID>",
+    "created_at": "2026-10-30T10:00:00Z",
+    "last_active_at": "2026-10-30T10:05:00Z",
     "mode": "NORMAL",
     "channel": "CHAT",
     "message_count": 6,
-    "title": "Hello, my name is Boris"
+    "turn_count": 3,
+    "title": "Hello, my name is Boris",
+    "session_label": null,
+    "session_digest": null
   }
 ]
 ```
 
-`title` is derived server-side from the first user message, truncated to ≤ 60 characters (with `…` suffix). Returns `null` for empty sessions.
+The server derives `title` from the first user message, truncated to 60 characters at most. The fields `session_label` and `session_digest` come from the Neo4j session digest. They are `null` when no digest exists.
 
 #### `GET /api/v1/sessions/{session_id}/messages`
 
-Fetch the full message history for a session. Requires `sessions:read` scope.
+Return the message history of a session in chronological order. The call needs the `sessions:read` scope.
 
-**Query parameters**: `limit` (default 50, `0` = all)
+**Query parameters**: `limit` (default 50)
 
-**Response** (`list[Message]`, 200): Messages in chronological order. Each message includes all persisted metadata (see PostgreSQL schema §4 for element schema). Returns 404 if session does not exist.
+The call returns 404 if the session does not exist. The message element schema is in section 4.
 
-#### `GET /sessions`
+#### Other session routes
 
-*(Legacy — local service path only)* List all sessions. Returns `list[SessionResponse]`.
+| Route | Purpose |
+|-------|---------|
+| `GET /api/v1/sessions/{session_id}` | Return one session summary |
+| `GET /api/v1/sessions/{session_id}/config` | Return the model and effort configuration of the session |
+| `PATCH /api/v1/sessions/{session_id}/selection` | Change the model selection of the session |
+| `PATCH /api/v1/sessions/{session_id}/effort` | Change the effort level of the session |
+| `GET /api/v1/config` | Return the configuration that does not depend on a session |
+
+Source: `src/personal_agent/gateway/session_api.py`.
 
 ---
 
 ### `GET /health`
 
-Health check endpoint. Used by Docker Compose healthcheck.
+Health check endpoint. The Docker Compose health check calls it.
 
 **Response** (200 OK):
 
 ```json
-{"status": "ok"}
+{
+  "status": "healthy",
+  "build_fingerprint": "<fingerprint or null>",
+  "components": {
+    "database": "connected",
+    "elasticsearch": "connected",
+    "neo4j": "connected",
+    "second_brain": "running",
+    "mcp_gateway": "disconnected"
+  }
+}
 ```
+
+The value of each component is a state string. Source: `service/app.py`, function `health_check`.
 
 ---
 
 ## 2. AG-UI Wire Event Schema
 
-All events share the same envelope:
+The event envelope, the 12 event types and the control messages are defined once, in [AG-UI Streaming Reference](AGUI_STREAMING_REFERENCE.md). This guide does not repeat them.
 
-```json
-{
-  "type": "<EVENT_TYPE>",
-  "data": { ... },
-  "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
-}
-```
+Short summary. Source: `src/personal_agent/transport/agui/adapter.py`, function `to_agui_event`.
 
-The `DONE` event omits `data` and `session_id`:
-
-```json
-{"type": "DONE"}
-```
-
-### Event type reference
-
-#### `TEXT_DELTA`
-
-A chunk of text from the LLM. Concatenate chunks to build the full response.
-
-```json
-{
-  "type": "TEXT_DELTA",
-  "data": {
-    "text": "string — partial or full LLM output text"
-  },
-  "session_id": "string"
-}
-```
-
-> **Current behavior**: Full response arrives as a single `TEXT_DELTA` (non-streaming orchestrator). Planned improvement: token-level streaming via LiteLLM async.
-
----
-
-#### `TOOL_CALL_START`
-
-A tool invocation has begun.
-
-```json
-{
-  "type": "TOOL_CALL_START",
-  "data": {
-    "tool_name": "string — e.g. \"search_memory\"",
-    "args": { "key": "value" }
-  },
-  "session_id": "string"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `tool_name` | string | Registered tool name |
-| `args` | object | Tool arguments (varies per tool) |
-
----
-
-#### `TOOL_CALL_END`
-
-A tool invocation has completed.
-
-```json
-{
-  "type": "TOOL_CALL_END",
-  "data": {
-    "tool_name": "string",
-    "result": "string — human-readable summary of the tool result"
-  },
-  "session_id": "string"
-}
-```
-
----
-
-#### `STATE_DELTA`
-
-An agent state update.
-
-```json
-{
-  "type": "STATE_DELTA",
-  "data": {
-    "key": "string — state key",
-    "value": "any — new value"
-  },
-  "session_id": "string"
-}
-```
-
-**Known keys**:
-
-| Key | Value type | Range | Description |
-|-----|-----------|-------|-------------|
-| `context_window` | float | 0.0–1.0 | Fraction of context window consumed |
-
----
-
-#### `INTERRUPT`
-
-Human approval required. After receiving this event, call `POST /stream/{session_id}/resume`.
-
-```json
-{
-  "type": "INTERRUPT",
-  "data": {
-    "context": "string — description of the decision presented to the human",
-    "options": ["approve", "reject"]
-  },
-  "session_id": "string"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `context` | string | Human-readable description of what approval is needed for |
-| `options` | string[] | Valid choices (pass one back in `/resume` as `choice`) |
-
----
-
-#### `DONE`
-
-Stream complete. Close the `EventSource`.
-
-```json
-{"type": "DONE"}
-```
-
-No `data` or `session_id` fields.
-
----
-
-### Internal Python event types (`transport/events.py`)
-
-The backend uses frozen dataclasses that the adapter serializes to the wire format above:
-
-```python
-@dataclass(frozen=True)
-class TextDeltaEvent:
-    text: str
-    session_id: str
-
-@dataclass(frozen=True)
-class ToolStartEvent:
-    tool_name: str
-    args: Mapping[str, Any]
-    session_id: str
-
-@dataclass(frozen=True)
-class ToolEndEvent:
-    tool_name: str
-    result_summary: str      # → wire field "result"
-    session_id: str
-
-@dataclass(frozen=True)
-class StateUpdateEvent:
-    key: str
-    value: Any
-    session_id: str
-
-@dataclass(frozen=True)
-class InterruptEvent:
-    context: str
-    options: Sequence[str]
-    session_id: str
-```
-
-`None` pushed to the queue is the `DONE` sentinel.
+- Most events have this envelope: `{"type": "<TYPE>", "data": {...}, "session_id": "<id>", "seq": <integer or null>}`.
+- The types are `TEXT_DELTA`, `TOOL_CALL_START`, `TOOL_CALL_END`, `PHASE_START`, `PHASE_END`, `STATE_DELTA`, `INTERRUPT`, `tool_approval_request`, `CONSTRAINT_PAUSE`, `CONSTRAINT_RESOLVED`, `CANCELLED` and `RUN_ERROR`.
+- The control messages are `DONE`, `PONG`, `REPLAY_COMPLETE` and `REPLAY_GAP`.
+- The Python event classes are frozen dataclasses in `src/personal_agent/transport/events.py`.
 
 ---
 
 ## 3. Configuration YAML Schemas
 
-### Execution Profile (`config/profiles/*.yaml`)
+The model configuration has two files. `config/models.yaml` is the catalog. `config/model_roles.yaml` binds each role to one deployment. The system has no execution profiles, and there is no `config/profiles/` directory. The Pydantic classes are in `src/personal_agent/llm_client/models.py`.
 
-Files: `config/profiles/local.yaml`, `config/profiles/cloud.yaml`.
+### Model catalog (`config/models.yaml`)
+
+Top-level keys:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `providers` | map[string, ProviderDefinition] | One entry for each backend |
+| `models` | map[string, ModelDefinition] | One entry for each deployment. The key is the deployment key. |
+
+Source: `llm_client/models.py`, class `ModelConfig`.
+
+#### `providers` entry (`ProviderDefinition`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `base_url` | string \| null | no | The base URL. SDK-dispatched providers have none. |
+| `auth_env` | string \| null | no | The name of the `AppConfig` field that holds the credential |
+| `placement` | `local` \| `cloud` | yes | Where the backend runs |
+| `max_concurrency` | int | yes | The total in-flight cap across the deployments of the provider |
+| `summary` | string | no | A one-line description |
+| `dialect` | string \| null | no | The wire vocabulary of the provider. The values are the members of `Dialect`. |
+
+The providers in `config/models.yaml` are `slm_local`, `ovh`, `ovhcloud`, `scaleway`, `openai`, `anthropic` and `voyage`. The provider `slm_local` is the local llama.cpp server. Its address comes from `AGENT_SLM_BASE_URL`.
+
+#### `models` entry (`ModelDefinition`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | The model identifier at the provider |
+| `provider` | string | no | A key in `providers` |
+| `kind` | `llm` \| `embedding` \| `reranker` | no | The kind of model |
+| `context_length` | int | yes | The maximum context window in tokens |
+| `max_concurrency` | int | yes | The maximum number of concurrent requests |
+| `min_concurrency` | int | no | The floor for adaptive concurrency |
+| `default_timeout` | int | yes | The request timeout in seconds |
+| `max_timeout` | int | no | A ceiling on the timeout that any role resolves to |
+| `max_tokens` | int | no | The maximum number of output tokens. Cloud models are billed per token, so set the value deliberately. |
+| `endpoint` | string | no | A base URL override. The default is `settings.slm_base_url`. |
+| `quantization` | string | no | The quantization label of a local model |
+| `dialect` | string | no | An override of the provider dialect |
+| `modes` | map[string, ModeSpec] | yes for `kind: llm` | The named sampler and thinking presets |
+| `default_mode` | string | no | The mode that a caller gets when it names none |
+| `supports_function_calling` | bool | no | Whether the model supports tool calls |
+| `tool_calling_strategy` | `native` \| `prompt` \| `disabled` | no | How the client sends tool calls |
+| `parallel_tool_calls` | bool | no | Whether the model can return several tool calls in one turn |
+
+Source: `llm_client/models.py`, classes `ModelDefinition`, `ProviderDefinition`, `ToolCallingStrategy` and `ModelKind`. The header comment of `config/models.yaml` describes each field.
+
+**Sampler and thinking values (ADR-0145 D3a).** The fields `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`, `reasoning_effort`, `effort` and the thinking lever are fields of `ModeSpec`. A deployment declares them inside `modes:`, in the vocabulary of its resolved `dialect`. A mode is the only declarative home for these values. A call site can pass one to `respond()` as an override. A field that the dialect does not accept raises `DialectParameterRejected` before dispatch.
+
+**Example entry** (the values are illustrative):
 
 ```yaml
-name: string                    # Profile identifier (matches filename stem)
-description: string             # Human-readable description
-
-primary_model: string           # Key into models.yaml (e.g. "claude_sonnet")
-sub_agent_model: string         # Key into models.yaml (e.g. "claude_haiku")
-provider_type: string           # "local" | "cloud"
-
-cost_limit_per_session: float | null  # USD cap per session; null = no limit
-
-delegation:
-  allow_cloud_escalation: bool  # Whether to allow escalating to cloud models
-  escalation_provider: string | null   # "anthropic" | "openai" | null
-  escalation_model: string | null      # Key into models.yaml | null
-```
-
-**Example — `cloud.yaml`:**
-
-```yaml
-name: cloud
-description: "Cloud inference via LiteLLM (Claude Sonnet + Haiku)"
-primary_model: claude_sonnet
-sub_agent_model: claude_haiku
-provider_type: cloud
-cost_limit_per_session: 2.00
-delegation:
-  allow_cloud_escalation: true
-  escalation_provider: anthropic
-  escalation_model: claude_sonnet
-```
-
-**Example — `local.yaml`:**
-
-```yaml
-name: local
-description: "Local inference via SLM Server (Qwen3.6-35B)"
-primary_model: qwen3.6-35b-a3b
-sub_agent_model: qwen3-8b
-provider_type: local
-cost_limit_per_session: null
-delegation:
-  allow_cloud_escalation: false
-  escalation_provider: null
-  escalation_model: null
+models:
+  example-deployment:
+    id: "<model id at the provider>"
+    provider: "anthropic"
+    kind: llm
+    context_length: 200000
+    max_tokens: 8192
+    max_concurrency: 5
+    default_timeout: 120
+    modes:
+      default: { }
+    default_mode: default
 ```
 
 ---
 
-### Model Definitions (`config/models.yaml`)
+### Role bindings (`config/model_roles.yaml`)
 
-Top-level fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `entity_extraction_role` | string | Model key for entity extraction |
-| `captains_log_role` | string | Model key for Captain's Log summarization |
-| `insights_role` | string | Model key for insights engine |
-| `models` | map[string, ModelDef] | Model definitions keyed by role name |
-
-Each `ModelDef` supports the following fields. Some are local-only; some are cloud-only.
-
-#### Common fields (all models)
+The file has a `bindings:` map. Each key is a role. Each value is a `RoleBinding`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | yes | Provider model identifier (LM Studio slug or cloud model name) |
-| `context_length` | int | yes | Maximum context window in tokens |
-| `max_concurrency` | int | yes | Max concurrent in-flight requests |
-| `default_timeout` | int | yes | Request timeout in seconds |
-| `provider_type` | string | no | `"local"` \| `"managed"` \| `"cloud"` (auto-detected if omitted) |
+| `deployment` | string | yes | A key in `models:` of `config/models.yaml` |
+| `open` | bool | no (default `false`) | If `true`, the user can select the deployment for this role. A role without `open` is pinned. |
+| `max_tokens` | int | no | A per-use output cap |
+| `mode` | string | no | The named mode that this role asks for |
+| `default_timeout` | int | no | A per-use timeout |
+| `priority` | `InferencePriority` | no | The inference priority of the role |
 
-#### Local model fields
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `endpoint` | string | no | `settings.llm_base_url` | Base URL override |
-| `quantization` | string | no | — | `"8bit"` \| `"4bit"` |
-| `max_tokens` | int | no | — | Max output tokens |
-| `min_concurrency` | int | no | — | Floor for adaptive concurrency |
-| `supports_function_calling` | bool | no | `false` | Whether the model supports tool calling |
-| `tool_calling_strategy` | string | no | — | `"native"` \| `"prompt"` |
-
-**Sampler and thinking values (ADR-0145 D3a).** `temperature`, `top_p`, `top_k`, `min_p`,
-`presence_penalty`, `repeat_penalty`, `reasoning_effort`/`effort`, and the thinking lever
-(`enable_thinking` locally; per-dialect elsewhere) are no longer top-level `ModelDef` fields.
-Every `kind: llm` entry declares them inside `modes:`, named in its resolved `dialect`'s own
-vocabulary, with `default_mode` naming which one a caller gets by default. See
-`ProviderDefinition.dialect`, `ModelDefinition.modes`/`default_mode`, and
-`personal_agent.llm_client.models.ModeSpec` for the current shape.
-
-A mode is the only **declarative** home for these values (ADR-0145 D3a): none belongs on a
-deployment entry or a role binding. A call site may still pass one to `respond()` as a
-deliberate per-call override, and since FRE-1440 that override is subject to the same
-dialect vocabulary — a field the dialect does not accept raises `DialectParameterRejected`
-before dispatch rather than being dropped with a log.
-
-#### Cloud model fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `provider` | string | yes | `"anthropic"` \| `"openai"` \| `"google"` |
-| `max_tokens` | int | yes | Max output tokens (billed per token) |
-| `provider_type` | string | yes | Must be `"cloud"` |
-
-**Example cloud model entry:**
+Example. The role `primary` is open. The role `entity_extraction` is pinned.
 
 ```yaml
-claude_sonnet:
-  id: "claude-sonnet-4-6"
-  provider: "anthropic"
-  provider_type: "cloud"
-  context_length: 200000
-  max_tokens: 8192
-  max_concurrency: 5
-  default_timeout: 120
+bindings:
+  primary:           { deployment: <deployment key>, open: true }
+  entity_extraction: { deployment: <deployment key> }
 ```
 
----
-
-### Cloud Model Overrides (`config/models.cloud.yaml`)
-
-Optional file that adds or overrides model definitions when running in cloud mode. Merged over `models.yaml` at startup. Same schema as the `models:` map in `models.yaml`.
-
-Exists to keep cloud-only model entries (like `claude_haiku`) separate from the local-inference defaults.
+Source: `llm_client/models.py`, class `RoleBinding`; `config/model_roles.yaml`. The role names are the keys of `bindings:` in that file.
 
 ---
 
 ## 4. PostgreSQL Schema
 
-Database: `personal_agent`  
-Connection: `AGENT_DATABASE_URL` environment variable (Pydantic settings).
+Database: `personal_agent`
+Connection: `AGENT_DATABASE_URL` (the restricted `seshat_app` role). Source: `src/personal_agent/config/settings.py`, field `database_url`.
+
+The schema is in `docker/postgres/init.sql`. Changes for an existing database are in `docker/postgres/migrations/`. The project has no Alembic. Run the migrations as the `agent` superuser with `AGENT_DATABASE_ADMIN_URL`.
+
+The `public` schema has 18 tables, and the `sysgraph` schema has the tables of the self-improvement store.
+
+| Table | Purpose |
+|-------|---------|
+| `sessions` | The conversations |
+| `metrics` | Time-series metrics |
+| `captains_log_captures` | Captain's Log captures |
+| `captains_log_reflections` | Captain's Log reflections |
+| `api_costs` | The cost of each paid API call |
+| `route_traces` | One row for each turn: the decision of the gateway and what the harness did |
+| `budget_policies`, `budget_counters`, `budget_reservations` | The budget gate |
+| `consolidation_attempts` | The memory consolidation attempts |
+| `kg_stats` | Knowledge graph statistics |
+| `grounding_compliance_observations`, `grounding_enforcement_state` | The grounding checks |
+| `users` | The user identities |
+| `artifacts` | The artifact metadata |
+| `session_events` | The stored AG-UI events for replay |
+| `user_constraint_preferences` | The saved answers to constraint pauses |
+| `session_model_selections` | The model selection of each session and role |
+
+Source: `docker/postgres/init.sql` (`CREATE TABLE` statements).
 
 ### `sessions` table
 
 | Column | PostgreSQL type | Nullable | Default | Description |
 |--------|----------------|----------|---------|-------------|
 | `session_id` | `uuid` | no | `gen_random_uuid()` | Primary key |
-| `created_at` | `timestamptz` | no | — | Session creation time |
-| `last_active_at` | `timestamptz` | no | — | Last activity time |
-| `mode` | `varchar(20)` | no | `'NORMAL'` | Session mode (`NORMAL` \| `DEBUG`) |
-| `user_id` | `uuid` | no | — | Session owner; FK → `users(user_id)`, index `ix_sessions_user_id` (FRE-591) |
-| `channel` | `varchar(50)` | yes | `NULL` | Client identifier (`pwa`, `cli`, etc.) |
-| `metadata` | `jsonb` | no | `'{}'` | Arbitrary client metadata |
-| `messages` | `jsonb` | no | `'[]'` | Array of `{role, content, timestamp, metadata}` objects |
-| `primary_model_at_creation` | `varchar(120)` | yes | `NULL` | Model name at session creation; row-level attribution per ADR-0074 (FRE-376) |
-| `model_config_path` | `varchar(255)` | yes | `NULL` | Model configuration path at session creation; per ADR-0074 (FRE-376) |
-| `execution_profile` | `varchar(50)` | no | `'local'` | Server-authoritative execution profile (`'local'` \| `'cloud'`); per ADR-0079 (FRE-416) |
-| `purged_at` | `timestamptz` | yes | `NULL` | Retention soft-prune tombstone; `NULL` = not yet purged. Set (and `messages` cleared to `'[]'`) by the scheduled retention sweep once the session is inactive past the window; cleared back to `NULL` if resumed. Per ADR-0098 D4/D6 (FRE-860) |
-| `last_event_seq` | `integer` | no | `0` | Per-session AG-UI transport event counter — the allocator for `session_events.seq`. Stored rather than derived from `MAX(seq)`, because `session_events` is swept on a 24h TTL and a derived counter would re-issue seqs the client already acknowledged. Per ADR-0075 (FRE-1040) |
+| `created_at` | `timestamptz` | no | `NOW()` | Session creation time |
+| `last_active_at` | `timestamptz` | no | `NOW()` | Last activity time |
+| `mode` | `varchar(20)` | no | `'NORMAL'` | Session mode |
+| `channel` | `varchar(50)` | yes | `NULL` | Client identifier |
+| `metadata` | `jsonb` | yes | `'{}'` | Arbitrary client metadata |
+| `messages` | `jsonb` | yes | `'[]'` | Array of `{role, content, timestamp, metadata}` objects |
+| `user_id` | `uuid` | no | none | Session owner. Foreign key to `users(user_id)`. Index `ix_sessions_user_id`. |
+| `primary_model_at_creation` | `varchar(120)` | yes | `NULL` | Model at session creation (ADR-0074) |
+| `model_config_path` | `varchar(255)` | yes | `NULL` | Model configuration path at session creation (ADR-0074) |
+| `execution_profile` | `varchar(50)` | no | `'local'` | A leftover column. The application does not read it. |
+| `purged_at` | `timestamptz` | yes | `NULL` | Retention tombstone. The retention sweep sets it and clears `messages`. A resumed session clears it. (ADR-0098) |
+| `last_event_seq` | `integer` | no | `0` | The allocator for `session_events.seq` (ADR-0075) |
+| `revealed_tools` | `text[]` | no | `'{}'` | The skill tools that `read_skill` revealed in this session (ADR-0156). Only the server writes it. |
+| `seshat_effort` | `varchar(16)` | no | `'standard'` | The effort level of the session. A check constraint limits it to `fast`, `standard` and `deep` (ADR-0157). |
+
+Source: `docker/postgres/init.sql`, `src/personal_agent/service/app.py` (the code comment on `execution_profile`).
 
 #### `messages` JSONB element schema
 
@@ -582,15 +429,45 @@ Connection: `AGENT_DATABASE_URL` environment variable (Pydantic settings).
   "role": "user | assistant | system | tool",
   "content": "string",
   "timestamp": "ISO 8601 datetime (UTC)",
-  "trace_id": "UUID string — identifies the request turn in ES traces and Captain's Log",
+  "trace_id": "UUID string - identifies the request turn in traces and Captain's Log",
   "metadata": {
     "source": "gateway.chat_api | service.app | request_completed_handler",
-    "model": "claude-sonnet-4-6"
+    "model": "<deployment id>"
   }
 }
 ```
 
-Every message persisted after FRE-235 (2026-04-26) carries `trace_id`, `timestamp`, and `metadata.source`, enabling end-to-end correlation: `session_id → trace_id → ES request trace → Captain's Log reflection`. The `model` key is present on assistant messages from the cloud gateway path. Older messages (pre-FRE-235) may omit these fields.
+Every message that the service persisted after FRE-235 (2026-04-26) carries `trace_id`, `timestamp` and `metadata.source`. These fields link `session_id → trace_id → request trace → Captain's Log reflection`. The `model` key is present on assistant messages from the cloud gateway path. Older messages can omit these fields.
+
+---
+
+### `session_events` table
+
+The stored AG-UI events. The WebSocket replays them after a reconnect. A cleanup task deletes rows older than `ws_event_ttl_hours` (24 hours).
+
+| Column | PostgreSQL type | Nullable | Description |
+|--------|----------------|----------|-------------|
+| `id` | `bigserial` | no | Primary key |
+| `session_id` | `uuid` | no | Foreign key to `sessions(session_id)` |
+| `seq` | `integer` | no | The sequence number. `(session_id, seq)` is unique. |
+| `event_type` | `text` | no | The event type |
+| `payload` | `jsonb` | no | The wire payload |
+| `created_at` | `timestamptz` | no | Storage time |
+
+Source: `docker/postgres/init.sql`, `src/personal_agent/transport/agui/ws_endpoint.py` (function `run_event_cleanup`).
+
+---
+
+### `users` table
+
+| Column | PostgreSQL type | Nullable | Description |
+|--------|----------------|----------|-------------|
+| `user_id` | `uuid` | no | Primary key |
+| `email` | `text` | no | Unique |
+| `display_name` | `text` | yes | The display name |
+| `created_at` | `timestamptz` | no | Creation time |
+
+Source: `docker/postgres/init.sql` (ADR-0064).
 
 ---
 
@@ -598,110 +475,44 @@ Every message persisted after FRE-235 (2026-04-26) carries `trace_id`, `timestam
 
 | Column | PostgreSQL type | Nullable | Default | Description |
 |--------|----------------|----------|---------|-------------|
-| `id` | `bigint` | no | auto-increment | Primary key |
-| `timestamp` | `timestamptz` | no | — | Metric capture time |
+| `id` | `bigserial` | no | auto-increment | Primary key |
+| `timestamp` | `timestamptz` | no | `NOW()` | Metric capture time |
 | `trace_id` | `uuid` | yes | `NULL` | Request trace identifier |
-| `metric_name` | `varchar(100)` | no | — | Metric name (e.g. `"llm_latency_ms"`) |
-| `metric_value` | `double precision` | no | — | Numeric metric value |
-| `unit` | `varchar(20)` | yes | `NULL` | Unit of measure (e.g. `"ms"`, `"USD"`) |
-| `tags` | `jsonb` | no | `'{}'` | Arbitrary key-value tags |
+| `metric_name` | `varchar(100)` | no | none | Metric name |
+| `metric_value` | `double precision` | no | none | Numeric metric value |
+| `unit` | `varchar(20)` | yes | `NULL` | Unit of measure |
+| `tags` | `jsonb` | yes | `'{}'` | Arbitrary key-value tags |
+
+Source: `docker/postgres/init.sql`.
 
 ---
 
-### `api_calls` table (cost tracking)
+### `api_costs` table (cost tracking)
 
-Managed by `CostTrackerService`. Stores LiteLLM cloud API call costs.
+`CostTrackerService` writes one row for each paid API call.
 
 | Column | PostgreSQL type | Nullable | Description |
 |--------|----------------|----------|-------------|
-| `id` | `bigint` | no | Primary key |
+| `id` | `bigserial` | no | Primary key |
 | `timestamp` | `timestamptz` | no | Call time |
-| `provider` | `varchar(50)` | no | `"anthropic"` \| `"openai"` |
-| `model` | `varchar(100)` | no | Model ID (e.g. `"claude-sonnet-4-6"`) |
-| `input_tokens` | `int` | no | Prompt tokens |
-| `output_tokens` | `int` | no | Completion tokens |
-| `cost_usd` | `numeric(10,6)` | no | Computed cost in USD |
-| `latency_ms` | `int` | no | Round-trip latency |
+| `provider` | `varchar(50)` | no | The provider, such as `anthropic` or `openai` |
+| `model` | `varchar(100)` | no | The model identifier |
+| `input_tokens` | `integer` | no | Prompt tokens |
+| `output_tokens` | `integer` | no | Completion tokens |
+| `cost_usd` | `numeric(18,12)` | no | Computed cost in USD |
+| `cache_read_input_tokens` | `integer` | yes | The Anthropic cache-read tier |
+| `cache_creation_input_tokens` | `integer` | yes | The Anthropic cache-creation tier |
+| `trace_id` | `uuid` | no | The request trace |
+| `session_id` | `uuid` | yes | The session |
+| `purpose` | `varchar(50)` | yes | The reason for the call, such as `user_request` |
+| `latency_ms` | `integer` | yes | Round-trip latency |
+
+Source: `docker/postgres/init.sql`. The table `api_calls` does not exist.
 
 ---
 
-## 5. Terraform Variable Schema
+## 5. Infrastructure as code
 
-**Provider**: OVH (`ovh` Terraform provider)  
-**State**: `infrastructure/terraform/terraform.tfstate` (local)  
-**Credentials file**: `infrastructure/terraform/terraform.tfvars` (gitignored)  
-**Template**: `infrastructure/terraform/terraform.tfvars.example`
+The Terraform that manages the host firewall is not in this repository. It moved to a private companion repository on 2026-05-01. This guide does not describe the Terraform variables or rules.
 
-### Variables (`variables.tf`)
-
-| Variable | Type | Sensitive | Validation | Description |
-|----------|------|-----------|------------|-------------|
-| `ovh_application_key` | string | yes | — | OVH API application key from `eu.api.ovh.com/createApp` |
-| `ovh_application_secret` | string | yes | — | OVH API application secret |
-| `ovh_consumer_key` | string | yes | — | OVH consumer key (generated via token request) |
-| `vps_ip` | string | yes | Must match `\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}` | VPS public IPv4 address |
-| `ssh_port` | number | yes | 1025–65534 | Non-standard SSH port configured on the server |
-
-### `terraform.tfvars` format
-
-```hcl
-ovh_application_key    = "xxxxxxxxxxxx"
-ovh_application_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-ovh_consumer_key       = "xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-vps_ip                 = "1.2.3.4"
-ssh_port               = 2222
-```
-
-### Firewall rules managed (`main.tf`)
-
-| Sequence | Resource name | Action | Protocol | Port/Option | Purpose |
-|----------|---------------|--------|----------|-------------|---------|
-| 0 | `allow_established` | permit | tcp | `established` | Return traffic for outbound connections |
-| 1 | `allow_ssh` | permit | tcp | `var.ssh_port` | SSH access |
-| 2 | `allow_http` | permit | tcp | 80 | HTTP (Caddy redirect) |
-| 3 | `allow_https` | permit | tcp | 443 | HTTPS (Caddy TLS termination) |
-| 4 | `allow_icmp` | permit | icmp | — | Ping / health diagnostics |
-| 19 | `deny_all` | deny | ipv4 | — | Catch-all deny (must be last; OVH max sequence = 19) |
-
-> **Stateless firewall**: The OVH network firewall does not track connection state. Rule 0 (`established`) explicitly permits ACK/RST packets so that TCP replies to outbound connections (e.g. apt, Docker pulls, Cloudflare WARP) are not blocked.
-
-### Outputs (`outputs.tf`)
-
-After `terraform apply`, the following outputs are available via `terraform output`:
-
-| Output | Description |
-|--------|-------------|
-| `firewall_ip_block` | The `/32` CIDR block the firewall is applied to |
-| `vps_ip` | The VPS IP (echoed for confirmation) |
-
-### Credential setup
-
-```bash
-# 1. Create an OVH app at https://eu.api.ovh.com/createApp
-#    → Save application_key and application_secret
-
-# 2. Request a consumer key with firewall permissions
-curl -X POST https://eu.api.ovh.com/1.0/auth/credential \
-  -H "X-Ovh-Application: <application_key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "accessRules": [
-      {"method": "GET",    "path": "/ip/*"},
-      {"method": "POST",   "path": "/ip/*"},
-      {"method": "PUT",    "path": "/ip/*"},
-      {"method": "DELETE", "path": "/ip/*"}
-    ],
-    "redirection": "https://example.com"
-  }'
-# → Visit the validation URL, then note the consumer_key from the response
-
-# 3. Create terraform.tfvars from the example template
-cp infrastructure/terraform/terraform.tfvars.example infrastructure/terraform/terraform.tfvars
-# Edit with your values
-
-# 4. Apply
-cd infrastructure/terraform
-terraform init
-terraform plan
-terraform apply
-```
+For the cloud deployment of this repository, see [Cloud Deployment](CLOUD_DEPLOYMENT.md). The compose file is `docker-compose.cloud.yml`.

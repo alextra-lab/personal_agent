@@ -56,11 +56,11 @@ sudo powermetrics -n 1 -i 1000 --samplers gpu_power
 
 ```bash
 cd <project-root>
-python -m personal_agent.ui.cli "Hello, test GPU metrics"
+uv run agent chat "Hello, test GPU metrics"
 
 # Check logs for:
-# ✅ gpu_metrics_via_powermetrics
 # ✅ perf_system_gpu_load (not None)
+# ❌ powermetrics_invalid_json / powermetrics_not_found (poll failed; macmon is tried first)
 ```
 
 ---
@@ -157,7 +157,6 @@ GPU metrics will fall back to None (graceful degradation).
 
 ## Alternative Tools (Not Used)
 
-- **macmon**: Broken on macOS 14+ (`Failed to create subscription`)
 - **asitop**: Requires separate Python package, less tested
 - **ioreg**: Limited GPU metrics, complex parsing
 

@@ -1,6 +1,6 @@
 # Usage Guide
 
-Complete guide to using Personal Agent for common tasks.
+This guide shows how to use the Personal Agent for common tasks. Each fact names the file that states it. Short names in the source notes mean these files: `settings.py` is `src/personal_agent/config/settings.py`, `service_cli.py` is `src/personal_agent/ui/service_cli.py`, and `models.py` is `src/personal_agent/service/models.py`.
 
 ## Table of Contents
 
@@ -10,59 +10,71 @@ Complete guide to using Personal Agent for common tasks.
 - [Configuration](#configuration)
 - [Common Tasks](#common-tasks)
 - [Troubleshooting](#troubleshooting)
+- [Advanced Usage](#advanced-usage)
 
 ## Quick Start
 
-### 1. Start Infrastructure
+### 1. Start the infrastructure
 
 ```bash
-./scripts/init-services.sh
+make up
 ```
 
-This starts PostgreSQL, Elasticsearch, Grafana, and Neo4j.
+This starts the services in `docker-compose.yml`: PostgreSQL, Elasticsearch, Neo4j, SearXNG, Tempo, the OpenTelemetry collector, Grafana and Redis. In the `local` environment, the target also runs `scripts/init-services.sh`. Source: `Makefile` (targets `up` and `help`), `docker-compose.yml`.
 
-### 2. Start SLM Server
+### 2. Start the local model server
+
+The local model runs on llama.cpp. The server is not part of this repository, and it does not run on the VPS. Source: `config/models.yaml` (provider `slm_local`), `CLAUDE.md` (request flow).
+
+Set the origin of the server in `.env`:
 
 ```bash
-git clone https://github.com/alextra-lab/slm_server.git
-cd slm_server
-uv sync
-./start.sh
+AGENT_SLM_BASE_URL=<origin of the llama.cpp server>
 ```
 
-### 3. Start Personal Agent Service
+Use an origin with no `/v1` suffix. Source: `src/personal_agent/config/settings.py`, field `slm_base_url`.
+
+### 3. Start the Personal Agent service
 
 ```bash
-cd personal_agent
-uv run uvicorn personal_agent.service.app:app --reload --port 9000
+make dev
 ```
 
-### 4. Verify Services
+The target runs `uvicorn` with hot reload on port 9000. Source: `Makefile`, target `dev`.
+
+### 4. Verify the services
 
 ```bash
-# Check Personal Agent
+# Check the Personal Agent
+make health
 curl http://localhost:9000/health
 
-# Check SLM Server
-curl http://localhost:8000/health
+# Check the local model server
+curl "$AGENT_SLM_BASE_URL/health"
 
-# View API docs
+# View the API docs
 open http://localhost:9000/docs
 ```
+
+`/health` returns `{"status": "healthy", "build_fingerprint": ..., "components": {...}}`. The components are `database`, `elasticsearch`, `neo4j`, `second_brain` and `mcp_gateway`. Source: `src/personal_agent/service/app.py`, function `health_check`.
+
+The health URL of the model server is the origin of `AGENT_SLM_BASE_URL` plus `/health`. The setting `AGENT_SLM_HEALTH_URL` overrides it. Source: `settings.py`, property `resolved_slm_health_url`.
 
 ## Basic Usage
 
 ### Conversation-first CLI
 
-Use the service client as the primary interface:
+Use the `agent` command. The entry point is `agent = personal_agent.ui.service_cli:app`. Source: `pyproject.toml`, `src/personal_agent/ui/service_cli.py`.
 
 ```bash
-# First message (creates and stores session automatically)
-uv run agent "Hello, can you help me plan my day?"
+# First message (creates and stores a session automatically)
+uv run agent chat "Hello, can you help me plan my day?"
 
-# Follow-up in same conversation (reuses stored session)
-uv run agent "Now turn that into a 3-item checklist"
+# Follow-up in the same conversation (reuses the stored session)
+uv run agent chat "Now turn that into a 3-item checklist"
 ```
+
+A message without the `chat` subcommand does not work. The CLI reads the message as an unknown subcommand and exits with an error. Source: `service_cli.py`, function `main` and function `chat`.
 
 ### Start a new conversation
 
@@ -70,26 +82,40 @@ uv run agent "Now turn that into a 3-item checklist"
 uv run agent chat "Let's start a new topic" --new
 ```
 
-### Inspect or rotate session id
+### Choose the model for one turn
+
+```bash
+uv run agent chat "Summarize this" --model claude_sonnet
+```
+
+The value is a deployment key from `config/models.yaml`. If you omit `--model`, the turn uses the selection of the session. A new session uses the default of the `primary` role in `config/model_roles.yaml`. Source: `service_cli.py`, function `chat`, `config/model_roles.yaml`.
+
+### Inspect or rotate the session id
 
 ```bash
 uv run agent session
 uv run agent session new
 ```
 
-### Service URL configuration
+Source: `service_cli.py`, functions `session_show` and `session_new`.
 
-The CLI reads `AGENT_SERVICE_URL` (default: `http://localhost:9000`):
+### Memory commands
 
 ```bash
-export AGENT_SERVICE_URL=http://localhost:9000
-# or
-export AGENT_SERVICE_URL=https://agent.example.com
+uv run agent memory --help
 ```
 
-Messages are sent as query parameters via `httpx` and are URL-encoded automatically.
+Source: `service_cli.py` (the `memory` sub-application).
 
-### Create a Session
+### Service URL
+
+The CLI reads the setting `service_url`. The environment variable is `SERVICE_URL`, not `AGENT_SERVICE_URL`, because the field declares the alias `SERVICE_URL`. The default is `http://localhost:9000`. Source: `settings.py`, field `service_url`.
+
+```bash
+export SERVICE_URL=http://localhost:9000
+```
+
+### Create a session
 
 ```bash
 curl -X POST http://localhost:9000/sessions \
@@ -97,17 +123,24 @@ curl -X POST http://localhost:9000/sessions \
   -d '{"channel": "CLI", "mode": "NORMAL"}'
 ```
 
-Response:
+The request body has the fields `channel` (optional string), `mode` (default `NORMAL`), `metadata` and `seshat_effort`. Source: `src/personal_agent/service/models.py`, class `SessionCreate`.
+
+Response (abridged):
 ```json
 {
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "channel": "CLI",
   "mode": "NORMAL",
-  "created_at": "2026-01-26T12:00:00Z"
+  "created_at": "2026-01-26T12:00:00Z",
+  "last_active_at": "2026-01-26T12:00:00Z",
+  "metadata": {},
+  "messages": []
 }
 ```
 
-### Send a Chat Message
+The full response also has `primary_model_at_creation`, `model_config_path` and `purged_at`. Source: `models.py`, class `SessionResponse`.
+
+### Send a chat message
 
 ```bash
 curl -X POST "http://localhost:9000/chat?message=Hello&session_id=YOUR_SESSION_ID"
@@ -116,61 +149,65 @@ curl -X POST "http://localhost:9000/chat?message=Hello&session_id=YOUR_SESSION_I
 Response:
 ```json
 {
-  "content": "Hello! How can I help you today?",
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "response": "Hello! How can I help you today?",
   "trace_id": "abc123",
-  "usage": {
-    "prompt_tokens": 50,
-    "completion_tokens": 20,
-    "total_tokens": 70
-  }
+  "primary_selection": "qwen3.8-flash-next",
+  "seshat_effort": "standard"
 }
 ```
 
-### List Sessions
+The response has no `usage` field. The value of `primary_selection` is the deployment key that ran the turn. The value of `seshat_effort` is `fast`, `standard` or `deep`. The values shown are examples. Source: `service/app.py`, function `chat`, `src/personal_agent/config/seshat_effort.py` (type `EffortLevel`).
+
+The `/chat` endpoint also accepts the query parameters `model`, `channel` and `seshat_effort`. Source: `service/app.py`, function `chat`.
+
+### List sessions
 
 ```bash
 curl http://localhost:9000/api/v1/sessions \
   -H "Authorization: Bearer $GATEWAY_TOKEN"
 ```
 
-Returns the 20 most recent sessions ordered by last activity. Each entry includes a `title` field (first user message, ≤ 60 chars) and `message_count`.
+Returns the 20 most recent sessions, ordered by last activity. Use `?limit=N` to change the number. Each entry has `session_id`, `created_at`, `last_active_at`, `mode`, `channel`, `message_count`, `turn_count`, `title` (the first user message, 60 characters at most), `session_label` and `session_digest`. Source: `src/personal_agent/gateway/session_api.py`, functions `list_sessions` and `_session_to_dict`.
 
-### Resume a Session
+### Resume a session
 
-The PWA does this automatically via the `/c/{session_id}` URL. Via API:
+The PWA does this automatically with the `/c/{session_id}` URL. Use these calls for the same result through the API:
 
 ```bash
-# Fetch history for an existing session
+# Fetch the history of an existing session
 curl "http://localhost:9000/api/v1/sessions/YOUR_SESSION_ID/messages?limit=200" \
   -H "Authorization: Bearer $GATEWAY_TOKEN"
 
-# Continue the conversation using the same session_id
-curl -X POST http://localhost:9000/chat/stream \
-  -d "message=What did we discuss earlier?&session_id=YOUR_SESSION_ID&profile=cloud"
+# Continue the conversation with the same session_id
+curl -X POST http://localhost:9000/chat \
+  -G --data-urlencode "message=What did we discuss earlier?" \
+  --data-urlencode "session_id=YOUR_SESSION_ID"
 ```
 
-The backend loads the prior message history before calling the model — conversation memory is preserved across browser reloads, devices, and sessions.
+The backend loads the prior message history before it calls the model. Conversation memory stays across browser reloads, devices and sessions.
 
 ## API Endpoints
 
-### Health Check
+Source for this section: `src/personal_agent/service/app.py` and `src/personal_agent/gateway/session_api.py`.
+
+### Health check
 
 ```bash
 GET /health
 ```
 
-Returns service health status.
+Returns the service health. See "Verify the services" for the response.
 
-### Create Session
+### Create session
 
 ```bash
 POST /sessions
 Content-Type: application/json
 
 {
-  "channel": "CLI" | "API" | "WEB",
-  "mode": "NORMAL" | "ALERT" | "DEGRADED" | "LOCKDOWN" | "RECOVERY"
+  "channel": "CLI",
+  "mode": "NORMAL"
 }
 ```
 
@@ -180,59 +217,79 @@ Content-Type: application/json
 POST /chat?message=<message>&session_id=<session_id>
 ```
 
-Sends a message to the agent and receives a response.
+Sends a message to the agent and waits for the response.
 
-### List Sessions
+### Chat stream (PWA)
+
+```bash
+POST /chat/stream
+Content-Type: application/x-www-form-urlencoded
+
+message=<message>&session_id=<session_id>
+```
+
+The form fields are `message`, `session_id`, `primary_selection`, `seshat_effort`, `client_msg_id` and `attachments`. The call returns at once with `{"session_id", "status", "primary_selection", "selection_provenance", "seshat_effort", "effort_provenance"}`. The reply arrives as events on the WebSocket `/ws/{session_id}`. See [AG-UI Streaming Reference](AGUI_STREAMING_REFERENCE.md).
+
+### List sessions
 
 ```bash
 GET /api/v1/sessions?limit=20
 Authorization: Bearer <token>
 ```
 
-Returns recent sessions ordered by last activity. Response includes `title` (first user message ≤ 60 chars), `message_count`, `created_at`, `last_active_at`.
-
-### Get Session Messages
+### Get session messages
 
 ```bash
 GET /api/v1/sessions/{session_id}/messages?limit=200
 Authorization: Bearer <token>
 ```
 
-Returns full message history in chronological order. Each message includes `role`, `content`, `timestamp`, `trace_id`, and `metadata.source`. Returns 404 if the session does not exist.
+Returns the full message history in chronological order. Each message has `role`, `content`, `timestamp`, `trace_id` and `metadata.source`. The call returns 404 if the session does not exist.
 
-### Get Session
+### Change the model or the effort of a session
+
+```bash
+PATCH /api/v1/sessions/{session_id}/selection
+PATCH /api/v1/sessions/{session_id}/effort
+```
+
+### Get session
 
 ```bash
 GET /sessions/{session_id}
 ```
 
-Returns session details and history (local service path).
+Returns the session details and the history (local service path).
 
 ## Configuration
 
-### Environment Variables
+See the [Configuration Guide](CONFIGURATION.md) for the full description. Every setting uses the prefix `AGENT_`, except the aliases that `settings.py` declares.
 
-Key configuration options (see `.env.example` for full list):
+### Environment variables
 
 ```bash
-# LLM Configuration
-LLM_BASE_URL=http://localhost:8000/v1
-LLM_TIMEOUT_SECONDS=120
-LLM_MAX_RETRIES=3
+# Local model server (no default; an origin without /v1)
+AGENT_SLM_BASE_URL=<origin of the llama.cpp server>
 
-# Service Configuration
+# Model calls
+AGENT_LLM_TIMEOUT_SECONDS=120
+AGENT_LLM_MAX_RETRIES=3
+
+# Service
 AGENT_SERVICE_PORT=9000
 
 # Database
-AGENT_DATABASE_URL=postgresql+asyncpg://agent:password@localhost:5432/personal_agent
+AGENT_DATABASE_URL=postgresql+asyncpg://<user>:<password>@localhost:5432/personal_agent
 
 # Elasticsearch
 AGENT_ELASTICSEARCH_URL=http://localhost:9200
 
-# MCP Gateway (optional)
+# MCP gateway (optional)
 AGENT_MCP_GATEWAY_ENABLED=false
 AGENT_MCP_GATEWAY_COMMAND='["docker", "mcp", "gateway", "run"]'
 ```
+
+Source: `settings.py`, fields `slm_base_url`, `llm_timeout_seconds`, `llm_max_retries`, `service_port`, `database_url`, `elasticsearch_url`, `mcp_gateway_enabled` and `mcp_gateway_command`.
 
 ### Owner Identity Setup (FRE-213 / ADR-0052)
 
@@ -256,7 +313,7 @@ All other CF Access users are provisioned automatically on their first authentic
 
 ```bash
 # Ask the agent
-uv run agent "who am I?" --new
+uv run agent chat "who am I?" --new
 # Expect: "You're Alex" — zero tool iterations in the trace
 
 # Check the graph
@@ -307,153 +364,156 @@ Run this after deploying the FRE-229 build. The service has an IS NULL grace cla
 
 **Visibility at query time** is applied automatically by the chokepoint filter in `memory/service.py`. Callers never need to filter manually — the `user_id` + `authenticated` flags flow from the request through the gateway pipeline to every Cypher query.
 
-### Governance Configuration
+### Governance configuration
 
-Edit `config/governance/` files to customize:
+Edit the files in `config/governance/` to change the policies:
 
-- **modes.yaml**: Operational modes and transition rules
-- **tools.yaml**: Tool permissions and risk levels
+- **modes.yaml**: the operating modes and the transition rules
+- **tools.yaml**: the tool permissions and risk levels
+- **permissions.yaml**: the permission rules
+
+Source: `config/governance/`, `src/personal_agent/config/governance_loader.py`.
 
 ## Common Tasks
 
-### Query System Health
-
-The agent can check system health using built-in tools:
+### Ask a question that needs a tool
 
 ```bash
-curl -X POST "http://localhost:9000/chat?message=What is my system CPU usage?&session_id=YOUR_SESSION_ID"
+curl -X POST "http://localhost:9000/chat" \
+  -G --data-urlencode "message=Search the web for python async libraries" \
+  --data-urlencode "session_id=YOUR_SESSION_ID"
 ```
 
-### File Operations
+The agent chooses the tools. Tier 1 tools such as `search_memory`, `recall_personal_history` and `web_search` are registered in `src/personal_agent/tools/__init__.py` (function `register_mvp_tools`). The tool policy is in `config/governance/tools.yaml`.
+
+### Memory queries
+
+The memory graph is off by default. Set `AGENT_ENABLE_MEMORY_GRAPH=true` to enable it. Source: `settings.py`, field `enable_memory_graph`.
 
 ```bash
-curl -X POST "http://localhost:9000/chat?message=List files in $HOME/Documents&session_id=YOUR_SESSION_ID"
+curl -X POST "http://localhost:9000/chat" \
+  -G --data-urlencode "message=What topics have we discussed about Python?" \
+  --data-urlencode "session_id=YOUR_SESSION_ID"
 ```
 
-### Memory Queries
+### MCP tools
 
-With Phase 2.2 memory enabled:
-
-```bash
-curl -X POST "http://localhost:9000/chat?message=What topics have we discussed about Python?&session_id=YOUR_SESSION_ID"
-```
-
-### MCP Tools
-
-With MCP Gateway enabled, the agent can use containerized MCP tools:
+If the MCP gateway is enabled, the agent can use containerized MCP tools:
 
 ```bash
 # Enable in .env
 AGENT_MCP_GATEWAY_ENABLED=true
 
-# Restart service, then use MCP tools
-curl -X POST "http://localhost:9000/chat?message=Search GitHub for python async libraries&session_id=YOUR_SESSION_ID"
+# Restart the service, then ask for an MCP tool
 ```
+
+Tier 3 (MCP) tools need an ADR. See `docs/reference/TOOL_INTEGRATION_GUIDE.md` and [MCP Integration Quick Start](MCP_INTEGRATION_QUICK_START.md).
 
 ## Troubleshooting
 
-### Service Won't Start
+### Service does not start
 
 ```bash
-# Check if ports are in use
+# Check if the port is in use
 lsof -i :9000
-lsof -i :8000
 
-# Check Docker services
-docker-compose ps
+# Check the Docker services
+make ps
 
-# View logs
-docker-compose logs postgres
-docker-compose logs elasticsearch
+# View the logs
+make logs SERVICE=postgres
+make logs SERVICE=elasticsearch
 ```
 
-### Database Connection Issues
+Source: `Makefile` (targets `ps` and `logs`).
+
+### Database connection issues
 
 ```bash
-# Test PostgreSQL connection
-docker-compose exec postgres psql -U agent -d personal_agent
-
-# Check tables
-docker-compose exec postgres psql -U agent -d personal_agent -c "\dt"
+# Open a PostgreSQL shell
+make shell SERVICE=postgres
 ```
 
-### SLM Server Not Responding
+Run `\dt` in the shell to list the tables. The schema is in `docker/postgres/init.sql`. Source: `Makefile` (target `shell`).
+
+### The model server does not respond
 
 ```bash
-# Check SLM Server health
-curl http://localhost:8000/health
-
-# Check backend models
-curl http://localhost:8000/v1/backends/health
-
-# View SLM Server logs
-cd slm_server
-tail -f logs/slm_server.log
+# Check the model server health
+curl "$AGENT_SLM_BASE_URL/health"
 ```
 
-### MCP Gateway Issues
+If the command fails, check that `AGENT_SLM_BASE_URL` is set and that the llama.cpp server runs on the Mac. The model server logs are on the Mac, not on this host. Source: `settings.py`, property `resolved_slm_health_url`.
 
-**Issue**: MCP tools not available
+### MCP gateway issues
 
-**Solutions**:
-1. Verify Docker is running: `docker ps`
-2. Check MCP Gateway enabled: `grep MCP_GATEWAY_ENABLED .env`
-3. Check logs for initialization errors
-4. Verify Docker MCP Gateway feature is enabled in Docker Desktop
-
-**Known Limitations**:
-- MCP integration requires async execution (handled automatically)
-- Some async cleanup warnings may appear in logs (harmless)
-- Docker must be running for MCP Gateway to work
-
-### Memory Service Issues
-
-**Issue**: Memory queries return empty results
+**Issue**: MCP tools are not available.
 
 **Solutions**:
-1. Verify Neo4j is running: `docker-compose ps neo4j`
-2. Check Neo4j connection: `curl http://localhost:7474`
-3. Verify memory is enabled: `grep AGENT_ENABLE_MEMORY_GRAPH .env`
-4. Check memory service logs
+1. Verify that Docker runs: `docker ps`
+2. Check the setting: `AGENT_MCP_GATEWAY_ENABLED=true` in `.env`
+3. Check the logs for initialization errors
+4. Check the `mcp_gateway` component in the `/health` response
+
+**Known limitations**:
+- MCP integration needs async execution. The service handles this automatically.
+- Some async cleanup warnings can appear in the logs. They are harmless.
+- Docker must run for the MCP gateway to work.
+
+### Memory service issues
+
+**Issue**: Memory queries return empty results.
+
+**Solutions**:
+1. Verify that Neo4j runs: `make ps SERVICE=neo4j`
+2. Check the `neo4j` component in the `/health` response
+3. Verify that the memory graph is on: `grep AGENT_ENABLE_MEMORY_GRAPH .env`
+4. Check the memory service logs
 
 ## Advanced Usage
 
-### Custom Tools
+### Custom tools
 
-Add custom tools by implementing the `ToolExecutor` interface:
+A tool has a `ToolDefinition` and an async executor that returns a `ToolResult`. Register both in `register_mvp_tools`, then add the policy in `config/governance/tools.yaml`.
 
 ```python
-from personal_agent.tools.types import ToolExecutor, ToolResult
+from personal_agent.tools.types import ToolResult
 
 async def my_tool_executor(arg1: str, arg2: int) -> ToolResult:
     # Your tool logic
-    return ToolResult(success=True, output="Result")
+    return ToolResult(
+        tool_name="my_tool",
+        success=True,
+        output="Result",
+        latency_ms=0.0,
+    )
 ```
 
-Register in `config/governance/tools.yaml`.
+Source: `src/personal_agent/tools/types.py` (classes `ToolDefinition` and `ToolResult`), `src/personal_agent/tools/__init__.py`. The tool tiers are in `docs/reference/TOOL_INTEGRATION_GUIDE.md`.
 
-### Custom Models
+### Models and roles
 
-Configure models in `config/models.yaml`:
+`config/models.yaml` is the catalog. Each key under `models:` is a deployment. The `providers:` section declares the backends, such as `slm_local` for the local llama.cpp server. A role is a job. `config/model_roles.yaml` binds each role to one deployment.
 
 ```yaml
-models:
-  router:
-    id: "qwen/qwen3-1.7b"
-    backend: "mlx"
-    port: 8500
-    # ... other settings
+# config/model_roles.yaml
+bindings:
+  primary: { deployment: <deployment key>, open: true }
 ```
+
+An `open: true` role can be selected by the user. There is no router model. Source: `config/models.yaml`, `config/model_roles.yaml`.
 
 ### Observability
 
-- **Logs**: Structured JSON logs in `telemetry/logs/` or Elasticsearch
-- **Metrics**: PostgreSQL `metrics` table or Elasticsearch
-- **Traces**: Elasticsearch with trace_id correlation
-- **Grafana**: http://localhost:3000 for log/trace visualization
+- **Logs**: structured JSON logs in `telemetry/logs/`, and Elasticsearch
+- **Metrics and events**: Elasticsearch (`agent-logs-*`)
+- **Traces**: Tempo, with `trace_id` correlation
+- **Grafana**: `http://localhost:3000` with the local compose file. The cloud stack publishes Grafana on host port 3003, and the PWA uses port 3000.
+
+Source: `docker-compose.yml`, `docker-compose.cloud.yml`, `config/otel/`.
 
 ## Next Steps
 
-- See [Configuration Guide](CONFIGURATION.md) for detailed configuration
-- See [Architecture Documentation](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) for system design
-- See [Contributing](../../README.md#contributing) for development setup
+- See the [Configuration Guide](CONFIGURATION.md) for the detailed configuration
+- See the [Architecture Documentation](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) for the system design
+- See [Contributing](../../README.md#contributing) for the development setup

@@ -1,37 +1,72 @@
 # AG-UI Streaming Reference
 
-> **Last updated**: 2026-04-16  
-> **Protocol**: AG-UI (ADR-0046)  
-> **Applies to**: PWA client, service/app.py, transport/agui/
+> **Last updated**: 2026-10-30
+> **Protocol**: AG-UI over WebSocket (ADR-0075, which replaced the SSE transport of ADR-0046)
+> **Applies to**: PWA client, `src/personal_agent/service/app.py`, `src/personal_agent/transport/`
 
-This reference documents the AG-UI streaming protocol as implemented in Seshat: the wire format, endpoint contracts, event types, and client integration patterns.
+This reference documents the AG-UI streaming protocol as implemented in Seshat: the wire format, the endpoint contracts, the event types and the client integration. Each fact names its source file.
 
 ---
 
 ## Overview
 
-AG-UI is the streaming protocol between the Seshat PWA and the backend. It follows a fire-and-forget + SSE (Server-Sent Events) pattern:
+AG-UI is the streaming protocol between the Seshat PWA and the backend. It uses one fire-and-forget HTTP call and one WebSocket.
 
 ```
 Client                                    Backend
   │                                          │
-  │── POST /chat/stream ────────────────────►│
-  │◄─ 200 {"status":"streaming"} ───────────│  (returns immediately)
-  │                                          │  [background task running]
-  │── GET /stream/{session_id} ────────────►│
-  │◄─ text/event-stream ────────────────────│
-  │   data: {"type":"TEXT_DELTA",...}        │  [events stream in]
-  │   data: {"type":"DONE"}                  │  [task complete]
+  │── POST /api/ws-ticket ──────────────────►│  (mint a single-use ticket)
+  │◄─ {"ticket": "...", "expires_in": 30} ───│
+  │── WS /ws/{session_id}?ticket=... ───────►│  (upgrade)
+  │── {"type":"CONNECT","last_seq":0} ──────►│  (first message)
   │                                          │
+  │── POST /chat/stream ────────────────────►│
+  │◄─ 200 {"status":"streaming",...} ────────│  (returns at once)
+  │                                          │  [background task runs]
+  │◄─ {"type":"PHASE_START",...,"seq":1} ────│
+  │◄─ {"type":"TEXT_DELTA",...,"seq":2} ─────│  [events arrive]
+  │◄─ {"type":"DONE","trace_id":"..."} ──────│  [turn complete]
 ```
 
-The client initiates two independent connections:
-1. `POST /chat/stream` — submits the message, gets back immediately
-2. `GET /stream/{session_id}` — receives events as they are produced
+The client opens two independent channels:
+
+1. `POST /chat/stream` submits the message and returns at once.
+2. `WS /ws/{session_id}` carries the events in both directions.
+
+The `DONE` event ends a turn. After the server sends `DONE`, the sender task ends, and the handler closes the socket. The PWA client then reconnects with backoff, and it sends `CONNECT` with its stored `last_seq`.
+
+Source: `src/personal_agent/transport/agui/ws_endpoint.py` (module docstring and function `ws_session`), `src/personal_agent/service/app.py` (functions `chat_stream_endpoint` and `mint_ws_ticket_endpoint`).
+
+The SSE routes `GET /stream/{session_id}` and `POST /stream/{session_id}/resume` do not exist. The module `transport/agui/endpoint.py` does not exist either.
 
 ---
 
 ## Endpoints
+
+### `POST /api/ws-ticket`
+
+Mints a single-use ticket for the WebSocket handshake. The ticket keeps the bearer token out of the URL.
+
+**Content-Type**: `application/json`
+
+```json
+{"session_id": "<UUID>"}
+```
+
+**Response** (200):
+```json
+{"ticket": "...", "expires_in": 30}
+```
+
+The default life of a ticket is 30 seconds (`ws_ticket_ttl_seconds`).
+
+**Errors**:
+- `422` - `session_id` is not a valid UUID.
+- `404` - the session does not exist for this user.
+
+Source: `service/app.py`, function `mint_ws_ticket_endpoint`. `src/personal_agent/config/settings.py`, field `ws_ticket_ttl_seconds`.
+
+---
 
 ### `POST /chat/stream`
 
@@ -39,197 +74,191 @@ The client initiates two independent connections:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `message` | string | yes | User's message text |
-| `session_id` | UUID v4 | yes | Client-generated session identifier |
-| `profile` | string | no | Execution profile (`"local"` or `"cloud"`, default `"local"`) |
+| `message` | string | yes | The text of the user message |
+| `session_id` | string | yes | The target session |
+| `primary_selection` | string | no | A deployment key. The server uses it only to set up a new session. For an existing session, the stored selection wins. |
+| `seshat_effort` | `fast`, `standard` or `deep` | no | The effort level of the turn |
+| `client_msg_id` | string | no | A client-generated message identifier |
+| `attachments` | JSON string | no | The attachments of the message |
 
 **Response** (200):
 ```json
-{"session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx", "status": "streaming"}
+{
+  "session_id": "<id>",
+  "status": "streaming",
+  "primary_selection": "<deployment key>",
+  "selection_provenance": "<how the selection was chosen>",
+  "seshat_effort": "<level>",
+  "effort_provenance": "<how the level was chosen>"
+}
 ```
 
-**Errors**:
-- `422` — `session_id` is not a valid UUID v4
+**Behavior**: The call returns at once. The full pipeline (gateway, orchestrator, model) runs in a background task. Each event is stored in Postgres and then pushed to the WebSocket.
 
-**Behavior**: Returns immediately. The full pipeline (gateway → orchestrator → LLM) runs in a background asyncio task. Events are pushed to the per-session SSE queue as they complete.
+**Errors**: A `503` response with `error: "budget_denied"` means that a budget cap stopped the turn.
+
+Source: `service/app.py`, function `chat_stream_endpoint`. `seshat-pwa/src/lib/agui-client.ts`, function `sendChatMessage`.
+
+There is no `profile` field. The system has no execution profiles.
 
 ---
 
-### `GET /stream/{session_id}`
+### `WS /ws/{session_id}`
 
-**Content-Type**: `text/event-stream`
+The handshake has these steps:
 
-Streams AG-UI events until:
-- A `DONE` event is sent (normal completion)
-- The client disconnects (detected via `request.is_disconnected()`)
+1. **Auth before accept.** If `gateway_auth_enabled` is on, the client must pass `?ticket=<ticket>`. The ticket is valid for this session only, and it works once. If auth is off, the server uses the owner identity.
+2. **Origin check.** The `Origin` header must be in `allowed_ws_origins`. A missing origin is accepted only when auth is off.
+3. **Ownership check.** The session must exist for the user.
+4. **Eviction.** One socket is active per session. A new connection closes the old one with code `4001` ("Superseded").
+5. **CONNECT.** The client must send a `CONNECT` message within 10 seconds. The server closes the socket with code `1008` if it does not.
 
-**Keepalive**: The server sends `: keepalive` SSE comments every 30 seconds when idle (prevents proxy timeout).
+Source: `ws_endpoint.py`, functions `_authenticate_ws`, `_validate_origin`, `ws_session` and `_receive_connect`.
 
-**Response format** (SSE):
-```
-data: {"type": "TEXT_DELTA", "data": {"text": "Hello"}, "session_id": "..."}
+**Close codes**
 
-data: {"type": "TOOL_CALL_START", "data": {"tool_name": "search"}, "session_id": "..."}
+| Code | Meaning |
+|------|---------|
+| `1001` | No inbound message within `ws_ping_timeout_seconds` (default 60 s) |
+| `1008` | Unauthorized, origin not allowed, session not found, CONNECT missing, message too large, or rate limit exceeded |
+| `4001` | Superseded by a newer connection for the same session |
+| `4002` | The turn closed (the turn deadline) |
 
-data: {"type": "DONE"}
-```
+**Limits** (defaults from `settings.py`): the maximum inbound message size is 8192 characters (`ws_max_message_size`). The inbound rate limit is 20 messages per second (`ws_rate_limit_per_second`). The server keeps events for 24 hours (`ws_event_ttl_hours`).
 
----
-
-### `POST /stream/{session_id}/resume`
-
-Used for Human-in-the-Loop (HITL) interrupts.
-
-**Content-Type**: `application/json`
-
-```json
-{"choice": "approve"}
-```
+Source: `ws_endpoint.py` (constants `WS_CLOSE_SUPERSEDED` and `WS_CLOSE_TURN_DEADLINE`, function `_receiver`), `settings.py` (fields `ws_ping_timeout_seconds`, `ws_max_message_size`, `ws_rate_limit_per_second`, `ws_event_ttl_hours`).
 
 ---
 
-## Event Types
+## Messages from the client
 
-All events follow the schema: `{"type": "<EVENT_TYPE>", "data": {...}, "session_id": "..."}`.
+Every message is a JSON text frame with a `type` field.
+
+| `type` | Fields | Purpose |
+|--------|--------|---------|
+| `CONNECT` | `last_seq` (integer, default 0), `attach` (boolean) | The first message. `last_seq` is the replay watermark. `attach: true` is for a page that holds nothing in memory. |
+| `PING` | none | Heartbeat. The server answers with `PONG`. |
+| `APPROVAL_DECISION` or `INTERRUPT_RESPONSE` | `request_id`, `decision` | The answer to a tool approval request. |
+| `CONSTRAINT_DECISION` | `request_id`, `decision`, `remember` (boolean) | The answer to a `CONSTRAINT_PAUSE`. An unknown `decision` is replaced by the default option. |
+| `USER_CANCEL` | none | Stops the running turn. |
+
+The server ignores a message with an unknown `type`.
+
+Source: `ws_endpoint.py`, functions `_receiver`, `_receive_connect`, `_resolve_waiter` and `_resolve_constraint_decision`.
+
+---
+
+## Messages from the server
+
+Event messages have this shape: `{"type": "<TYPE>", "data": {...}, "session_id": "...", "seq": <integer or null>}`. The field `seq` is the Postgres sequence number of the stored event. Control messages have `"seq": null`. Three types do not use the `data` envelope. See the notes in the table.
+
+| `type` | `data` | When |
+|--------|--------|------|
+| `TEXT_DELTA` | `{"text"}` | The text of the reply |
+| `TOOL_CALL_START` | `{"tool_name", "args"}` and an optional `tool_call_id` | A tool starts |
+| `TOOL_CALL_END` | `{"tool_name", "result"}` and an optional `tool_call_id` | A tool ends. `result` is a summary. |
+| `PHASE_START` | `{"phase", "phase_id", "started_at", "detail", "parent_id"}` | A phase of the turn starts |
+| `PHASE_END` | `{"phase", "phase_id", "parent_id", "ok", "ended_at"}` | A phase ends |
+| `STATE_DELTA` | `{"key", "value"}` | A state update, such as `turn_status` or `session_effort` |
+| `INTERRUPT` | `{"context", "options"}` | A human choice is needed |
+| `tool_approval_request` | none. The fields `request_id`, `trace_id`, `tool`, `args`, `risk_level`, `reason`, `expires_at`, `worker` and `session_option` are at the top level. | A tool needs approval. The type is lower case. |
+| `CONSTRAINT_PAUSE` | `{"constraint", "context", "options", "default_option", "expires_at"}`. The fields `request_id` and `trace_id` are at the top level. | The turn waits for a choice |
+| `CONSTRAINT_RESOLVED` | `{"constraint", "action_id", "resolution"}`. The field `request_id` is at the top level. | The choice was made |
+| `CANCELLED` | `{"reason"}` | The turn was cancelled |
+| `RUN_ERROR` | `{"category", "reason", "next_step", "actions", "partial"}` | The turn failed |
+| `DONE` | none. The field `trace_id` is at the top level. | The turn is complete |
+| `PONG` | none | The answer to `PING` |
+| `REPLAY_COMPLETE` | none. The fields `seq` and, after an attach, `last_seq` and `turn_in_flight` are at the top level. | The replay is complete |
+| `REPLAY_GAP` | none. The field `oldest_available_seq` is at the top level. | The server no longer holds events after the client watermark |
+
+The `phase` value is one of `PLANNING`, `SYNTHESIS`, `ARTIFACT_BUILD`, `EXPANSION`, `SUB_AGENT` or `WAITING_FOR_CHOICE`.
+
+Source: `src/personal_agent/transport/agui/adapter.py` (function `to_agui_event`), `src/personal_agent/transport/events.py` (class `Phase`), `ws_endpoint.py` (functions `_sender` and `_send_attach_replay`), `src/personal_agent/transport/agui/transport.py` (function `emit_done`).
 
 ### `TEXT_DELTA`
-
-A chunk of text from the LLM. The client concatenates chunks to build the full response.
 
 ```json
 {
   "type": "TEXT_DELTA",
   "data": {"text": "Hello! How can I help you today?"},
-  "session_id": "..."
+  "session_id": "...",
+  "seq": 2
 }
 ```
 
-**Current behavior**: The full response arrives as a single `TEXT_DELTA` event (non-streaming orchestrator). Future improvement: token-level streaming from LiteLLM.
+**Current behavior**: The reply arrives whole in one `TEXT_DELTA` event. The server does not stream tokens to the client. Source: `service/app.py`, function `_process_chat_stream_background` (the comment "the reply goes out whole").
 
-### `TOOL_CALL_START`
-
-A tool has started executing.
+### `TOOL_CALL_START` and `TOOL_CALL_END`
 
 ```json
-{
-  "type": "TOOL_CALL_START",
-  "data": {"tool_name": "search_memory", "args": {"query": "..."}},
-  "session_id": "..."
-}
-```
-
-### `TOOL_CALL_END`
-
-A tool finished executing.
-
-```json
-{
-  "type": "TOOL_CALL_END",
-  "data": {"tool_name": "search_memory", "result": "Found 3 relevant memories"},
-  "session_id": "..."
-}
+{"type": "TOOL_CALL_START", "data": {"tool_name": "search_memory", "args": {"query": "..."}}, "session_id": "...", "seq": 3}
+{"type": "TOOL_CALL_END", "data": {"tool_name": "search_memory", "result": "Found 3 relevant memories"}, "session_id": "...", "seq": 4}
 ```
 
 ### `STATE_DELTA`
 
-Agent state update (e.g., context window usage).
-
 ```json
-{
-  "type": "STATE_DELTA",
-  "data": {"key": "context_window", "value": 0.43},
-  "session_id": "..."
-}
+{"type": "STATE_DELTA", "data": {"key": "session_effort", "value": {"seshat_effort": "standard", "effort_provenance": "..."}}, "session_id": "...", "seq": null}
 ```
 
-`context_window` is a float 0.0–1.0 representing percentage used.
-
-### `INTERRUPT`
-
-Human approval required before proceeding.
-
-```json
-{
-  "type": "INTERRUPT",
-  "data": {
-    "context": "The agent wants to delete 3 files. Approve?",
-    "options": ["approve", "reject"]
-  },
-  "session_id": "..."
-}
-```
-
-After receiving an `INTERRUPT`, the client calls `POST /stream/{session_id}/resume` with the chosen option.
+The keys that the server sends include `turn_status` and `session_effort`. After an attach, the server sends both with `"seq": null`.
 
 ### `DONE`
 
-Stream complete. The `EventSource` should be closed.
-
 ```json
-{"type": "DONE"}
+{"type": "DONE", "trace_id": "..."}
 ```
+
+The turn is complete. The live `DONE` message has `"seq": null`. The stored `DONE` event has a `seq`, and a replay sends it with that `seq`. After the live `DONE`, the server closes the socket. The client must reconnect for the next turn. Source: `ws_endpoint.py`, functions `_sender` and `ws_session` (the `finally` block); `seshat-pwa/src/lib/agui-client.ts`, handler `ws.onclose`.
+
+---
+
+## Reconnect and replay
+
+The server stores every event in the Postgres table `session_events` before it pushes the event. The client keeps the highest contiguous `seq` that it handled (`last_seq`).
+
+- **Reconnect.** The client sends `CONNECT` with `last_seq`. If `last_seq` is greater than 0, the server replays all stored events after it, and then sends `REPLAY_COMPLETE`.
+- **Gap.** If the server swept events after `last_seq`, it sends `REPLAY_GAP` with `oldest_available_seq` before the replay. The client must then fetch the session history again.
+- **Attach.** A page that holds nothing in memory (load, reload, session switch) sends `CONNECT` with `attach: true`. The server sends the `turn_status` snapshot, the `session_effort` state, the events of the turn that is in flight, and `REPLAY_COMPLETE` with `last_seq` and `turn_in_flight`.
+- **Keepalive.** The client sends `PING` every 25 seconds. The server closes a socket that is silent for `ws_ping_timeout_seconds`.
+
+Source: `ws_endpoint.py` (functions `_sender` and `_send_attach_replay`), `src/personal_agent/transport/agui/event_buffer.py` (class `SessionEventBuffer`), `seshat-pwa/src/lib/agui-client.ts` (function `connectWebSocket`).
 
 ---
 
 ## Internal Event Types
 
-Backend event types (Python, in `transport/events.py`):
+The backend defines 12 event classes in `src/personal_agent/transport/events.py`. Each class is a frozen dataclass.
 
-```python
-@dataclass(frozen=True)
-class TextDeltaEvent:
-    text: str
-    session_id: str
+| Class | Wire `type` |
+|-------|-------------|
+| `TextDeltaEvent` | `TEXT_DELTA` |
+| `ToolStartEvent` | `TOOL_CALL_START` |
+| `ToolEndEvent` | `TOOL_CALL_END` |
+| `PhaseStartEvent` | `PHASE_START` |
+| `PhaseEndEvent` | `PHASE_END` |
+| `StateUpdateEvent` | `STATE_DELTA` |
+| `InterruptEvent` | `INTERRUPT` |
+| `ToolApprovalRequestEvent` | `tool_approval_request` |
+| `ConstraintPauseEvent` | `CONSTRAINT_PAUSE` |
+| `ConstraintResolvedEvent` | `CONSTRAINT_RESOLVED` |
+| `CancelledEvent` | `CANCELLED` |
+| `ClassifiedErrorEvent` | `RUN_ERROR` |
 
-@dataclass(frozen=True)
-class ToolStartEvent:
-    tool_name: str
-    args: Mapping[str, Any]
-    session_id: str
-
-@dataclass(frozen=True)
-class ToolEndEvent:
-    tool_name: str
-    result_summary: str
-    session_id: str
-
-@dataclass(frozen=True)
-class StateUpdateEvent:
-    key: str
-    value: Any
-    session_id: str
-
-@dataclass(frozen=True)
-class InterruptEvent:
-    context: str
-    options: Sequence[str]
-    session_id: str
-```
-
-The `transport/agui/adapter.py` converts these to wire-format JSON. The `transport/agui/endpoint.py` manages per-session queues.
+The function `to_agui_event` in `transport/agui/adapter.py` converts an event to the wire envelope and adds `seq`. The module `transport/agui/transport.py` holds the `emit_*` functions that persist and push the events.
 
 ---
 
 ## Session Queue Lifecycle
 
-```python
-# Create or get queue (idempotent)
-queue = get_event_queue(session_id)  # asyncio.Queue[InternalEvent | None]
+Each session has one in-memory queue and one connection.
 
-# Producer (background task) pushes events
-await queue.put(TextDeltaEvent(text="Hello", session_id=sid))
-await queue.put(None)  # None sentinel → DONE
+1. A producer calls `_persist_and_enqueue`. The function stores the event in Postgres, and then puts it on the session queue. The order of the commits is the order of the queue.
+2. The sender task of the connection drains the queue and sends each item to the socket.
+3. `emit_done` stores the `DONE` event and puts a sentinel on the queue. The sender turns the sentinel into the `DONE` message.
+4. The queue is in memory only. After a gateway restart, the client reconnects and replays from Postgres.
 
-# Consumer (SSE endpoint) drains queue
-event = await asyncio.wait_for(queue.get(), timeout=30.0)
-if event is None:
-    yield 'data: {"type": "DONE"}\n\n'
-    break
-yield f"data: {serialize_event(event)}\n\n"
-
-# Cleanup on stream close
-cleanup_session(session_id)
-```
+Source: `transport/agui/transport.py` (functions `_persist_and_enqueue`, `_push_event` and `emit_done`), `ws_endpoint.py` (function `_sender`, constant `DONE_SENTINEL_TYPE`).
 
 ---
 
@@ -242,15 +271,16 @@ From `seshat-pwa/src/lib/agui-client.ts`:
 ```typescript
 await sendChatMessage({
   message: "Hello Seshat",
-  sessionId: generateUUID(),  // use uuid.ts polyfill for Safari compat
-  profile: "cloud",           // or "local"
+  sessionId: generateUUID(),  // use the uuid.ts polyfill for Safari compatibility
+  primarySelection: "<deployment key>",  // optional; sets up a new session
+  seshatEffort: "standard",              // optional: "fast", "standard" or "deep"
 });
 ```
 
-### Connecting to the SSE stream
+### Connecting to the WebSocket
 
 ```typescript
-const conn = connectToStream(
+const conn = connectWebSocket(
   sessionId,
   (event: AGUIEvent) => {
     switch (event.type) {
@@ -265,28 +295,24 @@ const conn = connectToStream(
         hideToolSpinner(event.data.tool_name);
         break;
       case "STATE_DELTA":
-        if (event.data.key === "context_window") {
-          updateContextMeter(event.data.value);
-        }
-        break;
-      case "INTERRUPT":
-        showApprovalDialog(event.data.context, event.data.options);
+        applyState(event.data.key, event.data.value);
         break;
       case "DONE":
-        conn.close();
+        finishTurn();  // the server closes the socket; the client reconnects
         break;
     }
   },
-  (error) => conn.close(),
+  (error) => reportError(error),
 );
 ```
 
+The function `connectWebSocket` mints a fresh ticket for each connection attempt. It sends `CONNECT` with the stored `last_seq`, sends `PING` every 25 seconds, and reconnects with exponential backoff and jitter (1 s to 30 s). It stores `last_seq` in `localStorage`. The function returns an object with `close()` and `send()`.
+
 ### UUID generation (Safari polyfill)
 
-Safari on plain HTTP (private IP) rejects `crypto.randomUUID()`. Use:
+Safari on plain HTTP (private IP) rejects `crypto.randomUUID()`. Use the helper in `seshat-pwa/src/lib/uuid.ts`:
 
 ```typescript
-// seshat-pwa/src/lib/uuid.ts
 export function generateUUID(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     try { return crypto.randomUUID(); } catch {}
@@ -302,60 +328,55 @@ export function generateUUID(): string {
 
 ## Background Task Pipeline
 
-`_process_chat_stream_background` in `service/app.py`:
+`_process_chat_stream_background` in `service/app.py` runs as a background task:
 
 ```
-set_current_profile(load_profile(profile_name))
-  │
-  ▼
-get_or_create_session(session_uuid)
-  │
-  ▼
-hydrate_messages(prior_messages)
-  │
-  ▼
-append_user_message(db)
+resolve the session selection and effort
   │
   ▼
 run_gateway_pipeline(...)     ← intent, decomposition, memory context
   │
   ▼
-orchestrator.handle_user_request(...)   ← LLM calls via profile-aware factory
+orchestrator.handle_user_request(...)   ← model calls through LiteLLMClient
   │
   ▼
-queue.put(TextDeltaEvent(text=reply))
+_push_event(TextDeltaEvent(text=reply))   ← the whole reply, stored in Postgres, then queued
   │
   ▼
-queue.put(None)               ← always sent, even on error
+append the assistant message to the session
   │
   ▼
-append_assistant_message(db)
+emit_done(session_id, trace_id)           ← in a finally block, also on error
 ```
 
-The `None` sentinel is guaranteed in a `finally` block so the SSE client always closes cleanly.
+The `finally` block sends `DONE`, so the client always sees the end of the turn.
+
+Source: `service/app.py`, function `_process_chat_stream_background` (calls at `run_gateway_pipeline`, `orchestrator.handle_user_request`, `_push_event` and `emit_done`).
 
 ---
 
 ## Caddy Routing
 
-The Caddyfile (`config/cloud-sim/Caddyfile`) must list `/chat/stream` explicitly:
+The Caddyfile (`config/cloud-sim/Caddyfile`) must list the gateway paths explicitly:
 
 ```caddyfile
-@backend path /api/* /chat /chat/stream /stream/* /docs /docs/* /openapi.json /redoc
+@backend path /api/* /chat /chat/stream /ws/* /docs /docs/* /openapi.json /redoc
 handle @backend {
     reverse_proxy seshat-gateway:9001
 }
 ```
 
-`path` does exact matching for paths without wildcards. `/chat` does not match `/chat/stream`.
+A `path` matcher compares exactly when the path has no wildcard. `/chat` does not match `/chat/stream`. `/ws/*` carries the WebSocket upgrade.
+
+Source: `config/cloud-sim/Caddyfile` (the `routing` snippet).
 
 ---
 
 ## Known Limitations
 
-| Limitation | Status | Planned fix |
-|------------|--------|-------------|
-| Full response arrives as single TEXT_DELTA (no streaming) | Current | Wire LiteLLM async streaming to push tokens as they arrive |
-| SSE queue not persisted across gateway restarts | Current | Reconnect after restart; queue is in-memory |
-| No authentication on `/stream/{session_id}` | Current | Anyone who knows the UUID can read the stream |
-| HITL resume not wired to orchestrator | Partial | `InterruptEvent` defined but orchestrator resume path incomplete |
+| Limitation | Status |
+|------------|--------|
+| The whole reply arrives in one `TEXT_DELTA`. The server does not stream tokens to the client. | Current. Source: `service/app.py`. |
+| The session queue is in memory. A gateway restart loses queued items. | The client replays from Postgres with `last_seq`. The server keeps events for 24 hours. |
+| One active socket per session. | A second connection evicts the first with code `4001`. |
+| The server closes the socket after each `DONE`. | The client reconnects for the next turn. |

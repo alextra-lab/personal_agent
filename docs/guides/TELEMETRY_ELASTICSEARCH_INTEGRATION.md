@@ -19,7 +19,7 @@ structlog (application logs)
     ↓
 ElasticsearchHandler (async)
     ↓
-Elasticsearch (daily indices: agent-logs-YYYY.MM.DD)
+Elasticsearch (monthly indices: agent-logs-YYYY-MM)
     ↓
 Grafana (visualization & search)
 ```
@@ -77,7 +77,7 @@ log.info(SYSTEM_METRICS_SNAPSHOT, cpu_percent=45.2, memory_percent=62.5)
 
 ### Querying via Grafana
 
-1. Open Grafana: http://localhost:3000
+1. Open Grafana: http://localhost:3000 (local compose file; the cloud stack publishes Grafana on host port 3003, and port 3000 is the PWA)
 2. Go to Explore, select the es-agent-logs datasource (`agent-logs-*`)
 3. Search by:
    - Event type: `event_type: "task_started"`
@@ -163,23 +163,29 @@ Elasticsearch integration is enabled by default when the service starts. To disa
 
 ### Index Configuration
 
-Indices are named per family and partitioned by date; see below — **do not assume a single
-fixed partition per family**, this is a live migration in progress (FRE-1036).
+Indices are named per family and partitioned by month: `<family>-YYYY-MM`. FRE-1036 moved every
+family from daily indices to monthly indices. Each family has an ILM policy that deletes by
+`min_age` (no rollover). Indices from before the migration can still exist with the daily shape
+(`<family>-YYYY.MM.DD`) until their own deletion. Check what is live before you rely on a shape.
 
 Index templates and per-family ILM policies: `docker/elasticsearch/`, registered by
 `scripts/setup-elasticsearch.sh`.
 
-#### Partition, per family — migration in progress (FRE-1036), verified 2026-07-31
+#### Retention, per ILM policy
 
-FRE-1036 is consolidating every family from daily indices onto monthly indices
-(`<family>-YYYY-MM`, dash), each with a `min_age`-delete ILM policy (32d warm, no rollover). This
-is a family-by-family, in-progress migration, not a single cutover — verified live on
-2026-07-31 that `agent-logs`, `agent-insights`, `agent-monitors-slm-health`, and
-`agent-captains-captures` each currently have **both** daily-shaped and monthly-shaped indices
-live at once, while `agent-monitors-joinability` had already finished migrating within the same
-hour of that check. Do not rely on a table asserting "daily" or "monthly" per family — it will be
-stale again as soon as the next family migrates. Instead, check what's actually live before
-relying on a shape:
+The `delete` phase `min_age` of each policy file in `docker/elasticsearch/`:
+
+| Delete after | Policy files |
+|---|---|
+| 30 days | `slm-requests-ilm-policy.json` |
+| 123 days | `ilm-policy.json` (`agent-logs`), `captains-captures-ilm-policy.json`, `captains-funnel-events-ilm-policy.json`, `caddy-access-ilm-policy.json`, `topology-ilm-policy.json`, `monitors-cache-erosion-ilm-policy.json`, `monitors-cache-reset-cadence-ilm-policy.json`, `monitors-delivery-ratio-ilm-policy.json`, `monitors-projector-health-ilm-policy.json`, `monitors-slm-health-ilm-policy.json` |
+| 180 days | `captains-reflections-ilm-policy.json`, `monitors-joinability-ilm-policy.json` |
+| 365 days | `insights-ilm-policy.json`, `user-turn-ratings-ilm-policy.json` |
+
+A monthly index keeps the current month and 3 full months. The longest run is 123 days, so the
+policy deletes after 123 days. Source: the `_meta.description` of `docker/elasticsearch/ilm-policy.json`.
+
+To check which shape a family has now:
 
 ```bash
 curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
@@ -190,8 +196,7 @@ curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
 The script moved into the skill folder in FRE-1578, so that it ships in the gateway image. See
 the [log-search skill](../../skills/log-search/SKILL.md#index-families)
 for the recipe (tested classifier, guard against sibling-family name collisions) and FRE-1036's own plan
-(`docs/superpowers/plans/2026-07-31-fre-1036-es-ilm-monthly-rollover.md`) for the target design and
-per-family retention windows.
+(`docs/superpowers/plans/2026-07-31-fre-1036-es-ilm-monthly-rollover.md`) for the target design.
 
 ## Benefits
 
@@ -233,7 +238,7 @@ per-family retention windows.
    curl http://localhost:9200/agent-logs-*/_search?size=10 | jq
    ```
 
-4. Check Grafana: http://localhost:3000
+4. Check Grafana: http://localhost:3000 (local compose file; port 3003 on the cloud stack)
 
 ### Verify Metrics Are Being Sent
 
@@ -280,7 +285,7 @@ The ES handler uses async logging (non-blocking), so it should not impact reques
 
 ### Storage Growth
 
-Daily indices with 30-day retention (configurable in ILM policy).
+Monthly indices. The retention is set by the ILM policy of each family: 123 days for `agent-logs`, and 30 to 365 days across the other families (see "Retention, per ILM policy").
 
 Monitor storage:
 ```bash

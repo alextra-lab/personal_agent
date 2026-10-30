@@ -4,6 +4,7 @@
 > **Backing ADR:** [ADR-0099 — Configuration Management & Validation](../architecture_decisions/ADR-0099-configuration-management-and-validation.md) (single-source role matrix · profile-divergence policy · cross-config validator).
 > **Generated:** 2026-07-03 · **Status:** point-in-time audit of `origin/main` @ FRE-648.
 > **Reproduce / verify:** `uv run python scripts/audit/config_inventory.py verify` (asserts this doc covers every `AppConfig` field + documented `AGENT_*` key). Regenerate the AppConfig section with `… generate`.
+> **Currency (FRE-1712, 2026-10-30):** Only §1 is current. The generator rebuilds it from `AppConfig`, and `verify` checks it. §0, §2 to §8 and §9 are the 2026-07-03 audit. They are not the present state. After 2026-07-03, the extra model YAML files and `config/profiles/*` were deleted, the embedder and reranker models changed, and `AppConfig` grew from 277 to 338 fields. The wrong statements are listed as rows D9 to D19 in [the FRE-1703 documentation audit](../research/2026-10-29-fre-1703-documentation-audit.md).
 
 This is the canonical configuration inventory that seeds ADR-0099's role matrix (C1/C2) and the cross-config guard (C1/D4). It has one **machine-generated** section (§1 `AppConfig`, produced by `scripts/audit/config_inventory.py`) and hand-curated sections for the surfaces that require judgment (role matrix, model-definition drift, profiles, governance, compose, secrets, findings).
 

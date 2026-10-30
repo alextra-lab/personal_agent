@@ -29,22 +29,17 @@ All project documentation, organized by purpose.
 - [Validation Checklist](reference/VALIDATION_CHECKLIST.md)
 - [Project Directory Structure](reference/PROJECT_DIRECTORY_STRUCTURE.md)
 - [Root Level Policy](reference/ROOT_LEVEL_POLICY.md)
-- [Agent MD Strategy](reference/AGENT_MD_STRATEGY.md)
 - [Data Lifecycle](reference/DATA_LIFECYCLE.md)
 - [Dependency Security](reference/DEPENDENCY_SECURITY.md)
-- [Entity Extraction Models](reference/ENTITY_EXTRACTION_MODELS.md)
 
 ## Guides
 
 - [Usage Guide](guides/USAGE_GUIDE.md)
 - [Configuration](guides/CONFIGURATION.md)
-- [SLM Server Integration](guides/SLM_SERVER_INTEGRATION.md)
 - [GPU Metrics Setup](guides/GPU_METRICS_SETUP.md)
 - [GPU Metrics Security](guides/GPU_METRICS_SECURITY.md)
 - [macmon GPU Metrics](guides/MACMON_GPU_METRICS.md)
-- [Metrics Storage Guide](guides/METRICS_STORAGE_GUIDE.md)
 - [Telemetry ES Integration](guides/TELEMETRY_ELASTICSEARCH_INTEGRATION.md)
-- [Implementation Quick Reference](guides/IMPLEMENTATION_QUICK_REFERENCE.md)
 - [MCP Integration Quick Start](guides/MCP_INTEGRATION_QUICK_START.md)
 
 ## Specs

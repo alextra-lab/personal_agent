@@ -202,7 +202,7 @@ In `docs/architecture_decisions/EXPERIMENTS_ROADMAP.md`: Update to reflect Redes
 
 - [ ] **Step 5: Fix guides**
 
-In `docs/guides/SLM_SERVER_INTEGRATION.md`: Update architecture diagram from multi-tier router to single-brain + gateway model.
+In `docs/archive/SLM_SERVER_INTEGRATION.md`: Update architecture diagram from multi-tier router to single-brain + gateway model.
 
 In `docs/guides/MCP_INTEGRATION_QUICK_START.md`: Rewrite from migration-log style to actual quick start format. Focus on "how to use MCP tools today" not "how we migrated to MCP."
 
@@ -298,7 +298,7 @@ How-to and setup guides for operators and developers.
 
 ## Setup
 - `CONFIGURATION.md` — Environment and settings
-- `SLM_SERVER_INTEGRATION.md` — Local model server setup
+- `archive/SLM_SERVER_INTEGRATION.md` — Local model server setup
 
 ## Operations
 - `USAGE_GUIDE.md` — Running the agent
@@ -308,7 +308,7 @@ How-to and setup guides for operators and developers.
 - `TELEMETRY_ELASTICSEARCH_INTEGRATION.md` — ES setup and queries
 
 ## Evaluation
-- `EVALUATION_PHASE_GUIDE.md` — How to run evaluations
+- `archive/EVALUATION_PHASE_GUIDE.md` — How to run evaluations
 ```
 
 - [ ] **Step 4: Verify VISION_DOC reading order**

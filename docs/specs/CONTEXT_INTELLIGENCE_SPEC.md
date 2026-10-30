@@ -130,7 +130,6 @@ Move superseded content to `docs/archive/` with consolidation:
 | `docs/architecture_decisions/GOVERNANCE_MODEL.md` | Empty file (0 bytes) | Populate or delete |
 | `docs/architecture_decisions/HYPOTHESIS_LOG.md` | References Planner+Critic | Update for Redesign v2 |
 | `docs/architecture_decisions/TECHNICAL_DEBT.md` | References old infra | Refresh for current state |
-| `docs/guides/SLM_SERVER_INTEGRATION.md` | Diagram shows multi-tier router | Update for single-brain + gateway |
 | `docs/guides/MCP_INTEGRATION_QUICK_START.md` | Reads like migration log | Rewrite as actual quick start |
 | `docs/reference/PROJECT_DIRECTORY_STRUCTURE.md` | Last updated Dec 2025 | Regenerate from current tree |
 | `docs/reference/CODING_CONVENTIONS.md` | Overlaps CODING_STANDARDS.md | Merge into CODING_STANDARDS, archive original |

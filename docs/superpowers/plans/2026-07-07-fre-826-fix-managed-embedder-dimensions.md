@@ -198,7 +198,7 @@ pre-commit run --all-files
   triggered anymore (1024 → 1024 is a no-op for `ensure_vector_index()`),
   but the one-time corpus re-embed is still required (different model
   weights produce different vector *values* at the same width).
-- `docs/runbooks/embedder-managed-adoption.md`: step 4 — remove
+- `docs/archive/embedder-managed-adoption.md`: step 4 — remove
   `AGENT_EMBEDDING_DIMENSIONS=4096`; note the dimension is already correct
   at the default and does not need to be set. Remove the now-false "will
   drop/recreate `entity_embedding` at the new width" claim. Rollback section:

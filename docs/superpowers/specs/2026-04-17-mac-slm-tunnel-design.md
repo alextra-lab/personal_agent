@@ -230,7 +230,7 @@ All unit tests use mocked httpx — no real tunnel needed in CI. Manual E2E is t
 ## References
 
 - Existing VPS tunnel: `infrastructure/terraform-cloudflare/`
-- SLM Server integration: `docs/guides/SLM_SERVER_INTEGRATION.md`
+- SLM Server integration: `docs/archive/SLM_SERVER_INTEGRATION.md`
 - Profile config: `config/profiles/local.yaml`
 - Cloud model config: `config/models.cloud.yaml`
 - slm_server health endpoint: `http://localhost:8000/health`

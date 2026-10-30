@@ -3,8 +3,8 @@
 Part of the artifact builder's source documents (`docs/reference/artifact-builder/`; it is not an agent skill). Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
 
 ```html
-<link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">
-<script src="https://artifacts.example.com/lib/katex@0.16.47/katex.min.js"></script>
+<link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.18.2/katex.min.css">
+<script src="https://artifacts.example.com/lib/katex@0.18.2/katex.min.js"></script>
 ```
 
 ```html

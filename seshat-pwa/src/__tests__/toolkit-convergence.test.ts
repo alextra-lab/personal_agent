@@ -23,8 +23,14 @@ const pkg = JSON.parse(
 const all = { ...pkg.dependencies, ...pkg.devDependencies };
 
 describe('toolkit convergence — versions aligned to the artifact /lib/ pins', () => {
-  it('pins katex to the toolkit version (0.16.47)', () => {
-    expect(pkg.dependencies.katex).toBe('0.16.47');
+  it('pins katex to the toolkit version (0.18.2)', () => {
+    expect(pkg.dependencies.katex).toBe('0.18.2');
+  });
+
+  // mermaid, rehype-katex and micromark-extension-math declare katex ranges that
+  // exclude the toolkit pin, so without an override npm nests a second copy.
+  it('forces every transitive katex to the toolkit version', () => {
+    expect(pkg.overrides?.katex).toBe(pkg.dependencies.katex);
   });
 
   it('pins highlight.js to the toolkit version (11.9.0)', () => {

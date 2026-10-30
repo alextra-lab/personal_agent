@@ -1,6 +1,6 @@
 # Seshat Cloud Deployment Guide
 
-> **Last updated**: 2026-08-18 (FRE-1244 — retired the private-network IP route)  
+> **Last updated**: 2026-10-30 (FRE-1709 — corrected the services, Caddy, Terraform and model-selection sections)  
 > **Target**: your VPS  
 > **Access**: Cloudflare Tunnel hostname ingress (`{$AGENT_HOST}`) — no container is addressed by IP
 
@@ -19,7 +19,7 @@ This guide covers the complete Seshat cloud stack: infrastructure provisioning, 
 7. [Cloudflare Tunnel Access](#7-cloudflare-tunnel-access)
 8. [Environment Variables](#8-environment-variables)
 9. [Model Configuration](#9-model-configuration)
-10. [Execution Profiles](#10-execution-profiles)
+10. [Model Selection](#10-model-selection)
 11. [Deployment Workflow](#11-deployment-workflow)
 12. [Troubleshooting](#12-troubleshooting)
 
@@ -34,7 +34,7 @@ Phone / Mac / browser (WARP enrolled or not — both reach the same hostname)
     ▼
 Caddy (Docker, no fixed address — reached by hostname, not IP)
     │
-    ├─ /api/*  /chat  /chat/stream  /stream/*
+    ├─ /api/*  /chat  /chat/stream  /ws/*
     │     └─→  seshat-gateway:9001   (FastAPI — full service/app.py)
     │
     └─ /*
@@ -49,7 +49,7 @@ seshat-gateway dependencies (all on cloud-sim bridge network):
 seshat-gateway external dependencies (managed endpoints):
   OVH AI Endpoints     (Qwen3-Embedding-8B — semantic search)
   Voyage AI            (rerank-2.5 — ranked retrieval)
-  Anthropic/OpenAI     (Claude Sonnet/Haiku — cloud profiles)
+  Anthropic/OpenAI     (cloud models bound in config/model_roles.yaml)
 
 Network: cloud-sim bridge, subnet 172.25.0.0/16 (address space only — no service is pinned to a
 fixed address within it; see FRE-1244)
@@ -79,7 +79,7 @@ Cloudflare: cloudflared tunnel (HTTP/2), public hostname ingress
 
 ### VPS (first time)
 
-- Debian 12 (Bookworm)
+- Debian 13 (trixie)
 - Docker Engine + Docker Compose v2 (`apt install docker-compose-plugin`)
 - `uv` not required on VPS (installed inside containers)
 - `/opt/seshat/` deployment directory
@@ -110,8 +110,15 @@ AGENT_ANTHROPIC_API_KEY=sk-ant-...
 AGENT_OPENAI_API_KEY=sk-...
 POSTGRES_PASSWORD=<strong-password>
 NEO4J_PASSWORD=<strong-password>
+SESHAT_APP_PASSWORD=<strong-password>
+GRAFANA_ADMIN_PASSWORD=<strong-password>
+GRAFANA_RO_PASSWORD=<strong-password>
+GRAFANA_CF_ACCESS_AUD=<cloudflare-access-audience-tag>
+CF_ACCESS_TEAM_DOMAIN=<cloudflare-access-team-domain>
 CLOUDFLARE_TUNNEL_TOKEN=<token-from-cloudflare>
 ```
+
+Compose refuses to load `docker-compose.cloud.yml` when any of these seven names is unset or empty: `POSTGRES_PASSWORD`, `NEO4J_PASSWORD`, `SESHAT_APP_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_RO_PASSWORD`, `GRAFANA_CF_ACCESS_AUD` and `CF_ACCESS_TEAM_DOMAIN`.
 
 ### 3.3 Harden the server
 
@@ -139,14 +146,7 @@ The OVH network-level firewall (stateless, applied before traffic reaches the OS
 
 ### Location
 
-```
-infrastructure/terraform/
-├── main.tf         # Firewall resource + rules
-├── providers.tf    # OVH provider, pinned to 1.8.0
-├── variables.tf    # vps_ip, ssh_port, OVH API credentials
-├── outputs.tf      # Firewall status + rule sequences
-└── terraform.tfvars.example  # Copy to terraform.tfvars
-```
+This repo holds no Terraform. The Terraform moved to a private companion repo on 2026-05-01, and the `infrastructure/terraform/` directory no longer exists here. The operator keeps the firewall code, the variable file and the apply procedure in that private repo.
 
 ### Rules (in order)
 
@@ -163,15 +163,7 @@ infrastructure/terraform/
 
 ### Applying the firewall
 
-```bash
-cd infrastructure/terraform
-cp terraform.tfvars.example terraform.tfvars
-# Fill in: ovh_application_key, ovh_application_secret, ovh_consumer_key, vps_ip, ssh_port
-
-terraform init
-terraform plan
-terraform apply
-```
+Run `terraform init`, `terraform plan` and `terraform apply` from the private repo. The variables are `ovh_application_key`, `ovh_application_secret`, `ovh_consumer_key`, `vps_ip` and `ssh_port`.
 
 ### Getting OVH API credentials
 
@@ -200,14 +192,19 @@ File: `docker-compose.cloud.yml`
 |---------|-------|-----------------|-----------|---------|
 | `postgres` | pgvector/pgvector:pg17 | 5432 | 512 MB | Sessions, history, metrics |
 | `neo4j` | neo4j:5.26-community | 7474/7687 | 1536 MB | Knowledge graph, memory |
-| `elasticsearch` | elasticsearch:8.19 | 9200 | 2048 MB | Logs, traces, telemetry |
+| `elasticsearch` | elasticsearch:8.19.0 | 9200 | 2048 MB | Logs, traces, telemetry |
+| `tempo` | grafana/tempo:2.10.7 | 3200 | 512 MB | Trace store |
+| `otel-collector` | otel/opentelemetry-collector:0.158.0 | 4317/4318 | 512 MB | Trace and metric intake |
+| `grafana` | grafana/grafana:13.1.3 | 3000 | 512 MB | Dashboards |
 | `redis` | redis:7-alpine | 6379 | 128 MB | Event bus (Redis Streams) |
-| `seshat-gateway` | seshat-seshat-gateway | 9001 | 768 MB | Full service app (FastAPI) |
-| `seshat-pwa` | seshat-seshat-pwa | 3000 | 256 MB | Next.js PWA |
+| `searxng` | searxng/searxng (pinned tag) | 8080 | 256 MB | Web search backend |
+| `seshat-gateway` | built from `Dockerfile.gateway` | 9001 | 2048 MB | Full service app (FastAPI) |
+| `seshat-pwa` | built from `Dockerfile.pwa` | 3000 | 256 MB | Next.js PWA |
 | `caddy` | caddy:2-alpine | 80/443 | 64 MB | Reverse proxy |
-| `cloudflared` | cloudflare/cloudflared | — | — | Cloudflare Tunnel |
+| `filebeat` | built from `Dockerfile.filebeat` | — | none set | Ships the Caddy access log |
+| `cloudflared` | cloudflare/cloudflared | — | none set | Cloudflare Tunnel |
 
-**Total RAM budget**: ~5.3 GB (comfortably within 24 GB)
+**Total RAM**: the `mem_limit` values add up to 8384 MB. `filebeat` and `cloudflared` set no limit.
 
 ### Network
 
@@ -258,7 +255,7 @@ Config path inside container: `/etc/caddy/Caddyfile` (bind-mounted read-only)
 ### Routing rules
 
 ```
-@backend path /api/* /chat /chat/stream /stream/* /docs /docs/* /openapi.json /redoc
+@backend path /api/* /chat /chat/stream /ws/* /docs /docs/* /openapi.json /redoc
 handle @backend {
     reverse_proxy seshat-gateway:9001
 }
@@ -271,7 +268,18 @@ handle {
 
 ### Site blocks
 
-- `localhost` — HTTPS with local self-signed cert (for SSH tunnel dev access)
+The Caddyfile has eight site blocks:
+
+- `localhost` — HTTPS with local self-signed cert (for SSH tunnel dev access). It has no tunnel filter.
+- `{$AGENT_HOST}:80` — Cloudflare Tunnel. Serves the PWA and the same-origin API. It sends `/ws/*` to the gateway.
+- `{$GRAPH_HOST}:80` — Cloudflare Tunnel. Serves the Neo4j Browser. A WebSocket upgrade goes to Bolt (`neo4j:7687`) and other requests go to `neo4j:7474`.
+- `{$ES_HOST}:80` — Cloudflare Tunnel. A write path for `slm-requests-*` indices and `_bulk`. The Caddyfile marks it as stale: nothing uses it now.
+- `{$OTLP_HOST}:80` — Cloudflare Tunnel. Accepts only `POST /v1/traces` and sends it to `otel-collector:4318`. The block checks the source address itself.
+- `{$API_HOST}:80` — Cloudflare Tunnel. Sends all paths to the gateway for external agent API access.
+- `:8600` — internal egress to the local model server through the tunnel. It adds the Cloudflare Access service token and allows only the inference paths and `/health`.
+- `:8601` — internal egress to the artifacts origin. It allows only a served artifact path and the `/lib/` shelf.
+
+Five blocks answer 403 unless the request comes from a container on the `cloud-sim` network. These are the four that import the `tunnel_only` snippet (`AGENT_HOST`, `GRAPH_HOST`, `ES_HOST`, `API_HOST`) and the `OTLP_HOST` block. The `tunnel_only` snippet also refuses the bridge gateway address, `172.25.0.1`. The two egress blocks serve plain HTTP. Compose publishes both on the host loopback address, so they are reachable from the `cloud-sim` network and from the VPS itself, and not from outside.
 
 ### Reloading Caddy config
 
@@ -347,9 +355,16 @@ The `.env` file lives at `/opt/seshat/.env` on the VPS (gitignored, never commit
 ```dotenv
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 POSTGRES_PASSWORD=<strong-random-password>
+SESHAT_APP_PASSWORD=<strong-random-password>   # restricted application role
 
 # ── Neo4j ─────────────────────────────────────────────────────────────────────
 NEO4J_PASSWORD=<strong-random-password>
+
+# ── Grafana (behind Cloudflare Access) ────────────────────────────────────────
+GRAFANA_ADMIN_PASSWORD=<strong-random-password>
+GRAFANA_RO_PASSWORD=<strong-random-password>   # read-only database role
+GRAFANA_CF_ACCESS_AUD=<cloudflare-access-audience-tag>
+CF_ACCESS_TEAM_DOMAIN=<cloudflare-access-team-domain>
 
 # ── Cloud LLM APIs ────────────────────────────────────────────────────────────
 AGENT_ANTHROPIC_API_KEY=sk-ant-api03-...
@@ -429,43 +444,27 @@ There is no local-Docker-container path for embedding or reranking (FRE-1166 ret
 
 ---
 
-## 10. Execution Profiles
+## 10. Model Selection
 
-Profiles live in `config/profiles/`. The active profile is set per-conversation in the PWA.
+The gateway has no execution profiles. FRE-920 removed them on 2026-07-20, together with `config/profiles/` and the profile pill in the PWA. One catalog and one role table now decide which model answers.
 
-### `config/profiles/cloud.yaml`
+### Where the choice is made
 
-```yaml
-name: cloud
-description: "Cloud inference via LiteLLM (Claude Sonnet + Haiku)"
-primary_model: claude_sonnet      # maps to models.yaml key
-sub_agent_model: claude_haiku
-provider_type: cloud
-cost_limit_per_session: 2.00
-delegation:
-  allow_cloud_escalation: true
-  escalation_provider: anthropic
-  escalation_model: claude_sonnet
-```
+- `config/models.yaml` lists the deployments: id, provider, endpoint and parameters.
+- `config/model_roles.yaml`, under `bindings:`, names the deployment for each role.
+- A user can select a role marked `open: true`. Any other role is pinned. Today the open roles are `primary`, `artifact_builder` and `sub_agent`.
+- The `sub_agent` binding is `inherit`. It follows the deployment that the session selected for `primary`.
 
-### Profile dispatch flow
+### How a user selects a model
 
-```
-PWA: POST /chat/stream  profile=cloud
-  → background task: load_profile("cloud") → set_current_profile(profile)
-    → orchestrator calls get_llm_client("primary")
-      → factory: profile.primary_model = "claude_sonnet"
-      → models["claude_sonnet"].provider_type = "cloud"
-      → return LiteLLMClient(model_id="claude-sonnet-4-6", provider="anthropic")
-        → litellm.acompletion(model="anthropic/claude-sonnet-4-6", api_key=...)
-```
+- The PWA `ModelPicker` component sets the selection. The gateway stores it per session in the `session_model_selections` table.
+- `GET /api/v1/sessions/{session_id}/config` returns the selection for a session. `GET /api/v1/config` returns it before the session exists.
+- `uv run agent chat "<message>" --model <deployment-key>` selects the primary deployment from the CLI.
+- The `/observe` page in the PWA shows the pinned or open state of each role, its bound deployment, and the providers.
 
-### Adding a new profile
+### Changing a binding
 
-1. Create `config/profiles/<name>.yaml` with the required fields
-2. Ensure referenced model keys exist in `config/models.yaml` (the single catalog)
-3. Add the profile ID to the PWA's profile selector in `StreamingChat.tsx`
-4. Rebuild PWA container on VPS
+The gateway image contains `config/`. A change to `config/models.yaml` or `config/model_roles.yaml` takes effect after the next gateway image rebuild (§11).
 
 ---
 
@@ -532,7 +531,6 @@ docker logs cloud-sim-seshat-gateway --tail 100 2>&1 | grep "error"
 
 Common causes:
 - **AuthenticationError**: LiteLLM can't find API key → check `AGENT_ANTHROPIC_API_KEY` in `.env`
-- **FileNotFoundError on profile**: `config/profiles/cloud.yaml` not found → check `config/` is in the Docker image
 - **DB connection error**: PostgreSQL not ready → `docker compose ps` to check health
 
 ### PWA shows crypto.randomUUID SecurityError (Safari)

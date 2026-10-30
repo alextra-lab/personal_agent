@@ -27,7 +27,6 @@ _CTX = TraceContext.new_trace()
 def _make_policy(**kwargs) -> ToolPolicy:
     """Build a minimal ToolPolicy for test patching."""
     defaults = {
-        "category": "system_write",
         "allowed_in_modes": ["NORMAL"],
         "allowed_paths": [],
         "forbidden_paths": [],

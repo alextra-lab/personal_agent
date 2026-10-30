@@ -48,7 +48,6 @@ When MCP Gateway discovers new tools, they're automatically added to
 # Auto-discovered: 2026-01-17T12:30:45
 # Search GitHub repositories
 mcp_github_search:
-  category: "mcp"
   allowed_in_modes: ["NORMAL", "DEGRADED"]
   risk_level: "low"
 ```

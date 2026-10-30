@@ -83,13 +83,11 @@ _HIDDEN_SUFFIXES: tuple[str, ...] = (
 #: A URL, an absolute path of two or more segments, a home or variable path, or a glob.
 _PATH_LEAF = re.compile(r"://|\*\*|^~|^\$|^(?:/[^/\s]+){2,}")
 
-#: Governance fields that hold paths or commands. The menu shows a count in their place.
+#: Governance fields that hold paths. The menu shows a count in their place.
 _COUNTED_TOOL_FIELDS: tuple[str, ...] = (
     "allowed_paths",
     "forbidden_paths",
     "unattended_paths",
-    "allowed_commands",
-    "forbidden_commands",
 )
 
 _TURN_RUNS_APPENDIX_GROUPS = frozenset(

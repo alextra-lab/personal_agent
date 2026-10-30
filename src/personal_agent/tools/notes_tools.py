@@ -157,7 +157,6 @@ notes_write_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=20,
-    rate_limit_per_hour=60,
     error_codes=error_codes(NotesWriteError),
 )
 
@@ -203,7 +202,6 @@ notes_search_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=10,
-    rate_limit_per_hour=200,
     error_codes=error_codes(NotesSearchError),
 )
 

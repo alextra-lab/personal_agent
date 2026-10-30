@@ -71,7 +71,6 @@ class ToolDefinition(BaseModel):
 
     # Execution metadata
     timeout_seconds: int = Field(30, ge=1, description="Execution timeout in seconds")
-    rate_limit_per_hour: int | None = Field(None, ge=0, description="Rate limit per hour")
 
     # Tool contract (ADR-0156 D6)
     error_codes: frozenset[str] = Field(

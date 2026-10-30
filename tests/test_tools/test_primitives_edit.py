@@ -120,7 +120,7 @@ async def test_a_path_outside_the_allowed_paths_is_refused_and_unchanged(tmp_pat
     """A path outside the edit row's allowed paths is refused before the read."""
     target = _file(tmp_path)
     policy = ToolPolicy(
-        category="system_write", allowed_in_modes=["NORMAL"], allowed_paths=["/nonexistent/**"]
+        allowed_in_modes=["NORMAL"], allowed_paths=["/nonexistent/**"]
     )
 
     with patch(
@@ -138,7 +138,7 @@ async def test_a_path_outside_the_allowed_paths_is_refused_and_unchanged(tmp_pat
 async def test_a_non_durable_app_path_is_refused() -> None:
     """A path under /app outside a mounted volume is refused, as for write."""
     policy = ToolPolicy(
-        category="system_write", allowed_in_modes=["NORMAL"], allowed_paths=["/app/**"]
+        allowed_in_modes=["NORMAL"], allowed_paths=["/app/**"]
     )
 
     with (

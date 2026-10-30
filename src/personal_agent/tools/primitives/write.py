@@ -88,7 +88,6 @@ write_tool = ToolDefinition(
     requires_approval=False,  # approval is via governance YAML + executor.py
     requires_sandbox=False,
     timeout_seconds=10,
-    rate_limit_per_hour=None,
     error_codes=error_codes(WriteError),
     max_result_tokens=1_000,
 )

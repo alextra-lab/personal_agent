@@ -590,7 +590,6 @@ fetch_url_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=30,
-    rate_limit_per_hour=100,
     error_codes=error_codes(FetchError),
     max_result_tokens=18_000,
     truncation_next_action="Call fetch_url again with a lower max_chars.",

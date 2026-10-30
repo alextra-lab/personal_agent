@@ -166,7 +166,6 @@ create_linear_issue_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=30,
-    rate_limit_per_hour=20,
     error_codes=error_codes(CreateLinearIssueError),
 )
 
@@ -215,7 +214,6 @@ find_linear_issues_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=15,
-    rate_limit_per_hour=100,
     error_codes=error_codes(FindLinearIssuesError),
 )
 
@@ -237,7 +235,6 @@ list_linear_projects_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=15,
-    rate_limit_per_hour=60,
     error_codes=error_codes(ListLinearProjectsError),
 )
 
@@ -276,7 +273,6 @@ create_linear_project_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=15,
-    rate_limit_per_hour=10,
     error_codes=error_codes(CreateLinearProjectError),
 )
 

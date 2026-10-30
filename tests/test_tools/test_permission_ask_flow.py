@@ -88,7 +88,7 @@ def _tool_def(name: str = "probe", *, params: tuple[str, ...] = ("x",)) -> ToolD
 
 def _governance(name: str = "probe") -> Any:
     config = copy.deepcopy(load_governance_config())
-    config.tools[name] = ToolPolicy(category="system_dangerous", allowed_in_modes=_ALL_MODES)
+    config.tools[name] = ToolPolicy(allowed_in_modes=_ALL_MODES)
     return config
 
 

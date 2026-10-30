@@ -119,7 +119,6 @@ class MCPGovernanceManager:
             allowed_modes = ["NORMAL", "ALERT", "DEGRADED"]
 
         return {
-            "category": "mcp",
             "allowed_in_modes": allowed_modes,
             "risk_level": inferred_risk_level,
             "_auto_discovered": datetime.now().isoformat(),
@@ -148,7 +147,6 @@ class MCPGovernanceManager:
 
             # Write tool entry
             f.write(f"  {tool_name}:\n")
-            f.write(f'    category: "{template["category"]}"\n')
             f.write(f"    allowed_in_modes: {template['allowed_in_modes']}\n")
             f.write(f'    risk_level: "{template["risk_level"]}"\n')
 

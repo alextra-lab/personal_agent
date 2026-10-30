@@ -110,7 +110,6 @@ run_python_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=True,
     timeout_seconds=_DEFAULT_TIMEOUT,
-    rate_limit_per_hour=60,
     error_codes=error_codes(RunPythonError),
     max_result_tokens=16_000,
     truncation_next_action=(

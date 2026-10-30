@@ -11,14 +11,6 @@ import re
 from collections.abc import Iterator
 
 import pytest
-from personal_agent.service.settings_menu import (
-    MenuInputs,
-    SessionInputs,
-    SettingRow,
-    SettingsMenu,
-    build_menu,
-    scrub,
-)
 
 from personal_agent.config import (
     load_governance_config,
@@ -34,6 +26,14 @@ from personal_agent.orchestrator.constraint_options import (
     default_action_id,
 )
 from personal_agent.service import settings_menu
+from personal_agent.service.settings_menu import (
+    MenuInputs,
+    SessionInputs,
+    SettingRow,
+    SettingsMenu,
+    build_menu,
+    scrub,
+)
 from personal_agent.service.settings_menu_groups import SETTING_GROUPS
 
 _SENTINEL = "SENTINEL-9f3c1e-do-not-leak"
@@ -396,13 +396,32 @@ def test_governance_paths_are_counts_not_values() -> None:
         (n, p) for n, p in governance.tools.items() if p.allowed_paths or p.forbidden_paths
     )
     patched_policy = policy.model_copy(
-        update={"allowed_paths": [f"/opt/{_SENTINEL}/**"], "forbidden_commands": [_SENTINEL]}
+        update={"allowed_paths": [f"/opt/{_SENTINEL}/**"], "forbidden_paths": [_SENTINEL]}
     )
     patched = governance.model_copy(update={"tools": {**governance.tools, name: patched_policy}})
     menu = build_menu(_inputs(governance=patched))
     row = _row(menu, "tools", f"tool.{name}")
     assert row.value["allowed_paths"] == 1  # type: ignore[index]
+    assert row.value["forbidden_paths"] == 1  # type: ignore[index]
     assert _SENTINEL not in menu.model_dump_json()
+
+
+def test_no_tool_row_shows_a_deleted_policy_field() -> None:
+    """FRE-1719: the five ToolPolicy fields that nothing read are gone from every tool row."""
+    deleted = {
+        "allowed_commands",
+        "forbidden_commands",
+        "requires_outbound_gateway",
+        "rate_limit_per_hour",
+        "category",
+    }
+    menu = build_menu(_inputs(governance=load_governance_config()))
+    tool_rows = [
+        r for g in menu.groups if g.id == "tools" for r in g.rows if r.name.startswith("tool.")
+    ]
+    assert tool_rows
+    for row in tool_rows:
+        assert deleted.isdisjoint(row.value), (row.name, deleted & set(row.value))  # type: ignore[arg-type]
 
 
 def test_a_loader_error_text_never_reaches_the_response(monkeypatch: pytest.MonkeyPatch) -> None:

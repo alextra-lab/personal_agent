@@ -92,7 +92,6 @@ def build_read_skill_tool() -> ToolDefinition:
         requires_approval=False,
         requires_sandbox=False,
         timeout_seconds=5,
-        rate_limit_per_hour=None,
         error_codes=error_codes(ReadSkillError),
     )
 

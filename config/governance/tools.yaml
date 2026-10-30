@@ -225,18 +225,14 @@ sub_agent_tools:
 tools:
   # Native web search via SearXNG (ADR-0034)
   web_search:
-    category: "network"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "low"
     timeout_seconds: 15
-    rate_limit_per_hour: 120
 
   get_location:
-    category: "network"
     allowed_in_modes: ["NORMAL", "ALERT"]
     risk_level: "low"
     timeout_seconds: 10
-    rate_limit_per_hour: 60
 
   # Native full-page fetch, finishing ADR-0028 Phase 3 for ADR-0138 D2 (FRE-1297).
   # Fetched page content is citable; the model-chosen url argument is not.
@@ -245,14 +241,11 @@ tools:
   # web_search's fixed SearXNG proxy (see the matching comment in tools/fetch.py,
   # PR #957 bounce).
   fetch_url:
-    category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "medium"
     timeout_seconds: 30
-    rate_limit_per_hour: 100
 
   write_file:
-    category: "system_write"
     allowed_in_modes: ["NORMAL"]
     forbidden_in_modes: ["LOCKDOWN"]
     allowed_paths:
@@ -267,21 +260,17 @@ tools:
 
   # FRE-343: personal time-window retrieval scoped to ctx.user_id
   recall_personal_history:
-    category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
     risk_level: "low"
     requires_sandbox: false
-    rate_limit_per_hour: null
     description: "FRE-343 — personal time-window retrieval scoped to ctx.user_id"
 
   # ADR-0156 D3 (FRE-1577): load a skill body, or one listed file of the skill folder
   read_skill:
-    category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
     risk_level: "low"
 
   read:
-    category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
     max_file_size_mb: 10  # applies to normal reads; bypassed when tail_lines is set (FRE-355)
     allowed_paths:
@@ -298,7 +287,6 @@ tools:
 
   # FRE-261 Step 3: primitive write tool (supersedes write_file)
   write:
-    category: "system_write"
     allowed_in_modes: &write_allowed_in_modes ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     forbidden_in_modes: &write_forbidden_in_modes ["LOCKDOWN"]
     unattended_paths: &write_unattended_paths
@@ -324,7 +312,6 @@ tools:
   # ADR-0156 D7.1 (FRE-1576): replace one exact string in one file. Its path governance is
   # write's: every list below is an alias of the write row, so the two cannot drift.
   edit:
-    category: "system_write"
     allowed_in_modes: *write_allowed_in_modes
     forbidden_in_modes: *write_forbidden_in_modes
     unattended_paths: *write_unattended_paths
@@ -336,7 +323,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.850323
   # Perform click on a web page
   mcp_browser_click:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -347,7 +333,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.852142
   # Close the page
   mcp_browser_close:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -359,7 +344,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.853955
   # Returns all console messages
   mcp_browser_console_messages:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: [NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -371,7 +355,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.855959
   # Perform drag and drop between two elements
   mcp_browser_drag:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -383,7 +366,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.858182
   # Evaluate JavaScript expression on page or element
   mcp_browser_evaluate:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -395,7 +377,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.860438
   # Upload one or multiple files
   mcp_browser_file_upload:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -407,7 +388,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.863494
   # Fill multiple form fields
   mcp_browser_fill_form:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -419,7 +399,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.866697
   # Handle a dialog
   mcp_browser_handle_dialog:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -431,7 +410,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.870358
   # Hover over element on page
   mcp_browser_hover:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -443,7 +421,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.874093
   # Install the browser specified in the config. Call this if you get an e...
   mcp_browser_install:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -455,7 +432,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.878079
   # Navigate to a URL
   mcp_browser_navigate:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -467,7 +443,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.882597
   # Go back to the previous page
   mcp_browser_navigate_back:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -479,7 +454,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.886969
   # Returns all network requests since loading the page
   mcp_browser_network_requests:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -491,7 +465,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.891341
   # Press a key on the keyboard
   mcp_browser_press_key:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -503,7 +476,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.895810
   # Resize the browser window
   mcp_browser_resize:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -515,7 +487,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.900310
   # Run Playwright code snippet
   mcp_browser_run_code:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -527,7 +498,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.904820
   # Select an option in a dropdown
   mcp_browser_select_option:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -539,7 +509,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.909325
   # Capture accessibility snapshot of the current page, this is better tha...
   mcp_browser_snapshot:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -551,7 +520,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.913909
   # List, create, close, or select a browser tab.
   mcp_browser_tabs:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -563,7 +531,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.918548
   # Take a screenshot of the current page. You can't perform actions based...
   mcp_browser_take_screenshot:
-    category: "mcp"
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
@@ -575,7 +542,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.923352
   # Type text into editable element
   mcp_browser_type:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
@@ -587,7 +553,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.928147
   # Wait for text to appear or disappear or a specified time to pass
   mcp_browser_wait_for:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
@@ -599,7 +564,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.933102
   # Create a JavaScript-enabled tool that combines multiple MCP server too...
   mcp_code-mode:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
@@ -610,11 +574,9 @@ tools:
 
   # FRE-261 Step 5: Python Docker sandbox executor
   run_python:
-    category: "system_dangerous"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
     timeout_seconds: 60
-    rate_limit_per_hour: 60
     loop_max_per_signature: 5
     loop_max_consecutive: 10
     loop_consecutive_terminal: true  # FRE-279: syntax errors → 400s; terminate instead of indefinite retry
@@ -622,11 +584,9 @@ tools:
   # FRE-261 Step 4: sandboxed bash executor with allowlist-based approval model
   # FRE-1574 (ADR-0156 D8): which commands run, ask or are refused is in permissions.yaml.
   bash:
-    category: "system_dangerous"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
     timeout_seconds: 30
-    rate_limit_per_hour: 200
     loop_max_per_signature: 5
     loop_max_consecutive: 10
     loop_output_sensitive: true
@@ -634,24 +594,19 @@ tools:
 
   # ADR-0028 Phase 2: Replaced by native perplexity_query tool
   perplexity_query:
-    category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "medium"
     timeout_seconds: 120
-    rate_limit_per_hour: 50
 
   # ADR-0028 Phase 3: Replaced by native get_library_docs tool
   get_library_docs:
-    category: "network"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "low"
     timeout_seconds: 40
-    rate_limit_per_hour: 60
 
   # Auto-discovered: 2026-01-18T20:34:06.938155
   # use the docker cli — DISABLED: ADR-0028 Phase 3 (wraps existing CLI; use docker CLI directly)
   mcp_docker:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -662,7 +617,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.943694
   # Perform an Elasticsearch ES|QL query. — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_esql:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -680,7 +634,6 @@ tools:
   # FRE-1297 (2026-08-25): the real fix is the native `fetch_url` tool above, not this
   # MCP server. Left disabled rather than deleted — no live gateway tool behind it.
   mcp_fetch_content:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -692,7 +645,6 @@ tools:
   # Fetches up-to-date documentation for a library. — DISABLED: ADR-0028 Phase 3 (use get_library_docs)
   # You must call 'resolve...
   mcp_get-library-docs:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
     # Customize as needed:
@@ -703,7 +655,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.959873
   # Get field mappings for a specific Elasticsearch index — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_get_mappings:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
     # Customize as needed:
@@ -714,7 +665,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.965793
   # Get shard information for all or specific indices. — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_get_shards:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
     # Customize as needed:
@@ -725,7 +675,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.971814
   # List all available Elasticsearch indices — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_list_indices:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
     # Customize as needed:
@@ -736,7 +685,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.978042
   # Add a new MCP server to the session.  The server must exist in the cat...
   mcp_mcp-add:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -747,7 +695,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.984435
   # Set configuration for an MCP server.  The config object will be valida...
   mcp_mcp-config-set:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -758,7 +705,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.991047
   # Execute a tool that exists in the current session. This allows calling...
   mcp_mcp-exec:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -769,7 +715,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:06.997763
   # Find MCP servers in the current catalog by name, title, or description...
   mcp_mcp-find:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -780,7 +725,6 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:07.004667
   # Remove an MCP server from the registry and reload the configuration. T...
   mcp_mcp-remove:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "high"
     # Customize as needed:
@@ -792,7 +736,6 @@ tools:
   # Engages in a conversation using the Sonar API. Accepts an array of mes...
   # DISABLED: ADR-0028 Phase 2 (use perplexity_query with mode='ask')
   mcp_perplexity_ask:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -804,7 +747,6 @@ tools:
   # Performs reasoning tasks using the Perplexity API. Accepts an array of...
   # DISABLED: ADR-0028 Phase 2 (use perplexity_query with mode='reason')
   mcp_perplexity_reason:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -816,7 +758,6 @@ tools:
   # Performs deep research using the Perplexity API. Accepts an array of m...
   # DISABLED: ADR-0028 Phase 2 (use perplexity_query with mode='research')
   mcp_perplexity_research:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
     # Customize as needed:
@@ -830,7 +771,6 @@ tools:
   # REMOVED: ADR-0156 D7.5 (FRE-1575) — the context7 server left the MCP server set. This
   # row stays as a denial in case a later server brings the tool back.
   mcp_resolve-library-id:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -842,7 +782,6 @@ tools:
   # Search DuckDuckGo and return formatted results.      Args:         que...
   # DISABLED: ADR-0028 Phase 3 (redundant with native web_search — ADR-0034)
   mcp_search:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
     # Customize as needed:
@@ -856,7 +795,6 @@ tools:
   # REMOVED: ADR-0156 D7.5 (FRE-1575) — the sequentialthinking server left the MCP server
   # set. This row stays as a denial in case a later server brings the tool back.
   mcp_sequentialthinking:
-    category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
     # Customize as needed:
@@ -867,7 +805,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.101313
   # Create a new attachment on a specific Linear issue by uploading base64...
   mcp_create_attachment:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL']
     allowed_in_modes: []
     risk_level: "high"
@@ -879,7 +816,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.111239
   # Create a new document in Linear
   mcp_create_document:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL']
     allowed_in_modes: []
     risk_level: "high"
@@ -891,7 +827,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.120996
   # Create a new Linear issue label
   mcp_create_issue_label:
-    category: "mcp"
     allowed_in_modes: ['NORMAL']
     risk_level: "high"
     # Customize as needed:
@@ -902,7 +837,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.130864
   # Delete an attachment by ID
   mcp_delete_attachment:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL']
     allowed_in_modes: []
     risk_level: "high"
@@ -914,7 +848,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.141151
   # Delete a comment from a Linear issue
   mcp_delete_comment:
-    category: "mcp"
     allowed_in_modes: ['NORMAL']
     risk_level: "high"
     # Customize as needed:
@@ -925,7 +858,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.162161
   # Extract and fetch images from markdown content. Use this to view scree...
   mcp_extract_images:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
@@ -937,7 +869,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.183457
   # Retrieve an attachment's content by ID.
   mcp_get_attachment:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
@@ -949,7 +880,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.194220
   # Retrieve a Linear document by ID or slug
   mcp_get_document:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
@@ -961,7 +891,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.204972
   # Retrieve detailed information about an issue by ID, including attachme...
   mcp_get_issue:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -972,7 +901,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.215898
   # Retrieve detailed information about an issue status in Linear by name ...
   mcp_get_issue_status:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -983,7 +911,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.237282
   # Retrieve details of a specific milestone by ID or name
   mcp_get_milestone:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -994,7 +921,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.248234
   # Retrieve details of a specific project in Linear
   mcp_get_project:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1005,7 +931,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.259610
   # Retrieve details of a specific Linear team
   mcp_get_team:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
@@ -1017,7 +942,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.271125
   # Retrieve details of a specific Linear user
   mcp_get_user:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
@@ -1029,7 +953,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.283135
   # List comments for a specific Linear issue
   mcp_list_comments:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1040,7 +963,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.294992
   # Retrieve cycles for a specific Linear team
   mcp_list_cycles:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
@@ -1052,7 +974,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.307400
   # List documents in the user's Linear workspace
   mcp_list_documents:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1063,7 +984,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.332284
   # List available issue labels in a Linear workspace or team
   mcp_list_issue_labels:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1074,7 +994,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.345099
   # List available issue statuses in a Linear team
   mcp_list_issue_statuses:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1085,7 +1004,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.357836
   # List issues in the user's Linear workspace. For my issues, use "me" as...
   mcp_list_issues:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1096,7 +1014,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.370771
   # List all milestones in a Linear project
   mcp_list_milestones:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1107,7 +1024,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.384075
   # List available project labels in the Linear workspace
   mcp_list_project_labels:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1118,7 +1034,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.397410
   # List projects in the user's Linear workspace
   mcp_list_projects:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1129,7 +1044,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.410660
   # List teams in the user's Linear workspace
   mcp_list_teams:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
@@ -1141,7 +1055,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.424384
   # Retrieve users in the Linear workspace
   mcp_list_users:
-    category: "mcp"
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
@@ -1153,7 +1066,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.480300
   # Send a natural-language query to Linear and get a response. Use this t...
   mcp_research:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1164,7 +1076,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.508730
   # Create or update a comment on a Linear issue. If `id` is provided, upd...
   mcp_save_comment:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     # Customize as needed:
@@ -1175,7 +1086,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.522800
   # Create or update a Linear issue. If `id` is provided, updates the exis...
   mcp_save_issue:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     # Customize as needed:
@@ -1186,7 +1096,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.536997
   # Create or update a milestone in a Linear project. If `id` is provided,...
   mcp_save_milestone:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     # Customize as needed:
@@ -1197,7 +1106,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.551880
   # Create or update a Linear project. If `id` is provided, updates the ex...
   mcp_save_project:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     # Customize as needed:
@@ -1208,7 +1116,6 @@ tools:
   # Auto-discovered: 2026-04-03T18:57:35.581717
   # Search Linear's documentation to learn about features and usage
   mcp_search_documentation:
-    category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     # Customize as needed:
@@ -1218,48 +1125,38 @@ tools:
 
   # FRE-224: native Linear issue creation (Tier-1 — no MCP gateway required)
   create_linear_issue:
-    category: "network"
     allowed_in_modes: ["NORMAL"]
     risk_level: "medium"
     timeout_seconds: 30
-    rate_limit_per_hour: 20
     loop_max_per_signature: 1
     loop_max_consecutive: 2
 
   # FRE-224: native Linear issue search / list (Tier-1)
   find_linear_issues:
-    category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "low"
     timeout_seconds: 15
-    rate_limit_per_hour: 100
 
   # FRE-224: list Linear projects (Tier-1)
   list_linear_projects:
-    category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "low"
     timeout_seconds: 15
-    rate_limit_per_hour: 60
 
   # FRE-224: create Linear project (Tier-1)
   create_linear_project:
-    category: "network"
     allowed_in_modes: ["NORMAL"]
     risk_level: "medium"
     timeout_seconds: 15
-    rate_limit_per_hour: 10
 
   # FRE-227: write a durable note into the R2-backed artifact substrate.
   # Path traversal blocked at storage/artifact_store.py:build_r2_key; the
   # tool cannot write to an `artifact_*` / `upload_*` / `capture_*` prefix.
   # Loop guards keep tight-loop slug rewrites from monopolising the budget.
   notes_write:
-    category: "artifact_write"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "medium"
     timeout_seconds: 20
-    rate_limit_per_hour: 60
     loop_max_per_signature: 3
     loop_max_consecutive: 5
 
@@ -1268,27 +1165,21 @@ tools:
   # FRE-1596 (ADR-0156 A5.2): split by objective. Each tool keeps the values of the
   # former single row. Skill-provided: the primary sees it after the reveal.
   search_logs:
-    category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
     timeout_seconds: 20
-    rate_limit_per_hour: 120
 
   # FRE-1567, FRE-1596: model-call timing from Tempo trace spans, per group.
   measure_model_latency:
-    category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
     timeout_seconds: 20
-    rate_limit_per_hour: 120
 
   # FRE-227: pgvector NN search over the calling user's notes. Read-only.
   notes_search:
-    category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
     timeout_seconds: 10
-    rate_limit_per_hour: 200
 
   # FRE-368: write a human-facing artifact (HTML/chart/table/JSON/SVG) into
   # the R2-backed artifact substrate. Size capped at 5 MB in tool code.
@@ -1296,53 +1187,42 @@ tools:
   # required in NORMAL, but approval required in ALERT/DEGRADED so unhealthy
   # gateways cannot accidentally fan-out artifacts. Loop guards match notes_write.
   artifact_write:
-    category: "artifact_write"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "medium"
     timeout_seconds: 30
-    rate_limit_per_hour: 30
     loop_max_per_signature: 3
     loop_max_consecutive: 5
 
   # ADR-0077: plan a rich HTML artifact and delegate HTML generation to a
   # sub-agent. Timeout covers sub-agent inference (~60s) + R2 upload + Postgres.
   artifact_draft:
-    category: "artifact_write"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "medium"
     timeout_seconds: 120
-    rate_limit_per_hour: 20
     loop_max_per_signature: 3
     loop_max_consecutive: 3
 
   # FRE-368: read-only listing of the calling user's artifacts. No approval.
   artifact_list:
-    category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
     timeout_seconds: 10
-    rate_limit_per_hour: 200
 
   # FRE-368: fetch a single artifact's metadata + (small textual) content.
   artifact_read:
-    category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
     timeout_seconds: 10
-    rate_limit_per_hour: 60
 
   # ADR-0085 / FRE-475 — exact-replay retrieval of a digested tool result.
   expand_tool_result:
-    category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
     timeout_seconds: 10
-    rate_limit_per_hour: 120
 
   # Auto-discovered: 2026-04-03T18:57:35.611133
   # Update an existing Linear document
   mcp_update_document:
-    category: "mcp"
     allowed_in_modes: ['NORMAL']
     risk_level: "high"
     # Customize as needed:

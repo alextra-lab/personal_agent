@@ -310,7 +310,6 @@ async def test_execute_tool_with_path_validation(
     from personal_agent.governance.models import ToolPolicy
 
     tool_policy = ToolPolicy(
-        category="read_only",
         allowed_in_modes=["NORMAL"],
         forbidden_paths=["/System/**", "/Library/**"],
         allowed_paths=["$HOME/**"],
@@ -357,7 +356,6 @@ async def test_check_permissions_empty_allowed_in_modes_denies_every_mode(
         allowed_modes=["NORMAL", "DEGRADED"],
     )
     governance_config.tools["fre_1358_probe_disabled"] = ToolPolicy(
-        category="read_only",
         allowed_in_modes=[],
     )
 
@@ -390,7 +388,6 @@ async def test_check_permissions_mcp_tool_uses_policy_not_hardcoded_default(
     assert tool_def.allowed_modes == ["NORMAL", "DEGRADED"]  # the hardcoded default
 
     governance_config.tools["mcp_fre_1358_probe_mcp"] = ToolPolicy(
-        category="mcp",
         allowed_in_modes=["ALERT"],
     )
 
@@ -518,7 +515,6 @@ def test_validate_tool_arguments_refusals_carry_their_code(
         governance_config.tools,
         "fre_1575_probe_file",
         ToolPolicy(
-            category="read_only",
             allowed_in_modes=["NORMAL"],
             forbidden_paths=["/tmp/System/**"],
             allowed_paths=["/tmp/**"],
@@ -554,7 +550,6 @@ async def test_check_permissions_forbidden_in_modes_is_mode_refused(
         governance_config.tools,
         "fre_1575_probe_forbidden",
         ToolPolicy(
-            category="read_only",
             allowed_in_modes=["NORMAL"],
             forbidden_in_modes=["NORMAL"],
         ),

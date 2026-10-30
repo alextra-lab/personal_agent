@@ -50,6 +50,10 @@ assert_allow "bundled boolean flags + command flag (-tAc)" \
 assert_allow "bundled boolean flags only, no command bundled (-tA)" \
   "$PROD -tA -c \"SELECT 1;\""
 
+# FRE-1706: the eval database container is read through the same shape check.
+assert_allow "eval database container, SELECT" \
+  "docker exec cloud-sim-postgres-eval psql -U agent -d personal_agent -tAc \"SELECT 1\""
+
 # --- declined: bundled-flag parser's own documented decline paths ---------------------------
 # FRE-867 correctness review: expand_bundled_flags's docstring calls out these two decline
 # shapes explicitly; pin them so a future refactor can't silently turn either into a false allow.
@@ -127,6 +131,8 @@ assert_decline "second docker exec that is not read-only" \
   "$PROD -c \"SELECT 1;\"; docker exec cloud-sim-postgres psql -U agent -c \"DROP TABLE t;\""
 
 # --- declined: out of scope -----------------------------------------------------------------
+assert_decline "eval database container, DROP" \
+  "docker exec cloud-sim-postgres-eval psql -U agent -d personal_agent -c \"DROP TABLE api_costs;\""
 assert_decline "container not in the allowlist" \
   "docker exec cloud-sim-neo4j psql -U agent -c \"SELECT 1;\""
 assert_decline "psql on the host, not via docker exec" \

@@ -23,6 +23,8 @@ id overrides the queue.
 3. `git switch -c <next-adr-slug> origin/main`; retire the merged branch local-then-remote
    (`git branch -d` first — it refuses on unmerged — then `git push origin --delete`).
 
+**Database queries.** Run a query as `docker exec cloud-sim-postgres psql -U agent -d personal_agent -tAc "<SELECT ...>"`. Never put it inside `sh -c`. Never add `2>&1`. The direct form with one single-line read-only statement passes without a prompt. The wrapped form stops the seat on a prompt that the owner can no longer approve from the watch.
+
 ## 1 — Discuss / explore FIRST — genuinely, with the owner (hard gate)
 
 **This is the load-bearing step.** Two modes — sense which you're in:

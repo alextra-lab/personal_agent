@@ -60,6 +60,8 @@ is a different claim, and the gap between them is where studies go wrong.
 Code citations remain welcome and expected — as *provenance for an identifier* (below) and as
 explanation for a measured result. What they may not do is stand in for the result.
 
+**Database queries.** Run a query as `docker exec cloud-sim-postgres psql -U agent -d personal_agent -tAc "<SELECT ...>"`. Never put it inside `sh -c`. Never add `2>&1`. The direct form with one single-line read-only statement passes without a prompt. The wrapped form stops the seat on a prompt that the owner can no longer approve from the watch.
+
 ---
 
 ## The admissibility rule for negative findings

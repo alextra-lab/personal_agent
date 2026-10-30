@@ -36,7 +36,7 @@ _ATTR_NAMESPACE = "personal_agent"
 # AC-13: pinned exactly (not a floor) so a pyproject.toml bump that moves past
 # this value fails the AC-13 test loudly instead of drifting silently. Bump
 # this constant in the same commit as the pyproject.toml dependency bump.
-SEMCONV_VERSION = "0.65b0"
+SEMCONV_VERSION = "0.66b1"
 
 # The exact tuple open_root_span()/close_root_span() exchange — named so call
 # sites that must hold it across conditional branches (a root span opened only

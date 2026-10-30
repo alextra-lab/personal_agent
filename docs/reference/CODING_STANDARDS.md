@@ -742,7 +742,6 @@ governance_config = load_governance_config(settings.governance_config_path)
 
 # Use both app settings and domain configs
 manager = ModeManager(governance_config=governance_config)
-poll_interval = settings.brainstem_sensor_poll_interval_seconds
 ```
 
 ### Anti-Patterns

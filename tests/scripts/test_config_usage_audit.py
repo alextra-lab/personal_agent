@@ -38,12 +38,15 @@ from scripts.audit.config_usage_audit import (  # noqa: E402
     _deployed_env_key_sources,
     _extract_heredocs,
     audit_all,
+    auth_env_read,
     categorize,
     deployed_env_files_present,
     external_reads,
     generate_inventory_section,
     generate_report,
+    has_production_read,
     override_locations,
+    settings_module_read,
     splice_inventory_section,
 )
 from scripts.audit.settings_reads import collect_field_reads  # noqa: E402
@@ -442,3 +445,50 @@ def test_splice_inventory_section_handles_dangling_separator_with_no_marker() ->
 
     assert spliced.count("---") == 1
     assert "Some existing content." in spliced
+
+
+# FRE-1701 AC-2: an AppConfig field with no production reader is a control that changes
+# nothing. A field may stay unread only with an entry here, and every entry needs a reason.
+_NO_PRODUCTION_READER: dict[str, str] = {}
+
+
+def test_every_appconfig_field_has_a_production_reader() -> None:
+    """AC-2 (FRE-1701): every AppConfig field has a production reader, or an allowlist entry."""
+    unread = {name for name in AppConfig.model_fields if not has_production_read(name)}
+    assert unread == set(_NO_PRODUCTION_READER), (
+        f"no production reader: {sorted(unread - set(_NO_PRODUCTION_READER))}; "
+        f"stale allowlist entries: {sorted(set(_NO_PRODUCTION_READER) - unread)}"
+    )
+    assert all(reason.strip() for reason in _NO_PRODUCTION_READER.values())
+
+
+def test_has_production_read_is_false_for_a_name_nothing_reads() -> None:
+    """Seeded negative: a name that no file reads has no production reader."""
+    assert has_production_read("fre_1701_field_that_nothing_reads") is False
+
+
+def test_test_only_read_is_not_a_production_read(monkeypatch) -> None:
+    """A read in `tests/` or `scripts/` alone does not count (AC-2 must not pass on a test read)."""
+    import scripts.audit.config_usage_audit as audit
+
+    reads = {
+        "fre_1701_test_only": {"tests": ["tests/x.py:1"], "scripts": ["scripts/y.py:2"]},
+        "fre_1701_src_read": {"src": ["src/z.py:3"]},
+    }
+    monkeypatch.setattr(audit, "external_reads", lambda name: reads.get(name, {}))
+    assert audit.has_production_read("fre_1701_test_only") is False
+    assert audit.has_production_read("fre_1701_src_read") is True
+
+
+def test_settings_module_function_read_is_a_production_read() -> None:
+    """`log_level` is read only as `config.log_level` in `load_app_config()` inside settings.py."""
+    assert settings_module_read("log_level") is True
+    assert settings_module_read("experimental_openai_base_llm_http_handler") is True
+    assert has_production_read("log_level") is True
+
+
+def test_models_yaml_auth_env_is_a_production_read() -> None:
+    """`scaleway_secret_key` is read by name through a provider's `auth_env` in config/models.yaml."""
+    assert auth_env_read("scaleway_secret_key") is True
+    assert auth_env_read("debug") is False
+    assert has_production_read("scaleway_secret_key") is True

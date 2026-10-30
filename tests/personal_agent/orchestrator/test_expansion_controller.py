@@ -272,7 +272,6 @@ class TestPlannerPromptToolSurface:
                 "run_python": SubAgentToolDecision(granted=True, reason="granted"),
                 "fetch_url": SubAgentToolDecision(granted=False, reason="refused on 2026-09-08"),
             },
-            mode_constraints={},
         )
         monkeypatch.setattr(ec, "get_current_mode", lambda: Mode.NORMAL)
         monkeypatch.setattr(ec, "load_governance_config", lambda: config)
@@ -1428,7 +1427,6 @@ def _hermetic_config(granted: tuple[str, ...]) -> Any:
             name: SubAgentToolDecision(granted=True, reason="granted for this test")
             for name in granted
         },
-        mode_constraints={},
     )
 
 

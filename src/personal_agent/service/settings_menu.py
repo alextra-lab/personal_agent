@@ -36,6 +36,7 @@ from personal_agent.config.settings import AppConfig
 from personal_agent.orchestrator.constraint_options import (
     ARTIFACT_BUILDER_CONSTRAINT,
     CONSTRAINT_OPTIONS,
+    PREFERENCE_NEVER_APPLIED,
     artifact_builder_default_key,
     default_action_id,
     resolve_artifact_builder_key,
@@ -103,9 +104,6 @@ _APPENDIX_TO_MENU_GROUP: Mapping[str, str] = {
     "grounding and quality": "grounding",
     **{name: "turn_runs" for name in _TURN_RUNS_APPENDIX_GROUPS},
 }
-
-#: Constraints for which the turn never reads a saved choice (``allow_preference=False``).
-_NEVER_APPLIED: frozenset[str] = frozenset({"attachment_cost", "spend_threshold"})
 
 
 class Overridden(BaseModel):
@@ -382,7 +380,7 @@ def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
         saved = saved_choices.get(constraint)
         note = (
             "The turn never applies a saved choice here. The card always asks."
-            if constraint in _NEVER_APPLIED
+            if constraint in PREFERENCE_NEVER_APPLIED
             else None
         )
         if saved is None:

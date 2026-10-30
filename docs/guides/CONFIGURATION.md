@@ -32,11 +32,9 @@ The environment is set via `APP_ENV` environment variable (defaults to `developm
 **Location**: `config/` directory
 
 - **`config/models.yaml`** - LLM model configurations (primary, sub_agent, compressor roles)
-- **`config/governance/`** - Governance policies (modes, safety, tools, models)
-  - `modes.yaml` - Operational mode thresholds (NORMAL, ALERT, DEGRADED, etc.)
-  - `safety.yaml` - Safety policies and constraints
+- **`config/governance/`** - Governance policies (modes, tools, budget, permissions)
+  - `modes.yaml` - Operational modes (NORMAL, ALERT, DEGRADED, etc.) and transition rules
   - `tools.yaml` - Tool permissions and allowlists
-  - `models.yaml` - Model-specific governance rules
 
 These files are tracked in git and define the agent's behavior.
 
@@ -86,7 +84,6 @@ LLM_MAX_RETRIES=5        # Default: 3
 
 ```bash
 # In .env file
-ORCHESTRATOR_MAX_CONCURRENT_TASKS=10  # Default: 5
 ORCHESTRATOR_TASK_TIMEOUT_SECONDS=600 # Default: 300 (5 minutes)
 ORCHESTRATOR_MAX_TOOL_ITERATIONS=5    # Default: 3 (prevents loops)
 ```
@@ -98,17 +95,6 @@ ORCHESTRATOR_MAX_TOOL_ITERATIONS=5    # Default: 3 (prevents loops)
 MCP_GATEWAY_ENABLED=true              # Default: false
 MCP_GATEWAY_TIMEOUT_SECONDS=60        # Default: 30
 ```
-
-**Context Compression** - Control LLM-based rolling summarization (ADR-0038):
-
-```bash
-# In .env file
-CONTEXT_COMPRESSION_ENABLED=true            # Default: true
-CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.65    # Default: 0.65 (fire at 65% of context budget)
-```
-
-When enabled, evicted conversation turns are asynchronously summarized by the `compressor` model
-(`gpt-5.4-nano` in `config/models.yaml`) and injected as a system message on the next turn.
 
 **Request Monitoring** - Control system metrics collection:
 
@@ -138,11 +124,10 @@ See `.env.example` for complete list with descriptions. Key categories:
 2. **Application** - `PROJECT_NAME`, `VERSION`
 3. **Telemetry** - `LOG_DIR`, `APP_LOG_LEVEL`, `APP_LOG_FORMAT`
 4. **LLM Client** - `LLM_BASE_URL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES`
-5. **Orchestrator** - `ORCHESTRATOR_MAX_CONCURRENT_TASKS`, `ORCHESTRATOR_TASK_TIMEOUT_SECONDS`
-6. **Brainstem** - `BRAINSTEM_SENSOR_POLL_INTERVAL_SECONDS`
-7. **Request Monitoring** - `REQUEST_MONITORING_ENABLED`, `REQUEST_MONITORING_INTERVAL_SECONDS`
-8. **MCP Gateway** - `MCP_GATEWAY_ENABLED`, `MCP_GATEWAY_COMMAND`
-9. **Paths** - `GOVERNANCE_CONFIG_PATH`, `MODEL_CONFIG_PATH`
+5. **Orchestrator** - `ORCHESTRATOR_TASK_TIMEOUT_SECONDS`
+6. **Request Monitoring** - `REQUEST_MONITORING_ENABLED`
+7. **MCP Gateway** - `MCP_GATEWAY_ENABLED`, `MCP_GATEWAY_COMMAND`
+8. **Paths** - `GOVERNANCE_CONFIG_PATH`, `MODEL_CONFIG_PATH`
 
 ### Validation
 

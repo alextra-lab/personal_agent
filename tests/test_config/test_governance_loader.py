@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from personal_agent.config import GovernanceConfigError, load_governance_config
-from personal_agent.governance.models import GovernanceConfig
+from personal_agent.governance.models import GovernanceConfig, ModeDefinition
 
 
 def test_load_governance_config_success() -> None:
@@ -29,25 +29,12 @@ def test_load_governance_config_success() -> None:
     # Verify mode structure
     normal_mode = config.modes["NORMAL"]
     assert normal_mode.description == "Default healthy operation"
-    assert normal_mode.max_concurrent_tasks == 5
-    assert normal_mode.background_monitoring_enabled is True
 
     # Verify tools
     assert len(config.tools) > 0
     assert "write_file" in config.tools
     assert "bash" in config.tools
     assert "read" in config.tools
-
-    # Verify model constraints
-    assert len(config.mode_constraints) == 5
-    assert "NORMAL" in config.mode_constraints
-    normal_constraints = config.mode_constraints["NORMAL"]
-    assert "router" in normal_constraints.allowed_roles
-    assert "reasoning" in normal_constraints.allowed_roles
-
-    # Verify safety config
-    assert config.safety.content_filtering.enabled is True
-    assert len(config.safety.rate_limits) > 0
 
 
 def test_load_governance_config_default_path() -> None:
@@ -109,9 +96,7 @@ def test_load_governance_config_validation_error() -> None:
                 {
                     "modes": {
                         "NORMAL": {
-                            "description": "Test",
-                            "max_concurrent_tasks": -1,  # Invalid: negative
-                            "background_monitoring_enabled": True,
+                            "description": ["not", "a", "string"],  # Invalid: not a str
                         }
                     }
                 }
@@ -120,12 +105,6 @@ def test_load_governance_config_validation_error() -> None:
 
         tools_file = config_dir / "tools.yaml"
         tools_file.write_text(yaml.dump({"tools": {}}))
-
-        models_file = config_dir / "models.yaml"
-        models_file.write_text(yaml.dump({"mode_constraints": {}}))
-
-        safety_file = config_dir / "safety.yaml"
-        safety_file.write_text(yaml.dump({}))
 
         with pytest.raises(GovernanceConfigError, match="validation failed"):
             load_governance_config(config_dir)
@@ -143,7 +122,7 @@ def test_load_governance_config_missing_required_fields() -> None:
                 {
                     "modes": {
                         "NORMAL": {
-                            # Missing required fields: description, max_concurrent_tasks, etc.
+                            # Missing required field: description
                         }
                     }
                 }
@@ -152,12 +131,6 @@ def test_load_governance_config_missing_required_fields() -> None:
 
         tools_file = config_dir / "tools.yaml"
         tools_file.write_text(yaml.dump({"tools": {}}))
-
-        models_file = config_dir / "models.yaml"
-        models_file.write_text(yaml.dump({"mode_constraints": {}}))
-
-        safety_file = config_dir / "safety.yaml"
-        safety_file.write_text(yaml.dump({}))
 
         with pytest.raises(GovernanceConfigError, match="validation failed"):
             load_governance_config(config_dir)
@@ -173,11 +146,6 @@ def test_governance_config_mode_structure() -> None:
     # Check all modes have required fields
     for _mode_name, mode_def in config.modes.items():
         assert mode_def.description
-        assert mode_def.max_concurrent_tasks >= 0
-        assert isinstance(mode_def.background_monitoring_enabled, bool)
-        assert isinstance(mode_def.allowed_tool_categories, list)
-        assert isinstance(mode_def.require_approval_for, list)
-        assert isinstance(mode_def.thresholds, type(config.modes["NORMAL"].thresholds))
 
 
 def test_governance_config_tool_structure() -> None:
@@ -197,23 +165,6 @@ def test_governance_config_tool_structure() -> None:
     write_file_tool = config.tools["write_file"]
     assert write_file_tool.category == "system_write"
     assert "LOCKDOWN" in write_file_tool.forbidden_in_modes
-
-
-def test_governance_config_model_constraints() -> None:
-    """Test that model constraints are correctly structured."""
-    project_root = Path(__file__).parent.parent.parent
-    config_dir = project_root / "config" / "governance"
-
-    config = load_governance_config(config_dir)
-
-    # Check NORMAL mode constraints
-    normal_constraints = config.mode_constraints["NORMAL"]
-    assert len(normal_constraints.allowed_roles) > 0
-    assert "router" in normal_constraints.allowed_roles
-
-    # Check LOCKDOWN mode constraints (should be minimal)
-    lockdown_constraints = config.mode_constraints["LOCKDOWN"]
-    assert len(lockdown_constraints.allowed_roles) == 0
 
 
 def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
@@ -258,26 +209,23 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
     assert all(config.sub_agent_tools[name].reason.strip() for name in granted)
 
 
-def test_governance_config_safety_policies() -> None:
-    """Test that safety policies are correctly structured."""
-    project_root = Path(__file__).parent.parent.parent
-    config_dir = project_root / "config" / "governance"
+def test_loader_needs_only_modes_and_tools_files() -> None:
+    """FRE-1701: the loader reads modes.yaml and tools.yaml only; nothing reads the deleted parts.
 
-    config = load_governance_config(config_dir)
+    governance/models.yaml (mode_constraints) and safety.yaml were deleted, and the schema no
+    longer carries the sections that no code read.
+    """
+    with TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        (config_dir / "modes.yaml").write_text(
+            yaml.dump({"modes": {"NORMAL": {"description": "Test"}}})
+        )
+        (config_dir / "tools.yaml").write_text(yaml.dump({"tools": {}}))
 
-    # Check content filtering
-    assert config.safety.content_filtering.enabled is True
-    assert len(config.safety.content_filtering.secret_patterns) > 0
+        config = load_governance_config(config_dir)
 
-    # Check rate limits exist for all modes
-    assert "NORMAL" in config.safety.rate_limits
-    assert "ALERT" in config.safety.rate_limits
-    assert "DEGRADED" in config.safety.rate_limits
-    assert "LOCKDOWN" in config.safety.rate_limits
-    assert "RECOVERY" in config.safety.rate_limits
-
-    # Check rate limit structure
-    normal_limits = config.safety.rate_limits["NORMAL"]
-    assert normal_limits.tool_calls_per_minute >= 0
-    assert normal_limits.llm_calls_per_minute >= 0
-    assert normal_limits.outbound_requests_per_hour >= 0
+    assert config.modes["NORMAL"].description == "Test"
+    assert {"mode_constraints", "safety", "tool_categories"}.isdisjoint(
+        GovernanceConfig.model_fields
+    )
+    assert set(ModeDefinition.model_fields) == {"description"}

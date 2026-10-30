@@ -222,7 +222,6 @@ LLM_MAX_RETRIES=3
 
 # Service Configuration
 AGENT_SERVICE_PORT=9000
-AGENT_SERVICE_HOST=0.0.0.0
 
 # Database
 AGENT_DATABASE_URL=postgresql+asyncpg://agent:password@localhost:5432/personal_agent
@@ -312,10 +311,8 @@ Run this after deploying the FRE-229 build. The service has an IS NULL grace cla
 
 Edit `config/governance/` files to customize:
 
-- **modes.yaml**: Operational mode thresholds
+- **modes.yaml**: Operational modes and transition rules
 - **tools.yaml**: Tool permissions and risk levels
-- **safety.yaml**: Safety policies and content filtering
-- **models.yaml**: Model-specific governance rules
 
 ## Common Tasks
 

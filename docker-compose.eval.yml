@@ -321,7 +321,6 @@ services:
       AGENT_GATEWAY_AUTH_ENABLED: "false"
       AGENT_MCP_GATEWAY_ENABLED: "false"
       AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
-      AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"
       # FRE-1376: production defaults delegation off (no adapter wired). The eval
       # harness's CP-05 path (dataset.py) exercises real DelegationPackage
       # composition, so enable it here.
@@ -514,7 +513,6 @@ services:
       # scripts/eval/probe_bash_credential_isolation.py.
       AGENT_APPROVAL_UI_ENABLED: "false"
       AGENT_EXTRA_PERMISSION_RULES_PATH: config/governance/permissions.eval.yaml
-      AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"
       # FRE-1376: production defaults delegation off (no adapter wired). The eval
       # harness's CP-05 path (dataset.py) exercises real DelegationPackage
       # composition, so enable it here.

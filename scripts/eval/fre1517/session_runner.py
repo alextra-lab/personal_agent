@@ -93,7 +93,8 @@ from scripts.eval.gateway_freshness import assert_gateway_fresh, repo_root
 
 HERE = Path(__file__).parent
 GATEWAY_ARM = "treatment"
-WEEKLY_BUDGET_USD = 50.0  # docker-compose.eval.yml AGENT_CLOUD_WEEKLY_BUDGET_USD
+#: This script's own spend ceiling. The AGENT_CLOUD_WEEKLY_BUDGET_USD it mirrored had no reader (FRE-1701).
+WEEKLY_BUDGET_USD = 50.0
 #: The fan-out failure trailer's fixed opening (orchestrator/executor.py, _fanout_trailer_text).
 TRAILER_MARKER = "— Research note:"
 #: The owner's approval, 2026-09-14: only errors on the roles the arm serves fail a turn. Errors

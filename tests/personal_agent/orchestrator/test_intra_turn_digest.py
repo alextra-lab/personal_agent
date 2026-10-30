@@ -83,7 +83,6 @@ def _is_digest(msg: dict[str, object]) -> bool:
 def _digest_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "tool_result_digest_threshold_tokens", 50)
     monkeypatch.setattr(settings, "tool_result_digest_min_savings_tokens", 10)
-    monkeypatch.setattr(settings, "tool_result_digest_keep", 1)
     monkeypatch.setattr(settings, "tool_result_digest_pin_ttl_turns", 4)
     monkeypatch.setattr(settings, "tool_result_digest_put_timeout_ms", 2000)
     monkeypatch.setattr(settings, "tool_result_digest_exclude_tools", [])

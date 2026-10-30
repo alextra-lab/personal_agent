@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from personal_agent.service.app import app
@@ -157,6 +158,29 @@ def test_static_constraint_still_validated() -> None:
         _teardown()
 
 
+@pytest.mark.parametrize(
+    ("constraint_name", "preferred_action"),
+    [("attachment_cost", "proceed_cloud"), ("spend_threshold", "continue_turn")],
+)
+def test_choice_the_turn_never_applies_is_refused(
+    constraint_name: str, preferred_action: str
+) -> None:
+    """FRE-1701 item 4: the turn pauses these with allow_preference=False, so the PUT refuses."""
+    client = _client()
+    upsert = AsyncMock(return_value=None)
+    try:
+        with patch(f"{_REPO}.upsert", upsert):
+            resp = client.put(
+                _URL,
+                json={"constraint_name": constraint_name, "preferred_action": preferred_action},
+            )
+        assert resp.status_code == 422
+        assert "never applies" in resp.json()["detail"]
+        upsert.assert_not_awaited()
+    finally:
+        _teardown()
+
+
 # ---------------------------------------------------------------------------
 # FRE-1702 — GET and DELETE on the same path (the settings menu's read + Clear)
 # ---------------------------------------------------------------------------
@@ -251,3 +275,33 @@ def test_delete_requires_the_constraint_name() -> None:
         assert client.delete(_URL).status_code == 422
     finally:
         _teardown()
+
+
+def test_never_applied_set_matches_the_executor_pauses() -> None:
+    """FRE-1701: PREFERENCE_NEVER_APPLIED names exactly the pauses with allow_preference=False.
+
+    Reads ``executor.py``: each ``_maybe_pause_for_constraint(constraint="<name>", ...,
+    allow_preference=False)`` call must be in the set, and each set member must have such a call.
+    """
+    import ast
+    from pathlib import Path
+
+    from personal_agent.orchestrator import executor
+    from personal_agent.orchestrator.constraint_options import PREFERENCE_NEVER_APPLIED
+
+    tree = ast.parse(Path(executor.__file__).read_text(encoding="utf-8"))
+    never_applied: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_maybe_pause_for_constraint"
+        ):
+            continue
+        kwargs = {kw.arg: kw.value for kw in node.keywords}
+        allow = kwargs.get("allow_preference")
+        constraint = kwargs.get("constraint")
+        if isinstance(allow, ast.Constant) and allow.value is False:
+            assert isinstance(constraint, ast.Constant), ast.unparse(node)
+            never_applied.add(str(constraint.value))
+    assert never_applied == PREFERENCE_NEVER_APPLIED

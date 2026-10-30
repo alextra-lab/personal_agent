@@ -80,7 +80,6 @@ def _e2e_patches() -> Generator[Any, None, None]:
                 "context_window_max_tokens": 6000,
                 "conversation_context_strategy": "truncate",
                 "orchestrator_max_tool_iterations": 3,
-                "orchestrator_max_repeated_tool_calls": 1,
                 "mcp_gateway_enabled": False,
                 "llm_no_think_suffix": "/no_think",
                 "llm_append_no_think_to_tool_prompts": True,

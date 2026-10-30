@@ -54,7 +54,7 @@ EXPECTED: Mapping[str, str] = {
     "AGENT_PRIMITIVE_TOOLS_ENABLED": "Both eval arms run primitives; the value can differ from .env.",
     "AGENT_EXTRA_PERMISSION_RULES_PATH": "Eval adds permissions.eval.yaml (ADR-0156 D8.5).",
     "AGENT_DELEGATION_ENABLED": "Eval enables delegation for CP-05 (FRE-1376).",
-    "AGENT_CLOUD_WEEKLY_BUDGET_USD": "Eval has its own budget cap.",
+    "AGENT_CLOUD_WEEKLY_BUDGET_USD": "Deleted setting, no reader (FRE-1701); only a stale .env may set it.",
     "AGENT_LOG_LEVEL": "Eval states its log level explicitly.",
     "AGENT_EVENT_BUS_ENABLED": "Eval enables the bus explicitly (FRE-1342).",
     # FRE-1590 override

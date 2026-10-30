@@ -386,7 +386,8 @@ def _resolve_role_binding(
     first turn for a brand-new session), so a missing row degrades straight to
     the binding default rather than needing a profile-shaped stand-in.
 
-    Order: stored selection (open roles only, guardrailed) -> binding default.
+    Order: stored selection (open roles in ``TURN_SELECTED_ROLES`` only, guardrailed)
+    -> binding default. A stored row for another role is ignored, as a turn ignores it.
 
     Provenance is deliberately binary (``"server-hydrated"`` / ``"default"``),
     matching this endpoint family's existing, tested contract.
@@ -416,13 +417,15 @@ def _resolve_role_binding(
         ``(resolved_deployment_key, provenance)``.
     """
     from personal_agent.config.model_loader import (  # noqa: PLC0415
+        TURN_SELECTED_ROLES,
         resolve_selected_deployment,
     )
     from personal_agent.llm_client.models import INHERIT_DEPLOYMENT  # noqa: PLC0415
 
     binding = config.roles.get(role)
     inherits = binding is not None and binding.deployment == INHERIT_DEPLOYMENT
-    if binding is not None and binding.open and stored is not None:
+    # FRE-1701: a stored row counts only for a role whose selection a turn reads.
+    if binding is not None and binding.open and role in TURN_SELECTED_ROLES and stored is not None:
         resolved = resolve_selected_deployment(role, stored, config)
         if resolved == stored:
             return resolved, "server-hydrated"
@@ -846,14 +849,15 @@ async def update_session_selection(
         The session dict (unchanged shape; the stored selection is the effect).
 
     Raises:
-        HTTPException(422): When ``session_id`` is not a valid UUID, or the
+        HTTPException(422): When ``session_id`` is not a valid UUID, the role is not
+            in ``TURN_SELECTED_ROLES`` (no turn reads its selection, FRE-1701), or the
             ``(role, deployment_key)`` is not a permitted selection.
         HTTPException(404): When the session does not exist or is owned by
             another user.
     """
     get_rate_limiter().check(token)
     from personal_agent.config import load_model_config
-    from personal_agent.config.model_loader import is_selectable_binding
+    from personal_agent.config.model_loader import TURN_SELECTED_ROLES, is_selectable_binding
     from personal_agent.service.repositories.session_model_selection_repository import (
         SessionModelSelectionRepository,
     )
@@ -874,6 +878,18 @@ async def update_session_selection(
                 "status": 422,
             },
         ) from exc
+
+    # FRE-1701: refuse a role whose stored selection no turn reads, so the store never
+    # holds a choice that shows on /observe and changes nothing.
+    if body.role not in TURN_SELECTED_ROLES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_parameter",
+                "message": f"no turn reads a session selection for role '{body.role}'",
+                "status": 422,
+            },
+        )
 
     # §6 server-side validation BEFORE any storage: reject a pinned role or a
     # non-catalog / wrong-kind key (never trust the client).

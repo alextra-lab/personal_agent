@@ -324,18 +324,18 @@ class TestEstimatorReconciliation:
 
 
 class TestPrecedenceOrdering:
-    def test_frozen_reset_ceiling_is_tighter_than_both_adr_0061_thresholds(self) -> None:
+    def test_frozen_reset_ceiling_is_tighter_than_the_adr_0061_hard_threshold(self) -> None:
         """Quantifies Finding 0: the ADR-0081 frozen-reset ceiling sits below
-        both ADR-0061 thresholds under production defaults, so steady growth
-        is compacted by the scheduler before either ADR-0061 gate would ever
-        see it. Computed from live settings so it self-invalidates on drift.
+        the ADR-0061 hard threshold under production defaults, so steady growth
+        is compacted by the scheduler before the hard gate would ever see it.
+        Computed from live settings so it self-invalidates on drift. The soft
+        threshold setting was deleted with the soft trigger (FRE-941, FRE-1701).
         """
         max_tokens = settings.context_window_max_tokens
         frozen_ceiling = int(settings.cache_frozen_accum_max_ratio * max_tokens)
-        soft_threshold = int(settings.context_compression_threshold_ratio * max_tokens)
         hard_threshold = int(settings.within_session_hard_threshold_ratio * max_tokens)
 
-        assert frozen_ceiling < soft_threshold < hard_threshold
+        assert frozen_ceiling < hard_threshold
 
     # test_soft_trigger_call_site_guard_is_closed_under_production_default was removed
     # with the cache_frozen_layout_enabled flag (FRE-941): the reactive soft trigger

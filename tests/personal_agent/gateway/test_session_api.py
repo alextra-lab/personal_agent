@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -677,6 +678,32 @@ def test_patch_selection_pinned_role_422_before_storage() -> None:
     upsert_mock.assert_not_awaited()  # nothing stored
 
 
+@pytest.mark.parametrize("role", ["artifact_builder", "sub_agent"])
+def test_patch_selection_open_role_no_turn_reads_422_before_storage(role: str) -> None:
+    """FRE-1701 AC-3 — an open role whose selection no turn reads is rejected 422, nothing stored.
+
+    The turn puts only ``primary`` into the per-turn selection (``service/app.py``), so a stored
+    row for another role would show on ``/observe`` and change no turn.
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        upsert_mock = stack.enter_context(patch(_SELECTION_UPSERT, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}/selection",
+                json={"role": role, "deployment_key": "claude_sonnet"},
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 422
+    assert "no turn reads" in resp.json()["detail"]["message"]
+    upsert_mock.assert_not_awaited()
+
+
 def test_patch_selection_noncatalog_key_422_before_storage() -> None:
     """AC-4b — a non-catalog key for an open role is rejected 422 before any storage."""
     db_session = AsyncMock()
@@ -949,6 +976,39 @@ def test_get_session_config_ac9_slice_reports_stored_selection_not_raw_default()
     primary = resp.json()["roles"]["primary"]
     assert primary["resolved"] == "claude_sonnet"  # NOT the raw default qwen3.8-flash-next
     assert primary["provenance"] == "server-hydrated"
+
+
+def test_get_session_config_ignores_a_stored_row_that_no_turn_reads() -> None:
+    """FRE-1701 AC-3 — a legacy stored artifact_builder row does not show as the session's choice.
+
+    The turn reads only the ``primary`` selection, so the payload shows the binding default.
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(
+            patch(
+                _SELECTION_GET_ALL,
+                new_callable=AsyncMock,
+                return_value={"primary": "claude_sonnet", "artifact_builder": "claude_sonnet"},
+            )
+        )
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        stack.enter_context(_served_ids_patch())
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    builder = resp.json()["roles"]["artifact_builder"]
+    assert builder["provenance"] == "default"
+    assert builder["resolved"] != "claude_sonnet"
+    assert builder["candidates"]  # the DecisionCard still reads the builder candidates
 
 
 def test_get_session_config_inherit_role_shows_the_sessions_stored_primary() -> None:

@@ -127,7 +127,7 @@ forcing function.
 
 L0 contains these pieces:
 
-- **Execution Topology Observability Contract (ADR-0088).** Today `turn_status` / `STATE_DELTA` and
+- **Execution Topology Observability Contract (ADR-0088).** On 2026-06-06, `turn_status` / `STATE_DELTA` and
   the cost/token meter emit from the single-agent loop in `orchestrator/executor.py`; the sub-agent
   path (`orchestrator/sub_agent.py`) and the expansion controller emit none. The backend trace
   ledger booked the correct cost ($0.9028) while the user-facing meter showed the primary-only
@@ -149,6 +149,10 @@ L0 contains these pieces:
     and `sub_agent.py` separately) — i.e. the very per-loop pattern this contract exists to replace.
     ADR-0088's job is to generalize that into **one durable boundary** so the next topology inherits
     emission instead of re-implementing it; FRE-501 and the contract must not drift.
+  - *Live now (checked 2026-10-30, FRE-1707):* ADR-0088 shipped. The seam is
+    `src/personal_agent/observability/topology/` (FRE-513). Each topology reports through
+    `observe_topology()`. The `cg:turn-projector` consumer is the sole emitter of `turn_status`
+    (`service/app.py`). The two bullets above record the state on 2026-06-06.
 - **Route-Trace Ledger (FRE-452).** Per-turn capture of stimulus → gateway classification → model
   path → cognitive work actually done → result type. The *actual* half of the reconciliation loop.
   It is only as trustworthy as the contract above: until ADR-0088 lands, the ledger is blind on
@@ -192,9 +196,10 @@ Each is a cross-cutting capability with multiple L3 consumers:
 - **Memory Recall Quality** (ADR-0087, FRE-435) — write-completeness + retrieval quality,
   measurement-first. Consumes L0 (to measure retrieval) and L1 (the matrix declares knowledge
   access). **The §6 knowledge-gating decision is owned here**, derived from the matrix — not patched
-  into `recall_controller.py` off one trace.
+  into the Stage-6 recall code off one trace.
 - **Inference Architecture** (ADR-0082) — the **plumbing and mechanism** of how inference is
-  dispatched: the `model_tier` field on `GatewayOutput`, `_determine_initial_model_role()`, the
+  dispatched: the proposed `model_tier` field on `GatewayOutput` (ADR-0082 D1, not shipped —
+  `GatewayOutput` has no such field), `_determine_initial_model_role()`, the
   delegation/decomposition machinery, and the **planner/decomposition mechanism** itself. This is
   clean substrate — it depends only on L0 (its gate is the route-trace ledger, FRE-452) and on L1's
   declared paths. **Critical distinction (per Codex review): the *plumbing* is L2; the *routing
@@ -210,7 +215,9 @@ Each is a cross-cutting capability with multiple L3 consumers:
   Keeps injected context high-quality under the cache-aware frozen layout.
 - **Artifact Execution Security** (ADR-0089) — move from *sanitize output* (FRE-496 strip-and-
   deliver, adversarial and lossy) to *sandbox execution* (FRE-397 tiers: SVG → sandboxed-JS iframe
-  → JSX). FRE-500 flags the strip enforcement off as a temporary bridge.
+  → JSX). FRE-500 flags the strip enforcement off as a temporary bridge. *Done (ADR-0089 status:
+  Implemented 2026-06-07):* the sanitizer is retired (FRE-511) and the iframe sandbox is live
+  (FRE-510).
 
 ### L3 — Feature consumers
 
@@ -274,6 +281,11 @@ The decomposition run exposed that deep recall is gated to `task_type == CONVERS
 (`request_gateway/recall_controller.py:173`). "Teach me about X" classifies `TOOL_USE`, so the
 *exact* pedagogical use case is structurally denied deep grounding. This document does **not** decide
 the fix — it routes it:
+
+> *Live now (checked 2026-10-30, FRE-1707):* `recall_controller.py` was deleted on 2026-08-28
+> (FRE-1135, `b0600ec3`). Stage 6 (`request_gateway/context.py`) runs broad recall for
+> `MEMORY_RECALL`. For other task types it runs graph entity matching, plus proactive suggestions
+> when `proactive_memory_enabled` is true. The paragraph above records the gate on 2026-06-06.
 
 - The current gate is **eligibility gating by output-shape** — the wrong primitive. It fuses three
   separate decisions: *eligibility* (may this touch knowledge?), *triggering* (when / how hard do we

@@ -20,7 +20,7 @@ those gates changes none of them.
 ## Enable-once precondition (fails fast when unmet)
 
 Remote Control is entitlement-gated and endpoint-sensitive. Complete these once
-on the VPS before enabling the units. The orchestrator's `--preflight` checks the
+on the VPS before you enable the orchestrator unit. The orchestrator's `--preflight` checks the
 statically-verifiable subset and **exits non-zero** when unmet, so the systemd
 unit refuses to start (`ExecStartPre`).
 
@@ -44,16 +44,31 @@ never conflated into the fail-fast config check.
 
 ## Install and enable
 
+Two dispatch units run on the VPS: `seshat-dispatch-orchestrator` and
+`seshat-gating-watcher` (see *Gating watcher* below). Both are installed and
+enabled. Check them with:
+
+```
+systemctl list-unit-files 'seshat*' 'claude-remote-control*'
+systemctl is-active seshat-dispatch-orchestrator seshat-gating-watcher
+```
+
+The worker seats are not systemd units. Each seat is a per-session tmux session
+that runs `claude` with Remote Control: `cc-1build`, `cc-2build`, `cc-adrs` (and
+`cc-master`, `cc-explore`, which are not dispatch streams). `cc-sessions` owns the
+seat lifecycle (FRE-913). Run `cc-sessions` with no argument to list the seats and
+their state.
+
+The repo still ships `infrastructure/systemd/claude-remote-control@.service`
+(server-mode RC, one unit per stream). That unit is **not installed** on the VPS.
+The per-session tmux launcher replaced it (see *Open seam* below).
+
+To install the orchestrator unit on a new host:
+
 ```
 # from /opt/seshat on the VPS
-sudo install -m 644 infrastructure/systemd/claude-remote-control@.service /etc/systemd/system/
 sudo install -m 644 infrastructure/systemd/seshat-dispatch-orchestrator.service /etc/systemd/system/
 sudo systemctl daemon-reload
-
-# one RC server per stream (server mode, on the existing worktree)
-sudo systemctl enable --now claude-remote-control@build1
-sudo systemctl enable --now claude-remote-control@build2
-sudo systemctl enable --now claude-remote-control@adr
 
 # the orchestrator daemon (preflights, then --loop --execute)
 sudo systemctl enable --now seshat-dispatch-orchestrator
@@ -61,8 +76,9 @@ sudo systemctl enable --now seshat-dispatch-orchestrator
 
 ## Guardrails
 
-- **RC restarts on failure.** RC exits after a prolonged (~10 min) network
-  outage; `Restart=always` (`RestartSec=10`) brings each server back.
+- **The daemon restarts on failure.** `seshat-dispatch-orchestrator` has
+  `Restart=always` (`RestartSec=30`). RC in a seat exits after a long (~10 min)
+  network outage. `cc-sessions` recovers the seat. No systemd unit restarts it.
 - **Liveness — refuse to dispatch when RC is down.** Before launching, the
   orchestrator probes global RC reachability (`claude agents --json --all`, exit
   0). When RC is down it launches nothing and emits `dispatch_blocked`
@@ -87,8 +103,10 @@ sudo systemctl enable --now seshat-dispatch-orchestrator
   (enabled in the precondition table) — the durable open-PR + `In Review`
   signal proves *success*; the stall path + push cover *liveness*.
 - **Concurrency.** The orchestrator never launches into an occupied stream and
-  never strips hooks, so the `check-pytest-lock` PreToolUse hook stays live and
-  CI re-runs tests at the master gate regardless.
+  never strips hooks. The `check-pytest-lock` PreToolUse hook no longer exists.
+  The owner directed its removal on 2026-07-18 (commit 34d865d8, see the root
+  `CLAUDE.md`). One pytest at a time is now a convention, not a hook. CI re-runs
+  the tests at the master gate.
 - **Persistent seats — the dispatcher never terminates a seat (FRE-913).** Seats
   are long-lived: a dispatch *prepares* a seat, it never destroys one. The
   launcher owns **no** tmux termination code at all (no `kill-session`,
@@ -123,14 +141,18 @@ sudo systemctl enable --now seshat-dispatch-orchestrator
 
 ```
 journalctl -fu seshat-dispatch-orchestrator     # dispatch decisions, stalls, blocks
-journalctl -fu claude-remote-control@build1      # the RC server for a stream
 systemctl status seshat-dispatch-orchestrator
+cc-sessions                                      # the seats and their state
 ```
 
-- **`dispatch_blocked reason=rc-down`** → an RC server is down. Check
-  `systemctl status claude-remote-control@<stream>`; `journalctl` it; restart if
-  needed (`sudo systemctl restart claude-remote-control@<stream>`). Diagnose
-  entitlement with `claude doctor`.
+The seat for each stream: `build1` → `cc-1build`, `build2` → `cc-2build`, `adr` →
+`cc-adrs` (`scripts/dispatch/launcher.py`, `_TOPOLOGY`). FRE-909 renamed the build
+seats on 2026-07-18 (commit 910954fc). Attach to a seat with
+`tmux attach -t <seat>`, for example `tmux attach -t cc-1build`.
+
+- **`dispatch_blocked reason=rc-down`** → the global RC probe failed. Run
+  `claude agents --json --all` by hand. It must exit 0. Diagnose entitlement
+  with `claude doctor`. Check the seats with `cc-sessions`.
 - **`dispatch_blocked reason=kill-switch`** → the kill switch is set; remove
   `telemetry/dispatch.disabled` to resume.
 - **`dispatch_stall`** → a launched run did not advance in time. Read `reason` and the
@@ -143,7 +165,7 @@ systemctl status seshat-dispatch-orchestrator
   `pr-check-undetermined-past-timeout` when the PR check failed. Only a terminal state
   releases the slot, so a parked ticket holds it until someone acts. Attach to the
   session (`claude.ai/code` / the mobile app, or locally `tmux attach -t
-  cc-<stream>`), answer any waiting prompt, or investigate a crash. The
+  <seat>`, such as `cc-1build`), answer any waiting prompt, or investigate a crash. The
   orchestrator never advances on silence — it advances only on the durable
   open-PR + `In Review` evidence. Since FRE-1499 an in-progress stall carries
   `seat_turn` — how the seat's current conversation ended its last turn, read
@@ -181,7 +203,7 @@ systemctl status seshat-dispatch-orchestrator
   persists** — a wedge does not self-clear, so the alert keeps escalating
   rather than firing once and going silent (the FRE-1077 fix; the 2026-07-31
   incident produced 186 silent-but-warned ticks over 15+ hours under the old
-  one-shot design). Attach to the seat (`tmux attach -t cc-<stream>`), find and
+  one-shot design). Attach to the seat (`tmux attach -t <seat>`), find and
   kill the orphaned process holding it busy (check for a background loop whose
   own grep pattern matches its command line — the same substring-matching trap
   that removed the pytest-lock pre-tool hook on 2026-07-18), then verify RC
@@ -208,7 +230,7 @@ systemctl status seshat-dispatch-orchestrator
   every tick and would otherwise fail silently and indefinitely — this one is
   keyed to the **stream**, so board churn cannot reset it. Only a delivery that
   genuinely lands clears the count. The named stream is not landing work: attach
-  to the seat (`tmux attach -t cc-<stream>`) and check whether the pane is a
+  to the seat (`tmux attach -t <seat>`) and check whether the pane is a
   usable, idle `claude` in the right worktree. Master pings **once** per episode
   (an episode ends only at a successful delivery); the greppable warning repeats
   every tick past the threshold. Surfacing only — the stream is **not** halted and
@@ -239,17 +261,28 @@ substrate**; the server-mode `claude-remote-control@` daemon units are shipped b
 NOT yet proven live. Still outstanding: the same demo once for **adr** (no Approved
 adr ticket existed at demo time), and **AC-5** (the two-worker pytest-lock collision).
 
-## Relationship to the prime-worker monitor
+**Current state (checked 2026-10-30).** The server-mode `claude-remote-control@`
+units are not installed: `systemctl list-unit-files 'claude-remote-control*'`
+lists none. The per-session tmux seats are the only substrate. AC-5 no longer
+applies, because the `check-pytest-lock` hook was removed on 2026-07-18
+(commit 34d865d8).
+
+## Worker follow-up after the PR (the `prime-worker` skill is gone)
 
 The orchestrator **owns dispatch** — it resolves each stream's NEXT (the
 Linear-native contract, `.claude/skills/lifecycle-rules.md` § Dispatch), sets the
 model tier, and launches the worker with the resolved ticket seeded
-(`/build <FRE-id>` / `/adr <FRE-id>`). The `prime-worker` skill is now a **pure
-PR-feedback monitor** (FRE-806): it no longer resolves NEXT or advises a command
-— that was duplicated logic. After a build opens a PR, its only job is the watch
-loop over its own PR, self-fixing on a master bounce **or** a red CI, until the
-PR merges. The build/adr skills arm this monitor early so it runs even when the
-orchestrator (not a manual `/prime-worker`) was the launch entry point.
+(`/build <FRE-id>` / `/adr <FRE-id>`).
+
+The `prime-worker` skill no longer exists. Commit b3754731 (2026-07-09) deleted it
+and folded its job into the `build` skill, section "Done = master-ready". A worker
+does not poll its PR. It opens the PR and goes idle. Two events bring it back:
+
+- **Red CI.** The gating watcher sends the seat a plain message (see below).
+- **A master bounce.** Master sends the seat the bounce directly. The watcher has
+  no bounce leg since commit feab4a04 (2026-07-09).
+
+The worker fixes the PR on its branch, pushes, and goes idle again.
 
 ## Gating watcher (FRE-823) — event-driven send-keys triggers
 
@@ -268,12 +301,15 @@ never merges, deploys, closes tickets, or writes the owner console).
   `## Master gate — BOUNCE` → `tmux send-keys -t cc-master "/master <PR#>"`.
   Dedup on `(PR#, head SHA)`: a bounce+push mints a new SHA → re-sent when it
   re-greens.
-- **Worker ← bounce / red CI.** An unacked `## Master gate — BOUNCE` **or** a
-  failed CI check on the head SHA with no `Ack: addressing red CI at <sha>` →
-  `tmux send-keys -t cc-<stream> "/prime-worker"`. The stream is resolved from
-  the PR branch (`fre-<id>`) → the ticket's `stream:*` label →
-  `cc-build`/`cc-build2`/`cc-adrs`. The ack markers prime-worker already posts
-  are the dedup key.
+- **Worker ← red CI.** A failed CI check on the head SHA with no
+  `Ack: addressing red CI at <sha>` → the plain message
+  `PR #<N> failed CI checks - correct them` to the owning seat
+  (`scripts/dispatch/gating_watcher.py`, the `command = f"PR #{pr.number} failed CI checks - correct them"` line).
+  The watcher tries the seat's `seshat-dispatch` channel first, then `send-keys`
+  through the send gate below. The seat comes from the PR branch (`fre-<id>`) →
+  the ticket's `stream:*` label → `cc-1build`/`cc-2build`/`cc-adrs`. The watcher
+  has no bounce leg: master sends a bounce to the seat directly (commit
+  feab4a04).
 
 **Red-CI poke effectiveness and escalation (FRE-1499).** A red-CI poke that
 changes nothing is now detected. The watcher records every delivered poke as a
@@ -627,6 +663,7 @@ calls it yet**; that consolidation is a follow-up ticket, kept separate so this 
 stayed one phase.
 
 **Closed grammar** — exactly `/build <1|2|FRE-<digits>>` and bare `/prime-worker`, nothing else.
+(The grammar still admits `/prime-worker`, but that skill was deleted in commit b3754731.)
 Matched with `str.fullmatch` over ASCII-only character classes (never the Unicode-permissive `\d`
 regex shorthand), so a lookalike digit, an embedded newline, or a trailing newline all fail
 outright — the grammar has no character class that admits them. **No `/master` entry, by design**:
@@ -635,8 +672,8 @@ watcher's own `/master <PR#>` trigger is emitted by a dumb, contextless sensor, 
 has no role here and keeps its existing crash-safety from the trigger ledger unchanged.
 
 **Pane attestation is command-role-aware, not just membership.** Every attested pane is derived from
-`launcher.topology_for` (`cc-build`, `cc-build2`, `cc-adrs`), never a hand-duplicated literal — but
-`/build` is only valid at a build pane (`cc-build`/`cc-build2`); `cc-adrs` runs `/adr`, not `/build`,
+`launcher.topology_for` (`cc-1build`, `cc-2build`, `cc-adrs`), never a hand-duplicated literal — but
+`/build` is only valid at a build pane (`cc-1build`/`cc-2build`); `cc-adrs` runs `/adr`, not `/build`,
 so a `/build` sent there is refused even though `cc-adrs` is a real, known pane. `/prime-worker` is
 valid at any of the three.
 
@@ -652,44 +689,45 @@ re-deriving it. `event_id` is a caller-supplied idempotency key (mirror the watc
 visibility into the caller's own dedup-relevant context. An optional `kill_switch_engaged` predicate
 provides defense-in-depth on top of (not instead of) a caller's own tick-level kill-switch check.
 
-## Production cutover — settled posture + phased checklist
+## Production cutover — settled posture and current state
 
 **Settled autonomy posture (owner, 2026-07-05 — do NOT re-open).** An orchestrated
-session may run ONLY the kick-off skills `prime-worker` / `build` / `adr` (plus
-`loop`, prime-worker's monitor-arm) — the entire allowlist, committed to
-`.claude/settings.json` `permissions.allow` (PR #395). **Everything else inside a
-build the owner approves remotely via RC, in real time.** `--dangerously-skip-permissions`
+session runs the kick-off skills promptless. **Everything else inside a build the
+owner approves remotely via RC, in real time.** `--dangerously-skip-permissions`
 is never used, now or planned. Master's gate and both approval gates are unchanged.
 There is no "how autonomous" dial — this is the ceiling.
 
-**Status:** the seam is proven live end-to-end (see *Open seam* above — FRE-472 via the
-per-session tmux launcher). The allowlist is merged to `main`. What remains is a
-deliberate, phased cutover — not a single flip, because it changes the owner's
-workflow and lets a daemon launch real (Opus) builds.
+**What the allowlist grants.** The allowlist is `permissions.allow` in
+`.claude/settings.json` (PR #395 started it). It is more than the kick-off skills.
+On 2026-10-30 it holds 36 entries:
 
-Phased checklist:
+- the tools `Bash`, `Read`, `Grep` and `Glob`;
+- the skills `loop`, `prime-worker`, `build` and `adr` (the `prime-worker` skill
+  no longer exists, so its entry has no effect);
+- read-only Linear calls (list and get issues, comments, projects, documents,
+  milestones, statuses, teams, and documentation search);
+- read-only GitHub calls (file contents, pull requests, commits, code search, issues);
+- `psql` and `cypher-shell` through `docker exec` into the test-stack containers.
 
-- [ ] **Prereq — allowlist reaches the worktrees.** PR #395 is on `main`; each worker
-  worktree must **sync main** (fresh branch off `origin/main`) so kick-off runs
-  promptless. Until synced, orchestrated launches still prompt on `loop`/`build`/`adr`.
-- [ ] **Prereq — the orchestrator owns the worker sessions.** The owner stops manually
-  opening `cc-build`/`cc-build2`/`cc-adrs` (the tmux names collide — both can't
-  coexist); the orchestrator launches them. Kill any stale manual session for a stream
-  before its first orchestrated launch.
-- [ ] **Phase A — supervised `--once` (build confidence).** Run
-  `orchestrator --once --execute --streams <one>` on demand a few times across streams;
-  owner monitors via RC. Prove **AC-5** here: two concurrent orchestrated workers both
-  reach the test phase → the `check-pytest-lock` hook blocks the second (one live
-  pytest, a logged block, no hook-stripping). Prove **adr** here too (needs an Approved
-  adr-stream ticket).
-- [ ] **Phase B — supervised `--loop` in tmux (not systemd).** Run
-  `orchestrator --loop --execute` in a watched tmux window, kill-switch handy, for a
-  session — proves poll cadence + advance + stall handling under real load.
-- [ ] **Phase C — official (systemd enable).**
-  `sudo systemctl enable --now seshat-dispatch-orchestrator`. New default: keep
-  Approved+`stream:*` tickets flowing, monitor via RC, answer build-time prompts.
-  Retire the manual "master briefs → owner primes" step and update
-  lifecycle-rules' Dispatch section.
+Read the file for the exact list. This runbook does not copy it.
+
+**The cutover is complete.** Phase C is live. `seshat-dispatch-orchestrator` is
+enabled and active. Its unit runs `--preflight` as `ExecStartPre`, then
+`python -m scripts.dispatch.orchestrator --loop --execute` as `ExecStart`, with
+`Restart=always`. Check it with:
+
+```
+systemctl is-enabled seshat-dispatch-orchestrator
+systemctl cat seshat-dispatch-orchestrator | grep -E '^Exec'
+```
+
+Two items of the old phased checklist changed after the cutover:
+
+- **The seats.** The dispatcher does not own the seats. `cc-sessions` owns the
+  seat lifecycle, and the launcher creates a seat only when it is absent (FRE-913).
+  The build seats are `cc-1build` and `cc-2build` (FRE-909).
+- **AC-5, the pytest-lock collision.** It no longer applies. The
+  `check-pytest-lock` hook was removed on 2026-07-18 (commit 34d865d8).
 
 **Halt at any point:** `touch telemetry/dispatch.disabled` (kill switch) or
 `sudo systemctl stop seshat-dispatch-orchestrator`.

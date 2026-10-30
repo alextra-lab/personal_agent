@@ -1,201 +1,90 @@
 # Project Directory Structure — Personal Agent
 
 > **Purpose**: Canonical reference for project organization and filesystem hygiene  
-> **Last Updated**: 2026-03-30  
+> **Last Updated**: 2026-10-30 (FRE-1707: tree, directory list and `.gitignore` excerpt rebuilt from `git ls-files` on `main`)  
 > **Status**: Living document — regenerate the tree below when layout changes materially
 
 ---
 
-## Directory tree (representative)
+## Directory tree (tracked files only)
 
-Superseded v0.1 specs and old session logs live in **`docs/archive/`** (see `PRE_REDESIGN_SUMMARY.md` there). Active docs exclude that folder from “current reading” paths.
+The tree shows the directories that git tracks. Runtime directories that git ignores (`.venv/`, the caches, `telemetry/logs/`) are not in the tree. Superseded v0.1 specs and old material live in **`docs/archive/`** (see `docs/archive/PRE_REDESIGN_SUMMARY.md`). The root-file policy is in `docs/reference/ROOT_LEVEL_POLICY.md`.
 
 ```
 personal_agent/
-├── config/                    # Runtime YAML (gitignored except templates); see config/*.template
-├── docker/                    # compose services: postgres, elasticsearch, grafana, searxng, …
+├── .ast-grep/                 # ast-grep rule files (sgconfig.yml loads .ast-grep/rules/)
+├── .claude/                   # Claude Code project config: CLAUDE.md, settings.json, hooks/, skills/, agents/
+├── .cursor/                   # Cursor rules and hooks
+├── .github/                   # PR template and CI workflows
+├── config/                    # Tracked runtime config: models.yaml, model_roles.yaml, governance/, grafana/, otel/, …
+├── docker/                    # Service assets: postgres (init.sql + migrations/), elasticsearch templates, searxng, tempo, sandbox, mcp
 ├── docs/
-│   ├── architecture/          # Living conceptual docs (HOMEOSTASIS_MODEL, …); README points to Redesign v2
-│   ├── architecture_decisions/  # ADRs, HYPOTHESIS_LOG, experiments/, captains_log/, …
-│   ├── archive/               # Historical v0.1 + router-era material (not primary reading)
+│   ├── architecture/          # Conceptual docs (HOMEOSTASIS_MODEL, …); README points to the Redesign v2 spec
+│   ├── architecture_decisions/  # ADR-XXXX files, HYPOTHESIS_LOG, experiments/
+│   ├── archive/               # Superseded v0.1 and router-era material (not current reading)
+│   ├── external-skills/       # SKILL.md files for external agents (seshat-knowledge, -observations, -sessions)
 │   ├── guides/                # How-tos (CONFIGURATION, MCP, …)
-│   ├── plans/                 # OWNER_CONSOLE, LAST_SESSION, sessions/, completed/
-│   ├── reference/             # Standards, directory structure (this file), PATH_PRIVACY
-│   ├── research/              # Eval reports, research notes, context_management_research.md
-│   ├── specs/                 # COGNITIVE_ARCHITECTURE_REDESIGN_v2, CONTEXT_INTELLIGENCE_SPEC, …
-│   ├── superpowers/plans/     # Slice / feature implementation plans
+│   ├── internal/              # Internal development notes
+│   ├── plans/                 # OWNER_CONSOLE, LAST_SESSION, completed/, templates/, sessions/ (dormant)
+│   ├── postmortems/           # Incident post-mortems
+│   ├── reference/             # Standards and references (this file, CODING_STANDARDS, PATH_PRIVACY, …)
+│   ├── research/              # Dated research and eval write-ups
+│   ├── runbooks/              # Operational runbooks
+│   ├── specs/                 # COGNITIVE_ARCHITECTURE_REDESIGN_v2, SESHAT_PROGRAM_ARCHITECTURE, …
+│   ├── superpowers/           # plans/ (implementation plans, canonical location) and specs/
 │   ├── README.md
 │   └── VISION_DOC.md
-├── experiments/               # Standalone experiment code (dspy, langextract, …)
-├── functional-spec/
-├── governance/                # Meta governance README (policies live in config/governance/)
-├── src/personal_agent/        # Application package (orchestrator, request_gateway, memory, …)
-├── telemetry/                 # Runtime logs / eval output (mostly gitignored; see .gitignore for tracked baselines)
-├── tests/                     # Mirror package layout under tests/personal_agent/
+├── e2e/                       # artifact-lib/ Playwright render harness
+├── experiments/               # Standalone experiment code (concurrency_research, dspy_prototype, langextract_evaluation)
+├── functional-spec/           # functional_spec_v0.1.md
+├── governance/                # README only (enforced policies live in config/governance/)
+├── infrastructure/            # VPS scripts/ (deploy, hardening) and systemd/ unit files
+├── models/                    # MODEL_STRATEGY.md
+├── scripts/                   # Operational scripts: dispatch/, eval/, study/, audit/, monitors/, check_*.py guards, migrate_*.py
+├── seshat-pwa/                # The PWA web client (Next.js)
+├── skills/                    # Agent skills: skills/<name>/SKILL.md (ADR-0156) and SKILL_TEMPLATE.md
+├── src/personal_agent/        # Application package (orchestrator, request_gateway, memory, llm_client, tools, …)
+├── telemetry/                 # Runtime output; git tracks only TELEMETRY_OVERVIEW.md, captains_log/README.md and named evaluation/ baselines
+├── tests/                     # Test suite; new tests mirror the package under tests/personal_agent/
+├── tools/                     # TOOLS_OVERVIEW.md and an SLM-server test script
+├── CLAUDE.md
+├── Dockerfile.gateway, Dockerfile.pwa, Dockerfile.filebeat
+├── docker-compose.yml, .cloud.yml, .eval.yml, .study.yml, .test.yml
+├── Makefile
 ├── pyproject.toml
 ├── uv.lock
 ├── README.md
-└── ROADMAP.md
+└── LICENSE
 ```
 
-### Top-level directories (from `find`, excluding .git, .venv, archive)
+### Top-level directories (tracked)
+
+Command: `git ls-files | cut -d/ -f1 | sort -u`, directories only.
 
 ```
-.
-./config
-./docker
-./docs
-./experiments
-./functional-spec
-./governance
-./src
-./telemetry
-./tests
+.ast-grep
+.claude
+.cursor
+.github
+config
+docker
+docs
+e2e
+experiments
+functional-spec
+governance
+infrastructure
+models
+scripts
+seshat-pwa
+skills
+src
+telemetry
+tests
+tools
 ```
 
----
-
-## Legacy detailed tree (deprecated — kept for naming patterns only)
-
-The block below is **not** maintained line-by-line. Prefer the tree above and **`docs/architecture/README.md`**.
-
-```
-personal_agent/
-│
-├── docs/                             # All documentation
-│   └── … (see current tree)
-│
-├── config/                           # Runtime configuration (not in git except templates)
-│   ├── governance/                   # Governance policies (modes, tools, models)
-│   ├── kibana/                       # Dashboard ndjson / import helpers
-│   └── models.yaml.template          # Model endpoint configuration template
-│
-├── functional-spec/                  # Product requirements
-│   └── functional_spec_v0.1.md       # MVP capabilities and scope
-│
-├── governance/                       # Governance framework (meta)
-│   └── README.md                     # Governance process documentation
-│
-├── models/                           # Model strategy and evaluation
-│   └── MODEL_STRATEGY.md             # Model selection philosophy
-│
-├── src/                              # Source code (Python package)
-│   └── personal_agent/               # Main package
-│       ├── __init__.py
-│       ├── brainstem/                # Autonomic control
-│       │   ├── __init__.py
-│       │   ├── mode_manager.py       # Mode state machine
-│       │   └── sensors.py            # Sensor polling
-│       ├── config/                   # Unified configuration (ADR-0007)
-│       │   ├── __init__.py           # Exports: settings, AppConfig
-│       │   ├── settings.py           # AppConfig class
-│       │   ├── env_loader.py         # .env file loading
-│       │   └── validators.py         # Custom Pydantic validators
-│       ├── governance/               # Policy enforcement
-│       │   ├── __init__.py
-│       │   ├── config_loader.py      # Load/validate YAML configs
-│       │   └── models.py             # Pydantic schemas
-│       ├── llm_client/               # 📝 TO CREATE: Model abstraction
-│       │   ├── __init__.py
-│       │   ├── adapters.py           # API adapters
-│       │   ├── client.py             # LocalLLMClient
-│       │   └── types.py              # Response types
-│       ├── orchestrator/             # 📝 TO CREATE: Task execution
-│       │   ├── __init__.py
-│       │   ├── channels.py           # Channel definitions
-│       │   ├── executor.py           # Main loop + step functions
-│       │   ├── session.py            # Session management
-│       │   └── types.py              # State machine types
-│       ├── telemetry/                # 📝 TO CREATE: Observability
-│       │   ├── __init__.py
-│       │   ├── events.py             # Event constants
-│       │   ├── logger.py             # structlog config
-│       │   ├── metrics.py            # Metric readers
-│       │   └── trace.py              # TraceContext
-│       ├── tools/                    # 📝 TO CREATE: Tool execution
-│       │   ├── __init__.py
-│       │   ├── executor.py           # ToolExecutionLayer
-│       │   ├── filesystem.py         # File tools
-│       │   ├── registry.py           # Tool registry
-│       │   ├── system_health.py      # Health check tools
-│       │   └── web.py                # Web search
-│       └── ui/                       # 📝 TO CREATE: User interface
-│           ├── __init__.py
-│           ├── approval.py           # Human approval workflow
-│           └── cli.py                # Typer-based CLI
-│
-├── telemetry/                        # Runtime observability data (gitignored)
-│   ├── logs/                         # Structured JSONL logs
-│   │   └── current.jsonl             # Active log file (rotated)
-│   ├── sessions/                     # Persisted session state
-│   │   ├── archive/                  # Old sessions
-│   │   └── <session_id>.json         # Active session snapshots
-│   └── metrics/                      # Optional: Derived metrics cache
-│
-├── tests/                            # Test suite
-│   ├── integration/                  # 📝 TO CREATE: E2E tests
-│   │   └── test_e2e_flows.py
-│   ├── test_brainstem/               # 📝 TO CREATE: Brainstem tests
-│   ├── test_governance/              # 📝 TO CREATE: Governance tests
-│   ├── test_llm_client/              # 📝 TO CREATE: LLM client tests
-│   ├── test_orchestrator/            # 📝 TO CREATE: Orchestrator tests
-│   ├── test_telemetry/               # 📝 TO CREATE: Telemetry tests
-│   └── test_tools/                   # 📝 TO CREATE: Tool tests
-│
-├── tools/                            # Development/operational tools
-│   └── TOOLS_OVERVIEW.md             # External tool documentation
-│
-├── .gitignore                        # Git exclusions
-├── pyproject.toml                    # Python project config
-├── uv.lock                           # Dependency lock file
-├── README.md                         # Project overview
-├── ROADMAP.md                        # High-level project roadmap
-├── PROJECT_DIRECTORY_STRUCTURE.md    # This file
-├── VISION_DOC.md                     # 📝 TO CREATE: Vision for AI assistants
-└── VALIDATION_CHECKLIST.md           # 📝 TO CREATE: Doc quality checklist
-```
-
----
-
-## Directory Purpose Validation
-
-### ✅ Validated Directories (Will Definitely Use)
-
-| Directory | Purpose | When Created |
-|-----------|---------|--------------|
-| `docs/architecture/` | System design specifications | ✅ Exists |
-| `docs/architecture_decisions/` | ADRs, governance, experiments | ✅ Exists |
-| `docs/architecture_decisions/captains_log/` | Agent self-improvement proposals | 📝 Create Week 4 |
-| `config/governance/` | Runtime governance policies | 📝 Create Week 1 |
-| `docs/plans/` | Project plans, session logs | ✅ Exists |
-| `docs/plans/sessions/` | Development session tracking | ✅ Exists |
-| `src/personal_agent/` | Main codebase | ✅ Exists (skeleton) |
-| `src/personal_agent/config/` | Unified configuration (ADR-0007) | 📝 Create Week 1 |
-| `src/personal_agent/telemetry/` | Observability infrastructure | 📝 Create Week 1 |
-| `src/personal_agent/governance/` | Policy loading/enforcement | 📝 Create Week 1 |
-| `src/personal_agent/orchestrator/` | Task execution engine | 📝 Create Week 1 |
-| `src/personal_agent/llm_client/` | Model abstraction | 📝 Create Week 2 |
-| `src/personal_agent/tools/` | Tool execution layer | 📝 Create Week 3 |
-| `src/personal_agent/brainstem/` | Autonomic control | 📝 Create Week 2 |
-| `src/personal_agent/ui/` | User interface (CLI) | 📝 Create Week 2 |
-| `telemetry/logs/` | Structured log storage | 📝 Auto-created runtime |
-| `telemetry/sessions/` | Session persistence | 📝 Auto-created runtime |
-| `tests/` | Test suite | 📝 Create Week 1 |
-
-### ⚠️ Questionable Directories (May Consolidate)
-
-| Directory | Current Use | Recommendation |
-|-----------|-------------|----------------|
-| `governance/` | Meta-governance docs | **Merge into `architecture_decisions/`** (avoid duplication) |
-| `docs/` | User docs + notes | **Keep but consolidate**: USAGE_GUIDE, API_REFERENCE only |
-| `telemetry/metrics/` | Derived metrics cache | **Phase 2+**: Not needed for MVP (query logs directly) |
-
-### ❌ To Remove/Consolidate
-
-| Item | Reason | Action |
-|------|--------|--------|
-| `governance/README.md` | Meta process vs `config/governance/` policies | Keep short; operational policies live in `config/governance/` (see ADR-0005) |
-| Empty stub files in root | No clear purpose | Document or remove |
+`tests/` holds two layouts. New tests go under `tests/personal_agent/<module>/`, which mirrors `src/personal_agent/`. The older `tests/test_<module>/` directories still exist and still run.
 
 ---
 
@@ -221,14 +110,14 @@ personal_agent/
 
 ### Captain's Log Entries
 
-- **Pattern**: `CL-YYYY-MM-DD-NNN-title.md`
-- **Example**: `CL-2025-12-28-001-threshold-tuning-proposal.md`
-- **Numbering**: Date + sequential number per day
+- **Location**: `telemetry/captains_log/`. These are runtime files. Git ignores them (`telemetry/captains_log/**/*.json`).
+- **Pattern**: `CL-YYYYMMDD-HHMMSS-<id>-NNN-<slug>.json`
+- **Example**: `CL-20260101-120000-0a1b2c3d-001-example-task.json` (an illustration, not a real entry)
 
 ### Session Logs
 
-- **Pattern**: `SESSION-YYYY-MM-DD-description.md`
-- **Example**: `SESSION-2025-12-28-telemetry-implementation.md`
+- **Status**: Dormant. Do not write new session logs (see `.claude/CLAUDE.md`). Session decisions go in `docs/plans/LAST_SESSION.md` and on the Linear ticket.
+- **Old pattern**: `SESSION-YYYY-MM-DD-description.md` in `docs/plans/sessions/`
 
 ---
 
@@ -257,54 +146,44 @@ personal_agent/
 
 ## `.gitignore` Strategy
 
-```gitignore
-# Runtime data (never commit)
-telemetry/
-config/*.yaml
-!config/*.yaml.template
+Git tracks the config YAML files in `config/`. Real secret values stay out of the repo. A tracked `.example` file carries the placeholders (`.env.example`, `config/governance/budget.yaml.example`, `docker/searxng/settings.yml.example`). Git does not ignore `telemetry/` as a whole. It ignores the runtime subdirectories and the raw eval run outputs, and it tracks the named evaluation baselines.
 
-# Python artifacts
+The block below is an **excerpt** of the real `.gitignore` lines. Read `.gitignore` for the full list.
+
+```gitignore
+# Logs
+telemetry/archive/
+telemetry/logs/
+*.log
+*.jsonl
+
+# Captain's Log entries (runtime artifacts, not source code)
+telemetry/captains_log/**/*.json
+
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Testing & type checking cache
 .pytest_cache/
 .mypy_cache/
-*.egg-info/
+.ruff_cache/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# OS
-.DS_Store
-
-# Secrets
-*.key
-*.pem
+# Environment variables (secrets, local configuration)
 .env
-```
+.env.*
+!.env.example
 
----
+# Real operational cost caps — owner ruling 2026-08-09 (FRE-1209): real config
+# values do not belong in the public repo. budget.yaml.example is the template.
+config/governance/budget.yaml
 
-## Directory Creation Checklist (Week 1)
+docker/searxng/settings.yml
 
-```bash
-# Create missing directories
-mkdir -p docs/plans/{sprints,sessions}
-mkdir -p docs/architecture_decisions/captains_log
-mkdir -p config/governance
-mkdir -p src/personal_agent/{config,telemetry,governance,orchestrator,llm_client,tools,brainstem,ui}
-mkdir -p tests/{integration,test_telemetry,test_governance,test_orchestrator,test_llm_client,test_tools,test_brainstem}
+# Claude Code
+.claude/worktrees/
 
-# Create README files for clarity
-touch docs/plans/README.md
-touch docs/architecture_decisions/captains_log/README.md
-touch docs/plans/sessions/SESSION_TEMPLATE.md
-
-# Create gitignore for runtime data
-echo "telemetry/" >> .gitignore
-echo "config/*.yaml" >> .gitignore
-echo "!config/*.yaml.template" >> .gitignore
+.DS_Store
 ```
 
 ---
@@ -313,7 +192,6 @@ echo "!config/*.yaml.template" >> .gitignore
 
 ### Weekly
 
-- Archive old session logs (>30 days)
 - Review empty/stub files, populate or remove
 - Update this document if structure changes
 
@@ -339,9 +217,9 @@ When a new AI assistant or developer joins:
 2. **Check `docs/VISION_DOC.md`** for high-level goals
 3. **Review `docs/plans/OWNER_CONSOLE.md`** for the owner's standing directives
 4. **Scan `docs/architecture_decisions/`** for key decisions
-5. **Look at recent `docs/plans/sessions/`** to see what's happening now
+5. **Read `docs/plans/LAST_SESSION.md`** to see what the last session decided
 
 ---
 
-**Last validated**: 2026-03-30  
+**Last validated**: 2026-10-30  
 **Next review**: When repository layout changes or after major doc migrations

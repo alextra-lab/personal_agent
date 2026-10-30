@@ -152,7 +152,7 @@ def test_every_rule_names_a_known_tool() -> None:
 def test_retired_approval_keys_are_rejected(key: str) -> None:
     """Seeded negative: a stale key cannot read as if it still governed anything."""
     with pytest.raises(ValueError, match="retired by ADR-0156 D8"):
-        ToolPolicy.model_validate({"category": "x", "allowed_in_modes": ["NORMAL"], key: True})
+        ToolPolicy.model_validate({"allowed_in_modes": ["NORMAL"], key: True})
 
 
 def test_tools_yaml_holds_no_retired_key() -> None:

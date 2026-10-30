@@ -91,7 +91,6 @@ get_library_docs_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=40,
-    rate_limit_per_hour=60,
     error_codes=error_codes(GetLibraryDocsError),
     max_result_tokens=25_000,
     truncation_next_action="Call get_library_docs again with a lower tokens value or a topic.",

@@ -102,7 +102,6 @@ edit_tool = ToolDefinition(
     requires_approval=False,  # approval is via the permission rules (ADR-0156 D8)
     requires_sandbox=False,
     timeout_seconds=10,
-    rate_limit_per_hour=None,
     error_codes=error_codes(EditError),
     max_result_tokens=1_000,
 )

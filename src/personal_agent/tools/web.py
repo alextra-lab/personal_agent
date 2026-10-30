@@ -181,7 +181,6 @@ web_search_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=15,
-    rate_limit_per_hour=120,
     error_codes=error_codes(WebSearchError),
     max_result_tokens=20_000,
     truncation_next_action="Call web_search again with a lower max_results or a narrower query.",

@@ -87,7 +87,6 @@ perplexity_query_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=120,
-    rate_limit_per_hour=50,
     error_codes=error_codes(PerplexityQueryError),
     truncation_next_action="Ask a narrower question, or use mode='ask' instead of 'research'.",
 )

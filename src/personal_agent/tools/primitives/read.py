@@ -144,7 +144,6 @@ read_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=10,
-    rate_limit_per_hour=None,
     error_codes=error_codes(ReadError),
     max_result_tokens=25_000,
     truncation_next_action="Read a smaller range with offset and limit, or a lower max_bytes.",

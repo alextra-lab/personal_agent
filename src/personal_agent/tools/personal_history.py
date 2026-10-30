@@ -83,7 +83,6 @@ recall_personal_history_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=30,
-    rate_limit_per_hour=None,
     error_codes=error_codes(PersonalHistoryError),
     max_result_tokens=15_000,
     truncation_next_action=(

@@ -228,7 +228,6 @@ artifact_write_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=30,
-    rate_limit_per_hour=30,
     error_codes=error_codes(ArtifactWriteError),
 )
 
@@ -274,7 +273,6 @@ artifact_list_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=10,
-    rate_limit_per_hour=200,
     error_codes=error_codes(ArtifactListError),
 )
 
@@ -305,7 +303,6 @@ artifact_read_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=10,
-    rate_limit_per_hour=60,
     error_codes=error_codes(ArtifactReadError),
     max_result_tokens=25_000,
     truncation_next_action=(
@@ -1337,7 +1334,6 @@ artifact_draft_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=120,
-    rate_limit_per_hour=20,
     error_codes=error_codes(ArtifactDraftError),
 )
 

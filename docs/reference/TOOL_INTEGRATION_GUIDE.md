@@ -135,7 +135,6 @@ my_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=30,
-    rate_limit_per_hour=100,
     error_codes=error_codes(MyToolError),
 )
 
@@ -192,11 +191,9 @@ registry.register(my_tool, my_tool_executor)
 And in `config/governance/tools.yaml` (availability per mode, limits):
 ```yaml
 my_tool:
-  category: "network"
   allowed_in_modes: ["NORMAL", "DEGRADED"]
   risk_level: "low"
   timeout_seconds: 30
-  rate_limit_per_hour: 100
 ```
 
 And a rule in `config/governance/permissions.yaml` (ADR-0156 D8). A tool with no rule asks the

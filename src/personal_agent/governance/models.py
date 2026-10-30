@@ -87,7 +87,6 @@ class TransitionRule(BaseModel):
 class ToolPolicy(BaseModel):
     """Policy for a specific tool."""
 
-    category: str = Field(..., description="Tool category")
     allowed_in_modes: list[str] = Field(..., description="Modes where tool is allowed")
     forbidden_in_modes: list[str] = Field(
         default_factory=list, description="Modes where tool is forbidden"
@@ -104,16 +103,6 @@ class ToolPolicy(BaseModel):
             "(scratch / sandbox directories, e.g. /tmp/**, /app/agent_workspace/sandbox/**)"
         ),
     )
-    allowed_commands: list[str] = Field(
-        default_factory=list, description="Allowed command patterns"
-    )
-    forbidden_commands: list[str] = Field(
-        default_factory=list, description="Forbidden command patterns"
-    )
-    requires_outbound_gateway: bool = Field(
-        False, description="Whether outbound gateway is required"
-    )
-    rate_limit_per_hour: int | None = Field(None, ge=0, description="Rate limit per hour")
     loop_max_per_signature: int = Field(
         default=1,
         ge=0,

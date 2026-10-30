@@ -79,7 +79,6 @@ expand_tool_result_tool = ToolDefinition(
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=10,
-    rate_limit_per_hour=60,
     error_codes=error_codes(ExpandToolResultError),
 )
 

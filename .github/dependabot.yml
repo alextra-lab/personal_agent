@@ -1,0 +1,48 @@
+# Dependabot (FRE-1717). Security updates only.
+#
+# open-pull-requests-limit: 0 turns off version-update PRs. Security-update PRs
+# have their own limit and still open. They need the repo setting
+# "Dependabot security updates" to be on.
+#
+# Each entry groups all security updates for one lock file into one PR.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/seshat-pwa"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      pwa-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/scripts/dispatch/channel/plugins/seshat-dispatch"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      plugin-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]

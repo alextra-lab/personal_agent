@@ -2,18 +2,24 @@
  * SettingsView — read-only menu of every parameter that changes a turn (FRE-1702, stage 1
  * of FRE-1698).
  *
- * Nine groups on `/settings`, and the System group on `/settings/system`. Each row shows
+ * Nine groups on `/settings`, and the System group on `/settings/system`. Each group is an
+ * accordion section, closed by default (FRE-1710). The closed header shows the group name,
+ * its parameter count, and a marker when the group holds a saved choice. Each row shows
  * the parameter name, its live value and the source that wins. A saved choice shows beside
  * the default that it overrides. The menu edits nothing. The one control is "Clear" on a
  * saved choice, which calls `DELETE /api/v1/preferences/constraint`.
  *
  * MANUAL TEST PLAN
  * ================
- * 1. Open /settings from the session drawer ("Settings"). Expected: nine groups, each row
- *    with a value and a source label. The first group follows the open conversation.
- * 2. Open "System" from the header. Expected: background jobs, infrastructure, secrets.
- *    A secret or infrastructure value reads "set" or "not set", never the value.
+ * 1. Open /settings from the session drawer ("Settings"). Expected: nine closed groups, each
+ *    header with a name and a count. Tap one header. Expected: only that group opens, each row
+ *    with a value and a source label. Tap it again. Expected: it closes. The first group
+ *    follows the open conversation.
+ * 2. Open "System" from the header, then tap its header. Expected: background jobs,
+ *    infrastructure, secrets. A secret or infrastructure value reads "set" or "not set",
+ *    never the value.
  * 3. Save a choice with "Remember this choice" on a decision card, then reload /settings.
+ *    Expected: the "Saved choices" header shows a saved-choice marker while closed. Open it.
  *    Expected: the row shows the saved value, "database row", and the default it overrides.
  * 4. Press Clear on that row. Expected: the row reads "not set" and the button is gone.
  */
@@ -111,23 +117,58 @@ function Row({ row, onClear }: { row: SettingRow; onClear: (row: SettingRow) => 
   );
 }
 
+function ChevronIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={`h-3 w-3 flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 20 20"
+      fill="currentColor"
+    >
+      <path
+        fillRule="evenodd"
+        d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+/** Accordion section: a header button with the name and count, rows only while open. */
 function Group({ group, onClear }: { group: SettingsGroup; onClear: (row: SettingRow) => void }) {
+  const [open, setOpen] = useState(false);
   const headingId = `settings-group-${group.id}`;
+  const savedChoices = group.rows.filter((row) => row.clearable).length;
   return (
     <section aria-labelledby={headingId}>
-      <h2
-        id={headingId}
-        className="text-xs font-semibold uppercase tracking-wide text-ink-muted mb-2"
-      >
-        {group.title}
+      <h2 id={headingId} className="mb-2">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-muted hover:text-ink transition-colors"
+        >
+          <ChevronIcon expanded={open} />
+          <span>
+            {group.title}
+            {!group.error && ` (${group.rows.length})`}
+          </span>
+          {group.error && <SourceBadge source="unavailable" />}
+          {savedChoices > 0 && (
+            <SourceBadge source={savedChoices === 1 ? 'saved choice' : `${savedChoices} saved choices`} />
+          )}
+        </button>
       </h2>
-      <div className="rounded-xl border border-line divide-y divide-line overflow-hidden">
-        {group.error ? (
-          <p className="px-3 py-4 text-xs text-ink-muted">This group could not be loaded.</p>
-        ) : (
-          group.rows.map((row) => <Row key={row.name} row={row} onClear={onClear} />)
-        )}
-      </div>
+      {open && (
+        <div className="rounded-xl border border-line divide-y divide-line overflow-hidden">
+          {group.error ? (
+            <p className="px-3 py-4 text-xs text-ink-muted">This group could not be loaded.</p>
+          ) : (
+            group.rows.map((row) => <Row key={row.name} row={row} onClear={onClear} />)
+          )}
+        </div>
+      )}
     </section>
   );
 }

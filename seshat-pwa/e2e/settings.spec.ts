@@ -1,5 +1,6 @@
 /**
- * Playwright e2e for the read-only settings menu (FRE-1702, AC-1 / AC-2 / AC-5).
+ * Playwright e2e for the read-only settings menu (FRE-1702, AC-1 / AC-2 / AC-5), and for the
+ * accordion groups that are closed by default (FRE-1710).
  *
  * Runs against the production bundle (see playwright.config.ts). The backend is mocked:
  * the payload below has the shape of `GET /api/v1/settings`, which the Python tests in
@@ -68,6 +69,11 @@ async function stubSettings(page: Page, state: { saved: boolean }) {
   );
 }
 
+/** The accordion header of a group: the button inside the group heading. */
+function header(page: Page, title: string) {
+  return page.getByRole('heading', { level: 2, name: new RegExp(`^${title}`) }).getByRole('button');
+}
+
 test.describe('Settings menu (FRE-1702)', () => {
   test.use({ viewport: { width: 1000, height: 900 } });
 
@@ -76,10 +82,14 @@ test.describe('Settings menu (FRE-1702)', () => {
     await page.goto('/settings');
 
     for (const [, title] of GROUPS) {
-      await expect(page.getByRole('heading', { name: title })).toBeVisible();
+      await expect(header(page, title)).toHaveAttribute('aria-expanded', 'false');
     }
-    await expect(page.getByRole('heading', { name: /System/ })).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 2, name: /System/ })).toHaveCount(0);
+    await expect(page.getByTestId('setting-row')).toHaveCount(0);
 
+    for (const [, title] of GROUPS) {
+      await header(page, title).click();
+    }
     const rows = page.getByTestId('setting-row');
     const count = await rows.count();
     expect(count).toBeGreaterThanOrEqual(GROUPS.length);
@@ -98,7 +108,8 @@ test.describe('Settings menu (FRE-1702)', () => {
     await page.getByRole('link', { name: 'System' }).click();
 
     await expect(page).toHaveURL(/\/settings\/system$/);
-    await expect(page.getByRole('heading', { name: 'System (read-only)' })).toBeVisible();
+    await expect(header(page, 'System \\(read-only\\)')).toHaveAttribute('aria-expanded', 'false');
+    await header(page, 'System \\(read-only\\)').click();
     const secret = page.getByTestId('setting-row').filter({ hasText: 'setting.neo4j_password' });
     await expect(secret).toContainText('set');
     await expect(secret).toContainText('.env');
@@ -109,6 +120,8 @@ test.describe('Settings menu (FRE-1702)', () => {
     await stubSettings(page, { saved: true });
     await page.goto('/settings');
 
+    await expect(header(page, 'Saved choices')).toContainText('saved choice');
+    await header(page, 'Saved choices').click();
     const saved = page.getByTestId('setting-row').filter({ hasText: 'saved_choice.artifact_builder' });
     await expect(saved).toContainText('claude_sonnet');
     await expect(saved).toContainText('database row');
@@ -128,13 +141,14 @@ test.describe('Settings menu (FRE-1702)', () => {
     });
     await page.goto('/settings');
 
+    await header(page, 'Saved choices').click();
     await expect(page.locator('input, select, textarea')).toHaveCount(0);
-    const buttons = page.getByRole('button');
+    const buttons = page.getByRole('button', { name: 'Clear' });
     await expect(buttons).toHaveCount(1);
     await expect(buttons.first()).toHaveText('Clear');
 
     await buttons.first().click();
-    await expect(page.getByRole('button')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Clear' })).toHaveCount(0);
     expect(deleteUrl).toContain('constraint_name=artifact_builder');
     await expect(
       page.getByTestId('setting-row').filter({ hasText: 'saved_choice.artifact_builder' }),
@@ -151,6 +165,22 @@ test.describe('Settings menu (FRE-1702)', () => {
     const link = page.getByRole('link', { name: 'Settings' });
     await expect(link).toHaveAttribute('href', `/settings?session=${TEST_SESSION}`);
     await link.click();
-    await expect(page.getByRole('heading', { name: 'This conversation' })).toBeVisible();
+    await expect(header(page, 'This conversation')).toBeVisible();
+  });
+});
+
+test.describe('Settings accordion at phone width (FRE-1710, AC-4)', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('all groups closed, then one group open', async ({ page }) => {
+    await stubSettings(page, { saved: true });
+    await page.goto('/settings');
+    await expect(header(page, 'Saved choices')).toBeVisible();
+    await page.screenshot({ path: 'test-results/settings-accordion-closed.png', fullPage: true });
+
+    await header(page, 'Saved choices').click();
+    await expect(header(page, 'Saved choices')).toHaveAttribute('aria-expanded', 'true');
+    await page.waitForTimeout(300); // let the chevron finish turning
+    await page.screenshot({ path: 'test-results/settings-accordion-open.png', fullPage: true });
   });
 });

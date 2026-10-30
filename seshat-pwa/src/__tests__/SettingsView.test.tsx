@@ -5,6 +5,11 @@
  *   every row shows its name, live value and winning source.
  * AC-2: a saved choice shows beside the default that it overrides.
  * AC-5: the only control is "Clear" on a saved choice. No input, select, textarea or toggle.
+ *
+ * FRE-1710: each group is an accordion section, closed by default.
+ * AC-1: every group is closed at first render, a click opens only that group, a second click closes it.
+ * AC-2: a header shows the group name and its parameter count, and a marker for a saved choice.
+ * AC-3: a header is a focusable button with `aria-expanded` false when closed and true when open.
  */
 
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -119,6 +124,15 @@ function withSavedChoice(): SettingsMenu {
   return m;
 }
 
+/** The accordion header of a group: the button inside the group heading. */
+function header(title: string): HTMLElement {
+  return within(screen.getByRole('heading', { level: 2, name: new RegExp(`^${title}`) })).getByRole('button');
+}
+
+async function openGroup(title: string): Promise<void> {
+  await userEvent.click(header(title));
+}
+
 beforeEach(() => {
   mockGetSettingsMenu.mockReset();
   mockClear.mockReset();
@@ -134,10 +148,11 @@ describe('SettingsView menu page (AC-1)', () => {
     render(<SettingsView view="menu" />);
 
     for (const title of GROUP_TITLES) {
-      expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: new RegExp(`^${title}`) })).toBeInTheDocument();
     }
     expect(screen.queryByRole('heading', { name: /System/ })).not.toBeInTheDocument();
 
+    await openGroup('How a turn runs');
     const row = screen.getByText('turn_runs.example').closest('[data-testid="setting-row"]') as HTMLElement;
     expect(within(row).getByText('value-of-turn_runs')).toBeInTheDocument();
     expect(within(row).getByText('config file')).toBeInTheDocument();
@@ -156,8 +171,9 @@ describe('SettingsView System page (AC-1)', () => {
     mockGetSettingsMenu.mockResolvedValue(menu());
     render(<SettingsView view="system" />);
 
-    expect(await screen.findByRole('heading', { name: 'System (read-only)' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Saved choices' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: /^System \(read-only\)/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Saved choices/ })).not.toBeInTheDocument();
+    await openGroup('System');
     const row = screen.getByText('setting.neo4j_password').closest('[data-testid="setting-row"]') as HTMLElement;
     expect(within(row).getByText('set')).toBeInTheDocument();
     expect(within(row).getByText('.env')).toBeInTheDocument();
@@ -168,6 +184,8 @@ describe('saved choice beside its default (AC-2)', () => {
   it('shows the overridden default and its source next to the saved value', async () => {
     mockGetSettingsMenu.mockResolvedValue(withSavedChoice());
     render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+    await openGroup('Saved choices');
 
     const row = (await screen.findByText('saved_choice.artifact_builder')).closest(
       '[data-testid="setting-row"]',
@@ -183,6 +201,8 @@ describe('no control edits a parameter (AC-5)', () => {
   it('has no input, select, textarea, switch or checkbox', async () => {
     mockGetSettingsMenu.mockResolvedValue(withSavedChoice());
     const { container } = render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+    await openGroup('Saved choices');
     await screen.findByText('saved_choice.artifact_builder');
 
     expect(container.querySelectorAll('input, select, textarea')).toHaveLength(0);
@@ -191,21 +211,25 @@ describe('no control edits a parameter (AC-5)', () => {
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
   });
 
-  it('has one button per clearable row, and each says Clear', async () => {
+  it('has one Clear button per clearable row, and each says Clear', async () => {
     mockGetSettingsMenu.mockResolvedValue(withSavedChoice());
     render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+    await openGroup('Saved choices');
     await screen.findByText('saved_choice.artifact_builder');
 
-    const buttons = screen.getAllByRole('button');
+    const buttons = screen.getAllByRole('button', { name: 'Clear' });
     expect(buttons).toHaveLength(1);
     expect(buttons[0]).toHaveTextContent(/^Clear$/);
   });
 
-  it('shows no button at all when no saved choice exists', async () => {
+  it('shows no Clear button when no saved choice exists', async () => {
     mockGetSettingsMenu.mockResolvedValue(menu());
     render(<SettingsView view="menu" />);
-    await screen.findByText('conversation.example');
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    await screen.findByRole('heading', { name: /^This conversation/ });
+    await openGroup('This conversation');
+    expect(screen.getByText('conversation.example')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument();
   });
 });
 
@@ -224,11 +248,13 @@ describe('Clear', () => {
     mockGetSettingsMenu.mockResolvedValueOnce(cleared);
 
     render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+    await openGroup('Saved choices');
     await userEvent.click(await screen.findByRole('button', { name: 'Clear' }));
 
     expect(mockClear).toHaveBeenCalledWith('artifact_builder');
     await waitFor(() => expect(mockGetSettingsMenu).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryAllByRole('button')).toHaveLength(0));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument());
   });
 
   it('shows an error and keeps the row when the DELETE fails', async () => {
@@ -236,6 +262,8 @@ describe('Clear', () => {
     mockClear.mockRejectedValue(new Error('clearConstraintPreference failed: 500'));
 
     render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+    await openGroup('Saved choices');
     await userEvent.click(await screen.findByRole('button', { name: 'Clear' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not clear/i);
@@ -248,7 +276,7 @@ describe('session wiring', () => {
     mockSearchParams = new URLSearchParams('session=11111111-1111-1111-1111-111111111111');
     mockGetSettingsMenu.mockResolvedValue(menu());
     render(<SettingsView view="menu" />);
-    await screen.findByText('conversation.example');
+    await screen.findByRole('heading', { name: /^This conversation/ });
     expect(mockGetSettingsMenu).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
   });
 
@@ -256,7 +284,7 @@ describe('session wiring', () => {
     localStorage.setItem('seshat_last_session_id', '22222222-2222-2222-2222-222222222222');
     mockGetSettingsMenu.mockResolvedValue(menu());
     render(<SettingsView view="menu" />);
-    await screen.findByText('conversation.example');
+    await screen.findByRole('heading', { name: /^This conversation/ });
     expect(mockGetSettingsMenu).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
   });
 
@@ -278,7 +306,7 @@ describe('a stale session id', () => {
       .mockResolvedValueOnce(menu());
     render(<SettingsView view="menu" />);
 
-    expect(await screen.findByText('conversation.example')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^This conversation/ })).toBeInTheDocument();
     expect(mockGetSettingsMenu).toHaveBeenNthCalledWith(1, '44444444-4444-4444-4444-444444444444');
     expect(mockGetSettingsMenu).toHaveBeenNthCalledWith(2, undefined);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -299,7 +327,10 @@ describe('failure states', () => {
     mockGetSettingsMenu.mockResolvedValue(m);
     render(<SettingsView view="menu" />);
 
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+    await openGroup('Budgets and cost');
     expect(await screen.findByText(/could not be loaded/i)).toBeInTheDocument();
+    await openGroup('Memory and recall');
     expect(screen.getByText('memory.example')).toBeInTheDocument();
   });
 
@@ -326,9 +357,161 @@ describe('structured values', () => {
     mockGetSettingsMenu.mockResolvedValue(m);
     render(<SettingsView view="menu" />);
 
+    await screen.findByRole('heading', { name: /^Effort presets and model modes/ });
+    await openGroup('Effort presets and model modes');
     const row = (await screen.findByText('effort.level.deep')).closest('[data-testid="setting-row"]') as HTMLElement;
     expect(within(row).getByText('sub_agent_rounds')).toBeInTheDocument();
     expect(within(row).getByText('20')).toBeInTheDocument();
     expect(within(row).getByText('baseline')).toBeInTheDocument();
+  });
+});
+
+describe('accordion groups (FRE-1710)', () => {
+  it('AC-1: closes every group at first render, and a click opens only that group', async () => {
+    mockGetSettingsMenu.mockResolvedValue(menu());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+
+    for (const title of GROUP_TITLES) {
+      expect(header(title)).toHaveAttribute('aria-expanded', 'false');
+    }
+    expect(screen.queryAllByTestId('setting-row')).toHaveLength(0);
+
+    await openGroup('Budgets and cost');
+
+    expect(header('Budgets and cost')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getAllByTestId('setting-row')).toHaveLength(1);
+    expect(screen.getByText('budgets.example')).toBeInTheDocument();
+    for (const title of GROUP_TITLES.filter((t) => t !== 'Budgets and cost')) {
+      expect(header(title)).toHaveAttribute('aria-expanded', 'false');
+    }
+  });
+
+  it('AC-1: a second click closes the group', async () => {
+    mockGetSettingsMenu.mockResolvedValue(menu());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+
+    await openGroup('Budgets and cost');
+    await openGroup('Budgets and cost');
+
+    expect(header('Budgets and cost')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('budgets.example')).not.toBeInTheDocument();
+  });
+
+  it('keeps the other sections as they were when one section toggles', async () => {
+    mockGetSettingsMenu.mockResolvedValue(menu());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+
+    await openGroup('Budgets and cost');
+    await openGroup('Memory and recall');
+    await openGroup('Budgets and cost');
+
+    expect(screen.queryByText('budgets.example')).not.toBeInTheDocument();
+    expect(screen.getByText('memory.example')).toBeInTheDocument();
+    expect(header('Memory and recall')).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('AC-1: closes the System group at first render too', async () => {
+    mockGetSettingsMenu.mockResolvedValue(menu());
+    render(<SettingsView view="system" />);
+    await screen.findByRole('heading', { level: 2, name: /^System/ });
+
+    expect(header('System')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('setting.neo4j_password')).not.toBeInTheDocument();
+
+    await openGroup('System');
+    expect(screen.getByText('setting.neo4j_password')).toBeInTheDocument();
+  });
+
+  it('AC-2: shows the group name with its parameter count in the header', async () => {
+    const m = menu();
+    m.groups[4].rows = [
+      ...m.groups[4].rows,
+      { ...m.groups[4].rows[0], name: 'budgets.second' },
+      { ...m.groups[4].rows[0], name: 'budgets.third' },
+    ];
+    mockGetSettingsMenu.mockResolvedValue(m);
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+
+    expect(header('Budgets and cost')).toHaveTextContent('Budgets and cost (3)');
+    expect(header('Memory and recall')).toHaveTextContent('Memory and recall (1)');
+  });
+
+  it('AC-2: marks a group that holds a saved choice, while the group is closed', async () => {
+    mockGetSettingsMenu.mockResolvedValue(withSavedChoice());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+
+    expect(header('Saved choices')).toHaveAttribute('aria-expanded', 'false');
+    expect(header('Saved choices')).toHaveTextContent('Saved choices (2)');
+    expect(header('Saved choices')).toHaveTextContent('saved choice');
+    expect(header('Budgets and cost')).not.toHaveTextContent('saved choice');
+  });
+
+  it('AC-2: shows a count of saved choices when a group holds more than one', async () => {
+    const m = withSavedChoice();
+    m.groups[1].rows[1] = { ...m.groups[1].rows[1], clearable: true, value: 'x', source: 'database row' };
+    mockGetSettingsMenu.mockResolvedValue(m);
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+
+    expect(header('Saved choices')).toHaveTextContent('2 saved choices');
+  });
+
+  it('AC-2: drops the marker after Clear removes the last saved choice', async () => {
+    mockGetSettingsMenu.mockResolvedValueOnce(withSavedChoice());
+    mockClear.mockResolvedValue({ constraint_name: 'artifact_builder', cleared: true });
+    mockGetSettingsMenu.mockResolvedValueOnce(menu());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Saved choices/ });
+
+    await openGroup('Saved choices');
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
+
+    await waitFor(() => expect(header('Saved choices')).not.toHaveTextContent('saved choice'));
+    expect(header('Saved choices')).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('AC-2: says in the header that a group could not be loaded', async () => {
+    const m = menu();
+    m.groups[4] = { ...m.groups[4], rows: [], error: 'unavailable' };
+    mockGetSettingsMenu.mockResolvedValue(m);
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+
+    expect(header('Budgets and cost')).toHaveTextContent(/unavailable/i);
+    expect(header('Budgets and cost')).not.toHaveTextContent('(0)');
+  });
+
+  it('AC-3: makes each header a focusable button that carries aria-expanded', async () => {
+    mockGetSettingsMenu.mockResolvedValue(menu());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+
+    for (const title of GROUP_TITLES) {
+      const button = header(title);
+      expect(button.tagName).toBe('BUTTON');
+      expect(button).toHaveAttribute('type', 'button');
+      expect(button).toHaveAttribute('aria-expanded', 'false');
+      button.focus();
+      expect(button).toHaveFocus();
+    }
+    await openGroup('Budgets and cost');
+    expect(header('Budgets and cost')).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('AC-3: opens and closes a focused header with Enter and with Space', async () => {
+    mockGetSettingsMenu.mockResolvedValue(menu());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Budgets and cost/ });
+
+    header('Budgets and cost').focus();
+    await userEvent.keyboard('{Enter}');
+    expect(header('Budgets and cost')).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.keyboard(' ');
+    expect(header('Budgets and cost')).toHaveAttribute('aria-expanded', 'false');
   });
 });

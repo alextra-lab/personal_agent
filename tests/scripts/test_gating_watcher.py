@@ -36,6 +36,7 @@ from scripts.dispatch.gating_watcher import (
     CheckResult,
     ContextReading,
     PullRequest,
+    _check_state,
     _context_pressure_threshold_default,
     build_channel_payload,
     build_master_channel_payload,
@@ -193,6 +194,34 @@ def test_ci_status_incomplete_is_pending() -> None:
 def test_ci_status_unknown_conclusion_is_pending_not_failure() -> None:
     rollup = [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": ""}]
     assert ci_status(rollup) == "pending"
+
+
+# GitHub can leave a finished CheckRun at status IN_PROGRESS with a conclusion set
+# (FRE-1721: `Detect changed paths` on PR #1397). The conclusion decides.
+
+
+def test_check_state_in_progress_with_success_conclusion_is_pass() -> None:
+    check = {"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": "SUCCESS"}
+    assert _check_state(check) == "pass"
+
+
+def test_check_state_in_progress_with_failure_conclusion_is_fail() -> None:
+    check = {"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": "FAILURE"}
+    assert _check_state(check) == "fail"
+
+
+@pytest.mark.parametrize("conclusion", [None, ""])
+def test_check_state_in_progress_without_conclusion_is_pending(conclusion: str | None) -> None:
+    check = {"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": conclusion}
+    assert _check_state(check) == "pending"
+
+
+def test_ci_status_in_progress_check_with_success_conclusion_is_success() -> None:
+    rollup = [
+        {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": "SUCCESS"},
+    ]
+    assert ci_status(rollup) == "success"
 
 
 # --- has_ci_red_ack --------------------------------------------------------
@@ -566,6 +595,24 @@ def test_fetch_open_prs_detects_dependabot_author() -> None:
     view_json = (
         '{"number": 500, "headRefName": "dependabot/npm_and_yarn/x", "headRefOid": "def456",'
         ' "mergeable": "MERGEABLE", "author": {"login": "dependabot[bot]"},'
+        ' "statusCheckRollup": [], "comments": []}'
+    )
+    runner = _RecordingRunner(
+        {
+            ("gh", "pr", "list"): _FakeRunResult(returncode=0, stdout=list_json),
+            ("gh", "pr", "view"): _FakeRunResult(returncode=0, stdout=view_json),
+        }
+    )
+    prs = fetch_open_prs(runner)
+    assert prs[0].is_dependabot is True
+
+
+def test_fetch_open_prs_detects_gh_cli_dependabot_login() -> None:
+    # `gh pr view` reports the Dependabot App as "app/dependabot" (FRE-1721).
+    list_json = '[{"number": 501}]'
+    view_json = (
+        '{"number": 501, "headRefName": "dependabot/npm_and_yarn/y", "headRefOid": "def457",'
+        ' "mergeable": "MERGEABLE", "author": {"login": "app/dependabot", "is_bot": true},'
         ' "statusCheckRollup": [], "comments": []}'
     )
     runner = _RecordingRunner(

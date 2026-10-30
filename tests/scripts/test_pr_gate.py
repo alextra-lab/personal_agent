@@ -180,6 +180,12 @@ def test_view_failure_makes_author_unknown() -> None:
     assert parse_author_identity("", 1) == {"is_dependabot_author": UNKNOWN}
 
 
+def test_gh_cli_dependabot_login_is_dependabot() -> None:
+    # `gh pr view` reports the Dependabot App as "app/dependabot" (FRE-1721).
+    view = '{"author":{"login":"app/dependabot","is_bot":true}}'
+    assert parse_author_identity(view, 0) == {"is_dependabot_author": True}
+
+
 def test_dependabot_identity_is_boolean_only() -> None:
     view = '{"author":{"login":"dependabot[bot]"}}'
     assert parse_author_identity(view, 0) == {"is_dependabot_author": True}

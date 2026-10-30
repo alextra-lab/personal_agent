@@ -138,6 +138,7 @@ from scripts.dispatch.seat_readings import (
     seat_busy_state,
 )
 from scripts.dispatch.tmux_target import exact_pane, exact_session
+from scripts.pr_gate import DEPENDABOT_LOGINS
 from scripts.reconcile_board import _git_toplevel, load_linear_key
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -152,9 +153,6 @@ _CI_ACK_RE = re.compile(r"Ack: addressing red CI at ([0-9a-fA-F]{7,40})")
 
 # PR branch → ticket: worker branches are ``fre-<id>-<slug>``.
 _BRANCH_RE = re.compile(r"^fre-(\d+)", re.IGNORECASE)
-
-# The GitHub App login dependabot-authored PRs carry (FRE-872, ADR-0116 AC-6).
-_DEPENDABOT_LOGIN = "dependabot[bot]"
 
 # Stream label → dispatch stream key (maps to a launcher tmux session).
 _STREAM_FROM_LABEL: dict[str, str] = {
@@ -390,10 +388,12 @@ def _check_state(check: Mapping[str, object]) -> Literal["pass", "fail", "pendin
         if state in {"ERROR", "FAILURE"}:
             return "fail"
         return "pending"
-    # CheckRun (the default).
-    if str(check.get("status") or "").upper() != "COMPLETED":
-        return "pending"
+    # CheckRun (the default). GitHub sets a conclusion only when a run ends, but
+    # can leave ``status`` at IN_PROGRESS after that (FRE-1721), so a non-empty
+    # conclusion counts as complete.
     conclusion = str(check.get("conclusion") or "").upper()
+    if str(check.get("status") or "").upper() != "COMPLETED" and not conclusion:
+        return "pending"
     if conclusion in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
         return "pass"
     if conclusion in {
@@ -883,7 +883,7 @@ def _fetch_pr_detail(number: int, runner: CommandRunner) -> PullRequest | None:
         ci=_aggregate_ci_status([c.state for c in checks]),
         comment_bodies=bodies,
         checks=checks,
-        is_dependabot=login == _DEPENDABOT_LOGIN,
+        is_dependabot=login in DEPENDABOT_LOGINS,
     )
 
 

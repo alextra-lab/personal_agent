@@ -165,10 +165,13 @@ The `/chat` endpoint also accepts the query parameters `model`, `channel` and `s
 
 ```bash
 curl http://localhost:9000/api/v1/sessions \
-  -H "Authorization: Bearer $GATEWAY_TOKEN"
+  -H "Authorization: Bearer $GATEWAY_TOKEN" \
+  -H "cf-access-authenticated-user-email: $OWNER_EMAIL"
 ```
 
-Returns the 20 most recent sessions, ordered by last activity. Use `?limit=N` to change the number. Each entry has `session_id`, `created_at`, `last_active_at`, `mode`, `channel`, `message_count`, `turn_count`, `title` (the first user message, 60 characters at most), `session_label` and `session_digest`. Source: `src/personal_agent/gateway/session_api.py`, functions `list_sessions` and `_session_to_dict`.
+The `/api/v1/sessions` routes need two things: a bearer token with the `sessions:read` scope, and a Cloudflare Access identity. If `AGENT_GATEWAY_AUTH_ENABLED` is off, send the header `cf-access-authenticated-user-email`. If it is on, the request must carry a verified `Cf-Access-Jwt-Assertion`. A request without an identity gets 401. Source: `src/personal_agent/gateway/session_api.py` (module docstring), `src/personal_agent/service/auth.py`, function `resolve_request_email`.
+
+Returns the 20 most recent sessions, ordered by last activity. Use `?limit=N` to change the number. Each entry has `session_id`, `created_at`, `last_active_at`, `mode`, `channel`, `message_count`, `turn_count`, `title` (the first user message, cut to 60 characters, with `…` added if it was cut), `session_label` and `session_digest`. Source: `src/personal_agent/gateway/session_api.py`, functions `list_sessions` and `_session_to_dict`.
 
 ### Resume a session
 
@@ -244,7 +247,7 @@ GET /api/v1/sessions/{session_id}/messages?limit=200
 Authorization: Bearer <token>
 ```
 
-Returns the full message history in chronological order. Each message has `role`, `content`, `timestamp`, `trace_id` and `metadata.source`. The call returns 404 if the session does not exist.
+Returns the last `limit` messages (default 50) in chronological order. Each message has `role`, `content`, `timestamp`, `trace_id` and `metadata.source`. The call returns 404 if the session does not exist.
 
 ### Change the model or the effort of a session
 
@@ -370,9 +373,9 @@ Edit the files in `config/governance/` to change the policies:
 
 - **modes.yaml**: the operating modes and the transition rules
 - **tools.yaml**: the tool permissions and risk levels
-- **permissions.yaml**: the permission rules
+- **permissions.yaml**: the permission rules (read by the tool executor, `src/personal_agent/tools/executor.py`)
 
-Source: `config/governance/`, `src/personal_agent/config/governance_loader.py`.
+Source: `config/governance/`, `src/personal_agent/config/governance_loader.py` (modes and tools).
 
 ## Common Tasks
 
@@ -508,7 +511,7 @@ An `open: true` role can be selected by the user. There is no router model. Sour
 - **Logs**: structured JSON logs in `telemetry/logs/`, and Elasticsearch
 - **Metrics and events**: Elasticsearch (`agent-logs-*`)
 - **Traces**: Tempo, with `trace_id` correlation
-- **Grafana**: `http://localhost:3000` with the local compose file. The cloud stack publishes Grafana on host port 3003, and the PWA uses port 3000.
+- **Grafana**: `http://localhost:3000` with the local compose file. The cloud stack publishes Grafana on `127.0.0.1` at the host port `GRAFANA_HOST_PORT` (default 3001), and the PWA uses port 3000.
 
 Source: `docker-compose.yml`, `docker-compose.cloud.yml`, `config/otel/`.
 

@@ -189,7 +189,7 @@ Return a list of sessions (`list[SessionResponse]`). This is the local service p
 
 #### `GET /api/v1/sessions`
 
-Return the recent sessions, ordered by `last_active_at` in descending order. The call needs the `sessions:read` scope.
+Return the recent sessions, ordered by `last_active_at` in descending order. The call needs the `sessions:read` scope and a Cloudflare Access identity (the header `cf-access-authenticated-user-email`, or a verified `Cf-Access-Jwt-Assertion` if `gateway_auth_enabled` is on). A request without an identity gets 401. Source: `gateway/session_api.py`, `service/auth.py`.
 
 **Query parameters**: `limit` (default 20)
 
@@ -212,11 +212,11 @@ Return the recent sessions, ordered by `last_active_at` in descending order. The
 ]
 ```
 
-The server derives `title` from the first user message, truncated to 60 characters at most. The fields `session_label` and `session_digest` come from the Neo4j session digest. They are `null` when no digest exists.
+The server derives `title` from the first user message, cut to 60 characters, with `…` added if it was cut. The fields `session_label` and `session_digest` come from the Neo4j session digest. They are `null` when no digest exists.
 
 #### `GET /api/v1/sessions/{session_id}/messages`
 
-Return the message history of a session in chronological order. The call needs the `sessions:read` scope.
+Return the last `limit` messages of a session in chronological order. The call needs the `sessions:read` scope and the same identity as the list call.
 
 **Query parameters**: `limit` (default 50)
 
@@ -318,7 +318,7 @@ The providers in `config/models.yaml` are `slm_local`, `ovh`, `ovhcloud`, `scale
 | `quantization` | string | no | The quantization label of a local model |
 | `dialect` | string | no | An override of the provider dialect |
 | `modes` | map[string, ModeSpec] | yes for `kind: llm` | The named sampler and thinking presets |
-| `default_mode` | string | no | The mode that a caller gets when it names none |
+| `default_mode` | string | yes if `modes` is set | The mode that a caller gets when it names none. The loader rejects `modes` without it. |
 | `supports_function_calling` | bool | no | Whether the model supports tool calls |
 | `tool_calling_strategy` | `native` \| `prompt` \| `disabled` | no | How the client sends tool calls |
 | `parallel_tool_calls` | bool | no | Whether the model can return several tool calls in one turn |
@@ -352,7 +352,7 @@ The file has a `bindings:` map. Each key is a role. Each value is a `RoleBinding
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `deployment` | string | yes | A key in `models:` of `config/models.yaml` |
+| `deployment` | string | yes | A key in `models:` of `config/models.yaml`, or `inherit` (the `sub_agent` role uses it) |
 | `open` | bool | no (default `false`) | If `true`, the user can select the deployment for this role. A role without `open` is pinned. |
 | `max_tokens` | int | no | A per-use output cap |
 | `mode` | string | no | The named mode that this role asks for |
@@ -431,7 +431,7 @@ Source: `docker/postgres/init.sql`, `src/personal_agent/service/app.py` (the cod
   "timestamp": "ISO 8601 datetime (UTC)",
   "trace_id": "UUID string - identifies the request turn in traces and Captain's Log",
   "metadata": {
-    "source": "gateway.chat_api | service.app | request_completed_handler",
+    "source": "service.app",
     "model": "<deployment id>"
   }
 }

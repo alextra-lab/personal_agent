@@ -25,7 +25,7 @@ A name without the prefix is ignored. The exceptions are the fields that declare
 
 Other fields that declare an alias are listed in `settings.py`. Search for `alias=`.
 
-The variable `APP_ENV` selects the environment. It is the only variable that the environment loader reads directly. Source: `src/personal_agent/config/env_loader.py`, function `get_environment`.
+The variable `APP_ENV` selects the environment. The environment loader reads it directly, because the settings do not exist yet. The loader also reads `PERSONAL_AGENT_INTEGRATION` and `PYTEST_VERSION` directly. Source: `src/personal_agent/config/env_loader.py`, function `get_environment`.
 
 | `APP_ENV` value | Environment |
 |---|---|
@@ -61,7 +61,7 @@ A variable that is already set in the process environment wins over every file. 
 | `config/model_roles.yaml` | The role bindings. Each role names one deployment. | `config/model_roles.yaml` |
 | `config/governance/modes.yaml` | The operating modes and the transition rules. | `src/personal_agent/config/governance_loader.py` |
 | `config/governance/tools.yaml` | The tool policies. | `src/personal_agent/config/governance_loader.py` |
-| `config/governance/permissions.yaml` | The permission rules. | `settings.py`, field `extra_permission_rules_path` |
+| `config/governance/permissions.yaml` | The permission rules. A second file can add rules: field `extra_permission_rules_path`. | `src/personal_agent/tools/executor.py`, `settings.py` |
 | `config/governance/budget.yaml.example` | The template for the budget file. | `config/governance/` |
 
 The path to the governance directory is the field `governance_config_path`. The default is `config/governance`. Source: `settings.py`, field `governance_config_path`.
@@ -92,7 +92,7 @@ AGENT_ANTHROPIC_API_KEY=...
 AGENT_VOYAGE_API_KEY=...
 ```
 
-Source: `settings.py`, fields `openai_api_key`, `anthropic_api_key` and `voyage_api_key`. A key that a deployment needs is listed under `deployment_profile` in `config/model_roles.yaml`.
+Source: `settings.py`, fields `openai_api_key`, `anthropic_api_key` and `voyage_api_key`. The keys that each deployment profile (`local`, `cloud`, `eval`) needs are listed under `required_secrets:` in `config/model_roles.yaml`.
 
 Some secrets are not read by `AppConfig`. The compose files and `config/gateway_access.yaml` read them without the `AGENT_` prefix. Examples are `CLOUDFLARE_TUNNEL_TOKEN` and `GATEWAY_TOKEN_PWA`. Source: `docker-compose.cloud.yml`, `config/gateway_access.yaml`, `.env.example`.
 

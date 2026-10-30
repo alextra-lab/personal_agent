@@ -150,7 +150,7 @@ Source: `ws_endpoint.py`, functions `_receiver`, `_receive_connect`, `_resolve_w
 
 ## Messages from the server
 
-Event messages have this shape: `{"type": "<TYPE>", "data": {...}, "session_id": "...", "seq": <integer or null>}`. The field `seq` is the Postgres sequence number of the stored event. Control messages have `"seq": null`. Three types do not use the `data` envelope. See the notes in the table.
+Event messages have this shape: `{"type": "<TYPE>", "data": {...}, "session_id": "...", "seq": <integer or null>}`. The field `seq` is the Postgres sequence number of the stored event. Control messages have `"seq": null`. Five message types do not use the `data` envelope: `tool_approval_request`, `DONE`, `PONG`, `REPLAY_COMPLETE` and `REPLAY_GAP`. `tool_approval_request` also has no `session_id`. `DONE` and the control messages have no `session_id`. See the notes in the table.
 
 | `type` | `data` | When |
 |--------|--------|------|
@@ -171,7 +171,7 @@ Event messages have this shape: `{"type": "<TYPE>", "data": {...}, "session_id":
 | `REPLAY_COMPLETE` | none. The fields `seq` and, after an attach, `last_seq` and `turn_in_flight` are at the top level. | The replay is complete |
 | `REPLAY_GAP` | none. The field `oldest_available_seq` is at the top level. | The server no longer holds events after the client watermark |
 
-The `phase` value is one of `PLANNING`, `SYNTHESIS`, `ARTIFACT_BUILD`, `EXPANSION`, `SUB_AGENT` or `WAITING_FOR_CHOICE`.
+The `phase` value is one of `planning`, `synthesis`, `artifact_build`, `expansion`, `sub_agent` or `waiting_for_choice` (lower case).
 
 Source: `src/personal_agent/transport/agui/adapter.py` (function `to_agui_event`), `src/personal_agent/transport/events.py` (class `Phase`), `ws_endpoint.py` (functions `_sender` and `_send_attach_replay`), `src/personal_agent/transport/agui/transport.py` (function `emit_done`).
 
@@ -201,7 +201,7 @@ Source: `src/personal_agent/transport/agui/adapter.py` (function `to_agui_event`
 {"type": "STATE_DELTA", "data": {"key": "session_effort", "value": {"seshat_effort": "standard", "effort_provenance": "..."}}, "session_id": "...", "seq": null}
 ```
 
-The keys that the server sends include `turn_status` and `session_effort`. After an attach, the server sends both with `"seq": null`.
+The keys that the server sends include `turn_status` and `session_effort`. After an attach, the server always sends `session_effort`. It sends the `turn_status` snapshot only when one exists. Both have `"seq": null`.
 
 ### `DONE`
 
@@ -219,7 +219,7 @@ The server stores every event in the Postgres table `session_events` before it p
 
 - **Reconnect.** The client sends `CONNECT` with `last_seq`. If `last_seq` is greater than 0, the server replays all stored events after it, and then sends `REPLAY_COMPLETE`.
 - **Gap.** If the server swept events after `last_seq`, it sends `REPLAY_GAP` with `oldest_available_seq` before the replay. The client must then fetch the session history again.
-- **Attach.** A page that holds nothing in memory (load, reload, session switch) sends `CONNECT` with `attach: true`. The server sends the `turn_status` snapshot, the `session_effort` state, the events of the turn that is in flight, and `REPLAY_COMPLETE` with `last_seq` and `turn_in_flight`.
+- **Attach.** A page that holds nothing in memory (load, reload, session switch) sends `CONNECT` with `attach: true`. The server sends the `turn_status` snapshot (only when one exists), the `session_effort` state, the events of the turn that is in flight, and `REPLAY_COMPLETE` with `last_seq` and `turn_in_flight`.
 - **Keepalive.** The client sends `PING` every 25 seconds. The server closes a socket that is silent for `ws_ping_timeout_seconds`.
 
 Source: `ws_endpoint.py` (functions `_sender` and `_send_attach_replay`), `src/personal_agent/transport/agui/event_buffer.py` (class `SessionEventBuffer`), `seshat-pwa/src/lib/agui-client.ts` (function `connectWebSocket`).

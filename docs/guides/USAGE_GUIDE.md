@@ -222,7 +222,6 @@ LLM_MAX_RETRIES=3
 
 # Service Configuration
 AGENT_SERVICE_PORT=9000
-AGENT_SERVICE_HOST=0.0.0.0
 
 # Database
 AGENT_DATABASE_URL=postgresql+asyncpg://agent:password@localhost:5432/personal_agent

@@ -911,7 +911,6 @@ class LiteLLMClient:
 
     Our wrapper adds:
     - Cost tracking via CostTrackerService (record_api_call to PostgreSQL)
-    - Weekly budget enforcement (AGENT_CLOUD_WEEKLY_BUDGET_USD)
     - Telemetry emission via structlog
 
     The factory selects this client when the deployment's provider placement is not

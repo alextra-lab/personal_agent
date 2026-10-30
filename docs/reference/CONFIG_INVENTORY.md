@@ -653,7 +653,7 @@ Every deployment reads the same catalog (`config/models.yaml`) since FRE-916 pha
 |---|---|---|---|---|
 | `docker-compose.yml` | no (infra only) | — → default `local` | — | Postgres/ES/Neo4j dev passwords (`:-` defaults) |
 | `docker-compose.cloud.yml` | **yes** | `cloud` | `production` | DB/Neo4j/ES/Redis/SearXNG URIs; `AGENT_GATEWAY_AUTH_ENABLED=true`; CF-Access client id/secret; `?`-required passwords |
-| `docker-compose.eval.yml` | **yes** (2 services) | `eval` | `eval` | `AGENT_CLOUD_WEEKLY_BUDGET_USD=50.0`; `AGENT_GATEWAY_AUTH_ENABLED=false`; MCP/primitives toggles differ between the two services; `AGENT_ANTHROPIC/OPENAI_API_KEY` passthrough |
+| `docker-compose.eval.yml` | **yes** (2 services) | `eval` | `eval` | `AGENT_GATEWAY_AUTH_ENABLED=false`; MCP/primitives toggles differ between the two services; `AGENT_ANTHROPIC/OPENAI_API_KEY` passthrough |
 | `docker-compose.test.yml` | no (infra only) | — | — | dev-default passwords |
 
 **Provenance chain:** `prod` → `docker-compose.cloud.yml` → `AGENT_DEPLOYMENT_PROFILE=cloud` → required secrets `anthropic_api_key` + `openai_api_key`, and roles resolved from `config/models.yaml` → extraction `gpt-5.4-mini`, captains_log/insights `claude_sonnet` (`claude-sonnet-5`). `config_guard.check_deployment_manifest_matches_compose` fails if a compose file's declared profile disagrees with `config/deployment.yaml`, per ADR-0099 D2.2.

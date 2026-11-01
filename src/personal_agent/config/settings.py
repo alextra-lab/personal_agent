@@ -2758,8 +2758,18 @@ class AppConfig(BaseSettings):
         alias="AGENT_URL_GUARD_CACHE_TTL_SECONDS",
         description=(
             "Seconds before the domain blocklist cache is refreshed from URLhaus. "
-            "Env var: AGENT_URL_GUARD_CACHE_TTL_SECONDS"
+            "The guard never refreshes more often than every 300 s (abuse.ch limit), "
+            "so a value below 300 acts as 300. Env var: AGENT_URL_GUARD_CACHE_TTL_SECONDS"
         ),
+    )
+    abuse_ch_auth_key: str | None = Field(
+        default=None,
+        description=(
+            "abuse.ch Auth-Key for the URLhaus blocklist download (FRE-1718). abuse.ch retired "
+            "the keyless download; the key goes in the download URL path. When unset the guard "
+            "makes no request and keeps its cached list. Env var: AGENT_ABUSE_CH_AUTH_KEY"
+        ),
+        json_schema_extra={"secret": True},
     )
     url_guard_allowlist: list[str] = Field(
         default_factory=list,

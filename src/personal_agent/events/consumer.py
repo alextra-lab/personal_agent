@@ -23,7 +23,7 @@ budget window rolls.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import orjson
 
@@ -114,12 +114,15 @@ class ConsumerRunner:
                     next_claim_at = now + settings.event_bus_ack_timeout_seconds
 
                 # Read new messages (> = undelivered only)
-                results = await self._bus.client.xreadgroup(
-                    groupname=sub.group,
-                    consumername=sub.consumer_name,
-                    streams={sub.stream: ">"},
-                    count=10,
-                    block=block_ms,
+                results = cast(
+                    "list[tuple[str, list[tuple[str, dict[str, str]]]]]",
+                    await self._bus.client.xreadgroup(
+                        groupname=sub.group,
+                        consumername=sub.consumer_name,
+                        streams={sub.stream: ">"},
+                        count=10,
+                        block=block_ms,
+                    ),
                 )
                 if not results:
                     continue

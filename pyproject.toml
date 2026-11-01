@@ -35,11 +35,11 @@ dependencies = [
   "typing-extensions>=4.8.0",  # extended type hints (TypedDict, etc.) for compatibility
   "psutil>=5.9.0",        # system metrics for sensor polling
   "macmon-python>=0.1.0",  # Apple Silicon GPU metrics (no sudo required)
-  "dspy>=3.1.0",          # DSPy framework for Captain's Log reflection (ChainOfThought) - ADR-0010
+  "dspy>=3.4.0",          # DSPy framework for Captain's Log reflection (ChainOfThought) - ADR-0010; FRE-1715 — dspy_adapter passes engine="litellm", new in 3.4 (was 3.1.0)
   "mcp>=2.2.0,<3",    # Model Context Protocol SDK for MCP Gateway integration - ADR-0011; FRE-1625 — litellm 1.106.0 imports mcp.types.CacheableResult (2.x) on every tool call (litellm #46045); was >=1.28.1,<2.0.0 (FRE-1323)
   "pre-commit>=3.5.0",    # git hooks (required for all contributors)
   # Service layer (Phase 2.1)
-  "fastapi>=0.109.0",     # async web framework for service API
+  "fastapi>=0.142.0",     # async web framework for service API; FRE-1715 — service/app.py passes telemetry=, new in 0.142 (was 0.109.0)
   "uvicorn[standard]>=0.27.0",  # ASGI server for FastAPI
   # Database (PostgreSQL with async support)
   "sqlalchemy[asyncio]>=2.0.25",  # async ORM for database operations
@@ -149,6 +149,7 @@ markers = [
   "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
   "requires_llm_server: marks tests that require LLM server running",
   "evaluation: marks evaluation path tests (require live agent on port 9000)",
+  "slow: marks latency baseline tests",
 ]
 
 # -----------------------------
@@ -196,7 +197,8 @@ ignore_missing_imports = true
 target-version = "py312"
 line-length = 100
 src = ["src"]
-exclude = ["venv", ".venv", "build", "dist", "scripts/archive", "tests/archive"]
+# FRE-1715: *.md — ruff 0.17 formats Markdown code blocks; CI pins ruff 0.15.15, which does not.
+exclude = ["venv", ".venv", "build", "dist", "scripts/archive", "tests/archive", "*.md"]
 
 [tool.ruff.lint]
 # Core rule families: errors, warnings, bugbear, imports, and docstrings.
@@ -237,4 +239,5 @@ skips = ["B101"]  # Skip assert_used (fine in tests)
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
+    "numpy>=2.0.0",  # FRE-1715 — tests/evaluation and scripts/eval import numpy; dspy 3.4 no longer pulls it in. CI's `uv sync` installs this group; the gateway image (`--no-dev`) does not
 ]

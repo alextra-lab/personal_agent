@@ -1851,6 +1851,9 @@ app = FastAPI(
     description="Cognitive architecture service with persistent memory",
     version="2.0.0",
     lifespan=lifespan,
+    # FRE-1715: FastAPI 0.142 emits its own spans, metrics and logs once a global
+    # provider exists. RequestRootSpanMiddleware owns the request root span (ADR-0129 D4).
+    telemetry={"tracing": False, "metrics": False, "logs": False},
 )
 
 
@@ -2633,7 +2636,7 @@ async def _chat_impl(
         )
 
     # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
-    sid = str(cast(UUID, session.session_id))
+    sid = str(session.session_id)
     # ADR-0107 D5: `chat()` bound session_id from the raw (possibly-None, for a
     # new-session request) parameter before the session existed — re-bind now
     # that the real id is known, so downstream logs never carry a null session_id.
@@ -2654,7 +2657,7 @@ async def _chat_impl(
 
     # --- Phase: db_append_user_message ---
     await repo.append_message(
-        cast(UUID, session.session_id),
+        session.session_id,
         {
             "role": "user",
             "content": message,
@@ -2708,7 +2711,7 @@ async def _chat_impl(
         )
 
         await SessionModelSelectionRepository(db).upsert(
-            session_id=cast(UUID, session.session_id),
+            session_id=session.session_id,
             role="primary",
             deployment_key=resolved_selection,
         )
@@ -2863,7 +2866,7 @@ async def _chat_impl(
             release_session_write_wait(sid)
             raise
     else:
-        session_uuid = cast(UUID, session.session_id)
+        session_uuid = session.session_id
         task = asyncio.create_task(
             _append_assistant_message_background(session_uuid, response_content, trace_id)
         )

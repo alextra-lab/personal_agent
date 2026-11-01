@@ -218,7 +218,7 @@ async def _open_redis() -> Any | None:
         import redis.asyncio as aioredis_mod
 
         client = aioredis_mod.from_url(settings.event_bus_redis_url, decode_responses=True)
-        await client.ping()  # type: ignore[misc]
+        await client.ping()
         return client
     except Exception as exc:  # noqa: BLE001
         log.warning(

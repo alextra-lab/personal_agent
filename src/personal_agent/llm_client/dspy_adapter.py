@@ -45,6 +45,11 @@ try:
 except ImportError:
     dspy = None  # type: ignore[assignment,unused-ignore]
 
+# FRE-1715: DSPy 3.4 defaults to engine="auto", which calls providers through its
+# bundled client. This project's transport seam, reasoning_effort mapping and the
+# response_cost that dspy_gate settles against all belong to the LiteLLM route.
+_DSPY_ENGINE = "litellm"
+
 
 def resolve_dspy_target(role: ModelRole | str) -> tuple[str, ModelDefinition, bool]:
     """Resolve a DSPy role to its deployment, definition and cloud-ness.
@@ -180,6 +185,7 @@ def configure_dspy_lm(
             api_key=api_key,
             model_type="chat",
             timeout=effective_timeout,
+            engine=_DSPY_ENGINE,
             **lm_kwargs,
         )
 
@@ -209,6 +215,7 @@ def configure_dspy_lm(
         api_key="lm-studio",  # Dummy key (LiteLLM requires non-empty)
         model_type="chat",
         timeout=effective_timeout,
+        engine=_DSPY_ENGINE,
     )
 
 

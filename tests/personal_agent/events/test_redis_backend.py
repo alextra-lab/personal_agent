@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import redis.asyncio as aioredis
 
+from personal_agent.config.settings import AppConfig
 from personal_agent.events.models import RequestCapturedEvent
 from personal_agent.events.redis_backend import RedisStreamBus
 
@@ -217,3 +218,20 @@ class TestConnect:
             bus = await RedisStreamBus.connect("redis://localhost:6379/0")
             mock_client.ping.assert_called_once()
             assert bus.client is mock_client
+
+    @pytest.mark.asyncio
+    async def test_socket_timeout_outlasts_the_longest_allowed_block(self) -> None:
+        """FRE-1715: redis-py 8's 5 s default would time out a blocking XREADGROUP."""
+        mock_client = AsyncMock(spec=aioredis.Redis)
+        mock_client.ping = AsyncMock(return_value=True)
+        settings = AppConfig(event_bus_consumer_poll_interval_ms=10000)
+
+        with (
+            patch("personal_agent.events.redis_backend.get_settings", return_value=settings),
+            patch(
+                "personal_agent.events.redis_backend.aioredis.from_url", return_value=mock_client
+            ) as from_url,
+        ):
+            await RedisStreamBus.connect("redis://localhost:6379/0")
+
+        assert from_url.call_args.kwargs["socket_timeout"] > 10

@@ -61,13 +61,8 @@ def _get_gateway_route_paths() -> set[str]:
     router = create_gateway_router()
     app.include_router(router)
 
-    paths: set[str] = set()
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        if path:
-            # Normalise {param} → {param} (already normalised); collect as-is.
-            paths.add(path)
-    return paths
+    # FRE-1715: since FastAPI 0.137 app.routes is a tree; the schema lists every path.
+    return set(app.openapi()["paths"])
 
 
 # ---------------------------------------------------------------------------

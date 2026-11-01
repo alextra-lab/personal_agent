@@ -321,6 +321,7 @@ _BY_GROUP: Mapping[str, tuple[str, ...]] = {
         "location_precision",
     ),
     "secrets": (
+        "abuse_ch_auth_key",
         "anthropic_api_key",
         "artifact_resolve_internal_token",
         "linear_api_key",

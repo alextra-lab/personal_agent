@@ -11,7 +11,11 @@ The five acceptance-criteria cases:
 
 from __future__ import annotations
 
+import csv
+import io
 import json
+import os
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -20,12 +24,26 @@ import httpx
 import pytest
 import structlog
 
+import personal_agent.security as security_module
+from personal_agent.config import settings
 from personal_agent.security import (
     _BUNDLED_BLOCKLIST,
     DomainGuard,
     GuardMode,
     GuardResult,
+    UrlhausFeedError,
+    get_domain_guard,
 )
+
+# A fake Auth-Key (FRE-1718). The real key is never read or used by a test.
+_FAKE_KEY = "test-key-not-real"
+
+
+@pytest.fixture(autouse=True)
+def _fake_auth_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test a fake abuse.ch Auth-Key so ``_fetch_urlhaus`` reaches the (mocked) network."""
+    monkeypatch.setattr(settings, "abuse_ch_auth_key", _FAKE_KEY)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -443,10 +461,37 @@ _FEED_SAMPLE = "\n".join(
 )
 
 
+def _as_urlhaus_csv(feed_text: str) -> str:
+    """Wrap each URL line of *feed_text* in a ``recent.csv`` row; comment and blank lines stay."""
+    out: list[str] = []
+    for n, line in enumerate(feed_text.splitlines()):
+        if not line.strip() or line.startswith("#"):
+            out.append(line)
+            continue
+        buf = io.StringIO()
+        csv.writer(buf, quoting=csv.QUOTE_ALL).writerow(
+            [
+                n,
+                "2026-10-30 08:00:00",
+                line,
+                "online",
+                "",
+                "malware_download",
+                "elf,mirai",
+                f"https://urlhaus.abuse.ch/url/{n}/",
+                "reporter",
+            ]
+        )
+        out.append(buf.getvalue().strip("\r\n"))
+    return "\n".join(out)
+
+
 async def _guard_loaded_from_feed(tmp_path: Path, feed_text: str = _FEED_SAMPLE) -> DomainGuard:
     """Return a guard whose blocklist came from parsing *feed_text* via ``_fetch_urlhaus``."""
     g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
-    response = httpx.Response(200, text=feed_text, request=httpx.Request("GET", "http://feed"))
+    response = httpx.Response(
+        200, text=_as_urlhaus_csv(feed_text), request=httpx.Request("GET", "http://feed")
+    )
     with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
         await g._refresh()
     return g
@@ -772,12 +817,16 @@ class TestFre1560FailedRefreshKeepsBestList:
         (tmp_path / "blocklist.json").unlink()
 
         response = httpx.Response(200, text=feed_text, request=httpx.Request("GET", "http://feed"))
+        get_mock = AsyncMock(return_value=response)
         with (
-            patch("httpx.AsyncClient.get", new=AsyncMock(return_value=response)),
+            patch("httpx.AsyncClient.get", new=get_mock),
             structlog.testing.capture_logs() as logs,
         ):
             await g._refresh()
 
+        # The parser ran (not the missing-key path) and found nothing.
+        get_mock.assert_awaited_once()
+        assert "no entries" in str(_event(logs, "domain_guard_feed_unavailable")["error"])
         assert g.check_url("https://feed-evil.net/x").allowed is False
         assert _event(logs, "domain_guard_using_fallback")["source"] == "memory"
         assert not (tmp_path / "blocklist.json").exists(), "an empty feed must not write the cache"
@@ -840,3 +889,243 @@ class TestFre1560FailedRefreshKeepsBestList:
             await g._refresh()
 
         assert g.check_url("https://feed-evil.net/x").allowed is False
+
+
+# ---------------------------------------------------------------------------
+# FRE-1718 — the keyed URLhaus export replaces the retired text feed
+# ---------------------------------------------------------------------------
+
+_CSV_HEADER = "\n".join(
+    [
+        "################################################################",
+        "# abuse.ch URLhaus Database Dump (CSV - recent URLs only)",
+        "# id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter",
+        "################################################################",
+    ]
+)
+
+
+def _mock_feed(
+    monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
+) -> list[httpx.Request]:
+    """Route the guard's feed client to *handler*; return the list of requests it received."""
+    seen: list[httpx.Request] = []
+    real_client = httpx.AsyncClient
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    def _factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        return real_client(*args, transport=httpx.MockTransport(_record), **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("personal_agent.security.httpx.AsyncClient", _factory)
+    return seen
+
+
+def _raise_connect_error(request: httpx.Request) -> httpx.Response:
+    # The message carries the URL, as a real httpx error text can.
+    raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+
+
+def _raise_read_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout(f"timed out on {request.url}", request=request)
+
+
+class TestFre1718KeyedUrlhausExport:
+    @pytest.mark.asyncio
+    async def test_fetch_requests_the_keyed_export_and_reads_the_url_column(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1 mechanics: the key is in the path, and column 3 of each row is the URL."""
+        body = "\n".join(
+            [
+                _CSV_HEADER,
+                "id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter",
+                _as_urlhaus_csv(_FEED_SAMPLE),
+            ]
+        )
+        seen = _mock_feed(monkeypatch, lambda r: httpx.Response(200, text=body))
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        entries = await g._fetch_urlhaus()
+
+        assert [r.url.host for r in seen] == ["urlhaus-api.abuse.ch"]
+        assert seen[0].url.path == f"/v2/files/exports/{_FAKE_KEY}/recent.csv"
+        assert entries == {
+            "203.0.113.9",
+            "dedicated-malware.example",
+            "github.com/badactor/repo/releases/download/x/payload.exe",
+            "raw.githubusercontent.com/badactor/repo/main/dropper.sh",
+        }
+
+    @pytest.mark.asyncio
+    async def test_ac2_a_410_keeps_the_stale_cache_and_logs_its_age(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-2: 410 Gone → the guard keeps the old list, logs its age, and does not hammer the feed."""
+        cache_path = tmp_path / "blocklist.json"
+        _write_cache(cache_path, ["old-evil.net"], timedelta(days=9))
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+        seen = _mock_feed(monkeypatch, lambda r: httpx.Response(410, text="Gone"))
+
+        with structlog.testing.capture_logs() as logs:
+            await g.ensure_loaded()
+            await g.ensure_loaded()  # a failed fetch counts as an attempt: no second request
+
+        assert len(seen) == 1
+        assert g.check_url("https://old-evil.net/x").allowed is False
+        assert "410" in str(_event(logs, "domain_guard_feed_unavailable")["error"])
+        fallback = _event(logs, "domain_guard_using_fallback")
+        assert fallback["source"] == "stale_cache"
+        assert fallback["age_seconds"] == pytest.approx(9 * 86400, abs=60)
+        assert _FAKE_KEY not in repr(logs)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "handler",
+        [
+            lambda r: httpx.Response(410, text="Gone"),
+            lambda r: httpx.Response(500, text="boom"),
+            _raise_connect_error,
+            _raise_read_timeout,
+        ],
+        ids=["410", "500", "connect_error", "read_timeout"],
+    )
+    async def test_the_key_never_appears_in_an_error_or_a_log_line(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        handler: Callable[[httpx.Request], httpx.Response],
+    ) -> None:
+        """The key sits in the URL path, and httpx error texts carry the URL: none may leak."""
+        _mock_feed(monkeypatch, handler)
+        # Two guards: each one makes its own first request (the throttle is per cache path).
+        direct = DomainGuard(cache_path=tmp_path / "a" / "blocklist.json", ttl_seconds=3600.0)
+        via_refresh = DomainGuard(cache_path=tmp_path / "b" / "blocklist.json", ttl_seconds=3600.0)
+
+        with pytest.raises(UrlhausFeedError) as excinfo:
+            await direct._fetch_urlhaus()
+        assert _FAKE_KEY not in str(excinfo.value)
+        assert _FAKE_KEY not in repr(excinfo.value)
+        assert excinfo.value.__suppress_context__ is True
+
+        with structlog.testing.capture_logs() as logs:
+            await via_refresh._refresh()
+        assert _event(logs, "domain_guard_feed_unavailable")  # the request failed, not throttled
+        assert _FAKE_KEY not in repr(logs)
+
+    @pytest.mark.asyncio
+    async def test_a_second_request_inside_five_minutes_is_refused_even_after_a_restart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """abuse.ch limit: forced refreshes, failures and a restart share one 5-minute window."""
+        seen = _mock_feed(monkeypatch, lambda r: httpx.Response(410, text="Gone"))
+        cache_path = tmp_path / "blocklist.json"
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with pytest.raises(UrlhausFeedError, match="410"):
+            await g._fetch_urlhaus()
+        with pytest.raises(UrlhausFeedError, match="throttled"):  # a forced refresh()
+            await g._fetch_urlhaus()
+        restarted = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)  # new process
+        with pytest.raises(UrlhausFeedError, match="throttled"):
+            await restarted._fetch_urlhaus()
+        assert len(seen) == 1
+
+        # Six minutes later the window is open again, for the old process and the new one.
+        later = datetime.now(timezone.utc) - timedelta(minutes=6)
+        os.utime(cache_path.with_suffix(".attempt"), (later.timestamp(), later.timestamp()))
+        g._last_fetch_attempt = later
+        with pytest.raises(UrlhausFeedError, match="410"):
+            await g._fetch_urlhaus()
+        assert len(seen) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("missing", [None, ""])
+    async def test_no_key_means_no_request_and_a_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str | None
+    ) -> None:
+        """Without the key the guard makes no request, names the setting, and keeps its list."""
+        monkeypatch.setattr(settings, "abuse_ch_auth_key", missing)
+        seen = _mock_feed(monkeypatch, lambda r: httpx.Response(200, text="unused"))
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        with structlog.testing.capture_logs() as logs:
+            await g._refresh()
+
+        assert seen == []
+        assert "AGENT_ABUSE_CH_AUTH_KEY" in str(
+            _event(logs, "domain_guard_feed_unavailable")["error"]
+        )
+        assert _event(logs, "domain_guard_using_fallback")["source"] == "bundled"
+
+    @pytest.mark.asyncio
+    async def test_a_200_with_only_a_header_is_a_failed_fetch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 200 body with no data row (an error page, a bare header) keeps the old list (FRE-1560)."""
+        _mock_feed(monkeypatch, lambda r: httpx.Response(200, text=_CSV_HEADER))
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        with structlog.testing.capture_logs() as logs:
+            await g._refresh()
+
+        assert _event(logs, "domain_guard_using_fallback")["source"] == "bundled"
+        assert not (tmp_path / "blocklist.json").exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("age", "expect_event"),
+        [(timedelta(hours=30), True), (timedelta(hours=2), False)],
+        ids=["30h-stale", "2h-fresh"],
+    )
+    async def test_ac3_a_list_older_than_a_day_emits_the_stale_event(
+        self, tmp_path: Path, age: timedelta, expect_event: bool
+    ) -> None:
+        """AC-3: an alert-able event carries the age of the list the guard falls back to."""
+        cache_path = tmp_path / "blocklist.json"
+        _write_cache(cache_path, ["old-evil.net"], age)
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+        failing = AsyncMock(side_effect=ConnectionError("down"))
+
+        with (
+            patch.object(g, "_fetch_urlhaus", new=failing),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        events = [e for e in logs if e["event"] == "domain_guard_blocklist_stale"]
+        if not expect_event:
+            assert events == []
+            return
+        event = _event(logs, "domain_guard_blocklist_stale")
+        assert event["source"] == "stale_cache"
+        assert event["age_seconds"] == pytest.approx(age.total_seconds(), abs=60)
+        assert event["max_age_seconds"] == 86400.0
+        assert event["log_level"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_ac3_the_bundled_only_list_emits_the_stale_event(self, tmp_path: Path) -> None:
+        """With no cache and no memory the guard holds four entries: that is the worst stale case."""
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+        failing = AsyncMock(side_effect=ConnectionError("down"))
+
+        with (
+            patch.object(g, "_fetch_urlhaus", new=failing),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        event = _event(logs, "domain_guard_blocklist_stale")
+        assert event["source"] == "bundled"
+        assert event["age_seconds"] is None
+
+    def test_the_guard_ttl_never_drops_below_the_five_minute_fetch_interval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """abuse.ch asks for one dump fetch per 5 minutes: a TTL setting of 60 s must not beat it."""
+        monkeypatch.setattr(security_module, "_guard", None)
+        monkeypatch.setattr(settings, "url_guard_cache_ttl_seconds", 60)
+
+        assert get_domain_guard()._ttl == 300.0

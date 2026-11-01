@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import functools
+import io
 import ipaddress
 import json
 import re
@@ -13,6 +15,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import quote
 
 import httpx
 
@@ -83,14 +86,30 @@ def _canonical_escape(match: re.Match[str]) -> str:
     return char if char in _UNRESERVED else f"%{match.group(1).upper()}"
 
 
-# URLhaus plaintext feed URL (CC0 licence, no key required).
-_URLHAUS_FEED = "https://urlhaus.abuse.ch/downloads/text/"
-# Fetch timeout for the feed refresh call.
-_FEED_TIMEOUT_SECONDS = 15.0
+# URLhaus bulk export (FRE-1718). abuse.ch retired the keyless /downloads/ path (HTTP 410);
+# the export now needs an Auth-Key as a URL path segment.
+_URLHAUS_EXPORT_BASE = "https://urlhaus-api.abuse.ch/v2/files/exports"
+# The one line that picks the export file. recent.csv has the URL in column 3 (index 2).
+_URLHAUS_EXPORT_FILE = "recent.csv"
+_URLHAUS_URL_COLUMN = 2
+# Fetch timeout for the feed refresh call (the export is about 32 MB).
+_FEED_TIMEOUT_SECONDS = 60.0
+# abuse.ch asks for at most one dump fetch per 5 minutes.
+_MIN_FEED_FETCH_INTERVAL_SECONDS = 300.0
+# A fallback list older than this raises ``domain_guard_blocklist_stale``.
+_STALE_BLOCKLIST_ALERT_SECONDS = 86400.0
 
 # Where the live blocklist came from (FRE-1560), and which list a failed refresh kept.
 _BlocklistSource = Literal["bundled", "cache", "feed"]
 _FallbackSource = Literal["memory", "stale_cache", "bundled"]
+
+
+class UrlhausFeedError(RuntimeError):
+    """The URLhaus download failed or was not attempted.
+
+    The text never holds the Auth-Key: the key is part of the download URL, and an httpx
+    error text includes the URL.
+    """
 
 
 class GuardMode(str, Enum):
@@ -155,6 +174,9 @@ class DomainGuard:
         self._last_loaded: datetime | None = None
         self._refresh_lock: asyncio.Lock = asyncio.Lock()
         self._logged_stale: bool = False
+        # Last feed request (FRE-1718). The marker file keeps it across a restart.
+        self._last_fetch_attempt: datetime | None = None
+        self._attempt_marker = cache_path.with_suffix(".attempt")
 
     # ------------------------------------------------------------------
     # Public API
@@ -351,6 +373,7 @@ class DomainGuard:
         log.info(
             "domain_guard_refreshed",
             source="urlhaus",
+            export=_URLHAUS_EXPORT_FILE,
             count=len(self._blocklist),
         )
 
@@ -373,12 +396,23 @@ class DomainGuard:
         else:
             source, as_of = "bundled", None
             self._install(frozenset(), "bundled", None)
+        age_seconds = max(0.0, (now - as_of).total_seconds()) if as_of else None
         log.warning(
             "domain_guard_using_fallback",
             source=source,
             count=len(self._blocklist),
-            age_seconds=max(0.0, (now - as_of).total_seconds()) if as_of else None,
+            age_seconds=age_seconds,
         )
+        # FRE-1718: a separate event for an alert rule. The bundled list (age None) is the
+        # worst case: four entries.
+        if age_seconds is None or age_seconds > _STALE_BLOCKLIST_ALERT_SECONDS:
+            log.warning(
+                "domain_guard_blocklist_stale",
+                source=source,
+                count=len(self._blocklist),
+                age_seconds=age_seconds,
+                max_age_seconds=_STALE_BLOCKLIST_ALERT_SECONDS,
+            )
 
     def _load_from_disk_cache(
         self, *, allow_stale: bool = False
@@ -423,27 +457,96 @@ class DomainGuard:
         }
         self._cache_path.write_text(json.dumps(data, indent=2))
 
+    def _seconds_since_fetch_attempt(self) -> float | None:
+        """Return the seconds since the last feed request, or None when there was none.
+
+        Reads the in-memory time and the marker file, so a restart does not reset it.
+        """
+        attempts: list[datetime] = []
+        if self._last_fetch_attempt is not None:
+            attempts.append(self._last_fetch_attempt)
+        try:
+            attempts.append(
+                datetime.fromtimestamp(self._attempt_marker.stat().st_mtime, timezone.utc)
+            )
+        except OSError:
+            pass  # no marker yet, or an unreadable one: only the in-memory time counts
+        if not attempts:
+            return None
+        return max(0.0, (datetime.now(timezone.utc) - max(attempts)).total_seconds())
+
+    def _note_fetch_attempt(self) -> None:
+        """Record a feed request in memory and in the marker file (best effort)."""
+        self._last_fetch_attempt = datetime.now(timezone.utc)
+        try:
+            self._attempt_marker.parent.mkdir(parents=True, exist_ok=True)
+            self._attempt_marker.touch()
+        except OSError as exc:
+            log.warning(
+                "domain_guard_attempt_marker_failed",
+                error=str(exc),
+                path=str(self._attempt_marker),
+            )
+
     async def _fetch_urlhaus(self) -> set[str]:
-        """Download the URLhaus plaintext feed and extract blocklist entries.
+        """Download the keyed URLhaus export and extract blocklist entries.
+
+        Makes no request when the Auth-Key is unset, or when the last request was less than
+        ``_MIN_FEED_FETCH_INTERVAL_SECONDS`` ago (abuse.ch limit). Every failure is raised as
+        ``UrlhausFeedError`` with a text that has no URL, because the key is in the URL.
 
         Returns:
-            One entry per feed line: the hostname, or the URL entry when the host is a
+            One entry per export row: the hostname, or the URL entry when the host is a
             shared platform (see ``_SHARED_PLATFORM_HOSTS``).
-        """
-        async with httpx.AsyncClient(timeout=_FEED_TIMEOUT_SECONDS) as client:
-            resp = await client.get(_URLHAUS_FEED)
-            resp.raise_for_status()
 
+        Raises:
+            UrlhausFeedError: The key is unset, the fetch is throttled, or the request failed.
+        """
+        key = settings.abuse_ch_auth_key
+        if not key:
+            raise UrlhausFeedError("AGENT_ABUSE_CH_AUTH_KEY is not set")
+        since = self._seconds_since_fetch_attempt()
+        if since is not None and since < _MIN_FEED_FETCH_INTERVAL_SECONDS:
+            raise UrlhausFeedError(
+                f"fetch throttled: last request {since:.0f}s ago, "
+                f"minimum {_MIN_FEED_FETCH_INTERVAL_SECONDS:.0f}s"
+            )
+        self._note_fetch_attempt()
+
+        url = f"{_URLHAUS_EXPORT_BASE}/{quote(key, safe='')}/{_URLHAUS_EXPORT_FILE}"
+        try:
+            async with httpx.AsyncClient(timeout=_FEED_TIMEOUT_SECONDS) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise UrlhausFeedError(f"feed returned HTTP {exc.response.status_code}") from None
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise UrlhausFeedError(f"feed request failed: {type(exc).__name__}") from None
+
+        # About 120,000 rows: parse off the event loop (the loop also serves the gateway).
+        return await asyncio.to_thread(self._parse_urlhaus_export, resp.text)
+
+    @staticmethod
+    def _parse_urlhaus_export(text: str) -> set[str]:
+        """Extract blocklist entries from the URLhaus CSV export.
+
+        Args:
+            text: The export body. Lines that start with ``#`` are comments.
+
+        Returns:
+            The hostname of each row, or the URL entry when the host is a shared platform.
+        """
+        lines = (line for line in io.StringIO(text) if not line.startswith("#"))
         entries: set[str] = set()
-        for line in resp.text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
+        for row in csv.reader(lines):
+            if len(row) <= _URLHAUS_URL_COLUMN:
                 continue
-            hostname = self._extract_hostname(line)
+            url = row[_URLHAUS_URL_COLUMN].strip()
+            hostname = DomainGuard._extract_hostname(url)
             if not hostname:
                 continue
             if hostname in _SHARED_PLATFORM_HOSTS:
-                entries.add(self._url_entry(line))
+                entries.add(DomainGuard._url_entry(url))
             else:
                 entries.add(hostname)
         return entries
@@ -467,7 +570,11 @@ def get_domain_guard() -> DomainGuard:
     if _guard is None:
         _guard = DomainGuard(
             cache_path=Path("telemetry/security/domain_blocklist.json"),
-            ttl_seconds=float(getattr(settings, "url_guard_cache_ttl_seconds", 3600)),
+            # Not below the abuse.ch fetch limit (FRE-1718), whatever the setting says.
+            ttl_seconds=max(
+                _MIN_FEED_FETCH_INTERVAL_SECONDS,
+                float(getattr(settings, "url_guard_cache_ttl_seconds", 3600)),
+            ),
             mode=GuardMode(getattr(settings, "url_guard_mode", "blocklist")),
             allowlist=frozenset(getattr(settings, "url_guard_allowlist", [])),
         )

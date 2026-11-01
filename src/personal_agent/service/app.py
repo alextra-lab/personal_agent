@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import structlog
 from fastapi import Depends, FastAPI, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.brainstem import (
@@ -61,6 +62,7 @@ from personal_agent.service.models import (
     SessionCreate,
     SessionResponse,
     SessionUpdate,
+    SettingOverrideUpdate,
 )
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.service.request_tasks import current_request_task, get_request_task_registry
@@ -921,6 +923,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Initialize database
         await init_db()
         log.info("database_initialized")
+
+        # FRE-1722: the stored setting overrides win over the config files from the first turn.
+        from personal_agent.service.settings_edit import load_overrides_at_startup
+
+        await load_overrides_at_startup()
 
         # Route-trace ledger (FRE-452 / ADR-0088 D6): direct durable observability sink.
         # Connect early so every turn's terminal write has a pool; non-fatal on failure.
@@ -2183,12 +2190,12 @@ async def get_settings_menu(
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> dict[str, object]:
-    """Return the read-only settings menu (FRE-1702, stage 1 of FRE-1698).
+    """Return the settings menu (FRE-1702, FRE-1722).
 
     Shows every parameter that changes a turn, with its live value and the source that
     wins. Values come from the running gateway. A secret, infrastructure or identity
-    value is never returned: the row holds ``"set"`` or ``"not set"``. The menu edits
-    nothing. The only write is ``DELETE /api/v1/preferences/constraint``.
+    value is never returned: the row holds ``"set"`` or ``"not set"``. A row that can be
+    edited names its options. This route writes nothing.
 
     Args:
         session_id: The open conversation, for the "This conversation" group. Omit it
@@ -2204,7 +2211,7 @@ async def get_settings_menu(
         HTTPException: 422 if ``session_id`` is not a UUID; 404 if the conversation
             does not exist or belongs to another user.
     """
-    from personal_agent.service import settings_menu
+    from personal_agent.service import settings_edit, settings_menu
 
     ctx = SystemTraceContext.new("get_settings_menu", user_id=request_user.user_id)
     session_uuid: UUID | None = None
@@ -2229,6 +2236,7 @@ async def get_settings_menu(
             session_id=session_uuid,
             location_consent=consent,
             trace_id=ctx.trace_id,
+            is_owner=settings_edit.is_owner(request_user),
         )
     except settings_menu.SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
@@ -2239,6 +2247,85 @@ async def get_settings_menu(
         trace_id=ctx.trace_id,
     )
     return settings_menu.build_menu(inputs, trace_id=ctx.trace_id).model_dump(mode="json")
+
+
+@app.put("/api/v1/settings/overrides")
+async def put_setting_override(
+    data: SettingOverrideUpdate,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict[str, JsonValue]:
+    """Store one settings override (FRE-1722). It wins with no rebuild.
+
+    Args:
+        data: The parameter name and its new value.
+        request_user: Authenticated user (CF Access). Only the owner can edit.
+        db: Async database session.
+
+    Returns:
+        The stored parameter name and value.
+
+    Raises:
+        HTTPException: 403 for any user except the owner; 422 with the reason when the
+            parameter cannot be edited or the value is invalid. Neither stores a row.
+    """
+    from personal_agent.service import settings_edit
+
+    ctx = SystemTraceContext.new("put_setting_override", user_id=request_user.user_id)
+    if not settings_edit.is_owner(request_user):
+        log.warning(
+            "setting_override_refused_not_owner",
+            user_id=str(request_user.user_id),
+            parameter=data.parameter,
+            trace_id=ctx.trace_id,
+        )
+        raise HTTPException(status_code=403, detail="only the owner can edit this setting")
+    try:
+        await settings_edit.set_override(
+            db, data.parameter, data.value, changed_by=request_user.user_id, trace_id=ctx.trace_id
+        )
+    except settings_edit.SettingEditRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"parameter": data.parameter, "value": data.value}
+
+
+@app.delete("/api/v1/settings/overrides")
+async def delete_setting_override(
+    parameter: str,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict[str, str | bool]:
+    """Clear one settings override (FRE-1722). The file value applies again.
+
+    Clearing a parameter with no stored override succeeds with ``cleared: false`` and writes
+    no audit row.
+
+    Args:
+        parameter: The parameter name (query parameter).
+        request_user: Authenticated user (CF Access). Only the owner can edit.
+        db: Async database session.
+
+    Returns:
+        The parameter name and whether a row existed and was deleted.
+
+    Raises:
+        HTTPException: 403 for any user except the owner.
+    """
+    from personal_agent.service import settings_edit
+
+    ctx = SystemTraceContext.new("delete_setting_override", user_id=request_user.user_id)
+    if not settings_edit.is_owner(request_user):
+        log.warning(
+            "setting_override_refused_not_owner",
+            user_id=str(request_user.user_id),
+            parameter=parameter,
+            trace_id=ctx.trace_id,
+        )
+        raise HTTPException(status_code=403, detail="only the owner can edit this setting")
+    cleared = await settings_edit.clear_override(
+        db, parameter, changed_by=request_user.user_id, trace_id=ctx.trace_id
+    )
+    return {"parameter": parameter, "cleared": cleared}
 
 
 @app.get("/api/v1/preferences/location")

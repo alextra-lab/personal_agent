@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -98,6 +98,15 @@ class SessionEffortUpdate(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     seshat_effort: EffortLevel
+
+
+class SettingOverrideUpdate(BaseModel):
+    """Request to store a settings override (FRE-1722). The endpoint validates the value."""
+
+    model_config = ConfigDict(frozen=True)
+
+    parameter: str
+    value: JsonValue
 
 
 class ConstraintPreferenceUpdate(BaseModel):
@@ -471,6 +480,39 @@ class UserConstraintPreferenceModel(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
     source_session_id = Column(PG_UUID(as_uuid=True), nullable=True)
+
+
+class SettingsOverrideModel(Base):
+    """SQLAlchemy model for the settings_overrides table (FRE-1722).
+
+    One row is one parameter that the owner edited. The row wins over the config file. Removing
+    it restores the file value. ``parameter`` is the settings menu row name.
+    """
+
+    __tablename__ = "settings_overrides"
+
+    parameter = Column(Text, primary_key=True)
+    value: Column[Any] = Column(JSONB, nullable=False)
+    updated_by = Column(PG_UUID(as_uuid=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SettingsEditAuditModel(Base):
+    """SQLAlchemy model for the settings_edit_audit table (FRE-1722).
+
+    One row for each accepted edit and each Clear, of an override or a saved choice.
+    ``changed_by`` has no foreign key, so a record outlives its user row.
+    """
+
+    __tablename__ = "settings_edit_audit"
+
+    audit_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    changed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    changed_by = Column(PG_UUID(as_uuid=True), nullable=False)
+    parameter = Column(Text, nullable=False)
+    action = Column(Text, nullable=False)
+    old_value: Column[Any] = Column(JSONB(none_as_null=True), nullable=True)
+    new_value: Column[Any] = Column(JSONB(none_as_null=True), nullable=True)
 
 
 class SessionModelSelectionModel(Base):

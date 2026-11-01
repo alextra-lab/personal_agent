@@ -92,6 +92,8 @@ _URLHAUS_EXPORT_BASE = "https://urlhaus-api.abuse.ch/v2/files/exports"
 # The one line that picks the export file. recent.csv has the URL in column 3 (index 2).
 _URLHAUS_EXPORT_FILE = "recent.csv"
 _URLHAUS_URL_COLUMN = 2
+# A plain-text export line is a URL; a CSV row starts with a quote or a number.
+_URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 # Fetch timeout for the feed refresh call (the export is about 32 MB).
 _FEED_TIMEOUT_SECONDS = 60.0
 # abuse.ch asks for at most one dump fetch per 5 minutes.
@@ -528,20 +530,28 @@ class DomainGuard:
 
     @staticmethod
     def _parse_urlhaus_export(text: str) -> set[str]:
-        """Extract blocklist entries from the URLhaus CSV export.
+        """Extract blocklist entries from a URLhaus export.
+
+        Accepts both export shapes: the plain-text URL list (one URL per line) and the
+        CSV dump (the URL in column ``_URLHAUS_URL_COLUMN``). A line that starts with a
+        URL scheme is a plain URL, even when the URL holds a comma.
 
         Args:
             text: The export body. Lines that start with ``#`` are comments.
 
         Returns:
-            The hostname of each row, or the URL entry when the host is a shared platform.
+            The hostname of each URL, or the URL entry when the host is a shared platform.
         """
         lines = (line for line in io.StringIO(text) if not line.startswith("#"))
         entries: set[str] = set()
-        for row in csv.reader(lines):
-            if len(row) <= _URLHAUS_URL_COLUMN:
-                continue
-            url = row[_URLHAUS_URL_COLUMN].strip()
+        for line in lines:
+            if _URL_SCHEME.match(line):
+                url = line.strip()
+            else:
+                row = next(csv.reader([line]), [])
+                if len(row) <= _URLHAUS_URL_COLUMN:
+                    continue
+                url = row[_URLHAUS_URL_COLUMN].strip()
             hostname = DomainGuard._extract_hostname(url)
             if not hostname:
                 continue

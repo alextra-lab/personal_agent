@@ -960,6 +960,26 @@ class TestFre1718KeyedUrlhausExport:
         }
 
     @pytest.mark.asyncio
+    async def test_fetch_reads_the_plain_text_url_list_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The plain-text export (one URL per line) gives the same entries as the CSV dump."""
+        body = _FEED_SAMPLE + "http://comma-host.example/a,b,c.exe\n"
+        seen = _mock_feed(monkeypatch, lambda r: httpx.Response(200, text=body))
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        entries = await g._fetch_urlhaus()
+
+        assert len(seen) == 1
+        assert entries == {
+            "203.0.113.9",
+            "dedicated-malware.example",
+            "comma-host.example",  # a comma in the URL must not split it as a CSV row
+            "github.com/badactor/repo/releases/download/x/payload.exe",
+            "raw.githubusercontent.com/badactor/repo/main/dropper.sh",
+        }
+
+    @pytest.mark.asyncio
     async def test_ac2_a_410_keeps_the_stale_cache_and_logs_its_age(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -971,9 +991,14 @@ class TestFre1718KeyedUrlhausExport:
 
         with structlog.testing.capture_logs() as logs:
             await g.ensure_loaded()
-            await g.ensure_loaded()  # a failed fetch counts as an attempt: no second request
+
+        # A forced refresh right after the failure reaches the throttle: no second request.
+        with structlog.testing.capture_logs() as forced_logs:
+            await g.refresh()
 
         assert len(seen) == 1
+        assert "throttled" in str(_event(forced_logs, "domain_guard_feed_unavailable")["error"])
+        assert _event(forced_logs, "domain_guard_using_fallback")["source"] == "memory"
         assert g.check_url("https://old-evil.net/x").allowed is False
         assert "410" in str(_event(logs, "domain_guard_feed_unavailable")["error"])
         fallback = _event(logs, "domain_guard_using_fallback")

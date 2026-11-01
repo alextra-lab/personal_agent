@@ -943,6 +943,15 @@ def _urlhaus_zip(
     return buf.getvalue()
 
 
+def _corrupt_deflate_zip() -> bytes:
+    """Return a zip whose member has a valid header but a corrupt deflate stream."""
+    good = bytearray(_urlhaus_zip({"1": [_record("http://x.example/")]}))
+    start = good.index(b"urlhaus_full.json") + len(b"urlhaus_full.json")
+    for i in range(start, start + 12):
+        good[i] ^= 0xFF
+    return bytes(good)
+
+
 def _record(url: str, status: str = "online") -> dict[str, object]:
     """Return one full-dump record, with the fields abuse.ch lists."""
     return {
@@ -1035,10 +1044,11 @@ class TestFre1718KeyedUrlhausExport:
         ("body", "message"),
         [
             (b"PK\x03\x04 this is not a zip", "BadZipFile"),
+            (_corrupt_deflate_zip(), "error"),  # zlib.error: not a ValueError or a BadZipFile
             (_urlhaus_zip({"1": [_record("http://x.example/")]}, member="other.json"), "KeyError"),
             (b"", "no entries"),
         ],
-        ids=["truncated_zip", "member_missing", "empty_body"],
+        ids=["truncated_zip", "corrupt_deflate", "member_missing", "empty_body"],
     )
     async def test_an_unreadable_archive_keeps_the_old_list(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: bytes, message: str
@@ -1060,8 +1070,8 @@ class TestFre1718KeyedUrlhausExport:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "member_text",
-        ["{not json", '["a", "b"]'],
-        ids=["bad_json", "list_not_dict"],
+        ["{not json", '["a", "b"]', "[" * 100_000],
+        ids=["bad_json", "list_not_dict", "deep_nesting"],
     )
     async def test_a_json_member_in_the_wrong_shape_is_a_failed_fetch(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, member_text: str

@@ -95,9 +95,10 @@ _URLHAUS_EXPORT_BASE = "https://urlhaus-api.abuse.ch/v2/files/exports"
 # CSV dump (URL in column 3, index 2), so another file is a one-line change.
 _URLHAUS_EXPORT_FILE = "full.json.zip"
 _URLHAUS_ARCHIVE_MEMBER = "urlhaus_full.json"
-# The member is about 90 MB unpacked. A larger one is refused, so a bad archive cannot use up
-# the memory of the gateway.
-_MAX_UNPACKED_BYTES = 200 * 1024 * 1024
+# The member is about 90 MB unpacked. A member over this limit is refused before it is read.
+# The limit bounds the input only: the parsed JSON can use several times more memory than the
+# bytes (about 2.5 times for a real dump). The feed comes from abuse.ch over TLS.
+_MAX_UNPACKED_BYTES = 160 * 1024 * 1024
 _ZIP_MAGIC = b"PK\x03\x04"
 _URLHAUS_URL_COLUMN = 2
 # A plain-text export line is a URL; a CSV row starts with a quote or a number.
@@ -608,13 +609,12 @@ class DomainGuard:
                         f"archive member is {info.file_size} bytes, over the limit "
                         f"of {_MAX_UNPACKED_BYTES}"
                     )
-                # The header size can be wrong in a bad archive: bound the read as well.
-                with archive.open(info) as member:
-                    raw = member.read(_MAX_UNPACKED_BYTES + 1)
-        except (zipfile.BadZipFile, KeyError, EOFError, NotImplementedError) as exc:
+                # zipfile stops the read at the size in the header, so the limit holds.
+                raw = archive.read(info)
+        except UrlhausFeedError:
+            raise
+        except Exception as exc:  # BadZipFile, KeyError, zlib.error, RuntimeError (encrypted), ...
             raise UrlhausFeedError(f"archive unreadable: {type(exc).__name__}") from None
-        if len(raw) > _MAX_UNPACKED_BYTES:
-            raise UrlhausFeedError(f"archive member is over the limit of {_MAX_UNPACKED_BYTES}")
 
         def _record_url(record: dict[str, object]) -> object:
             url = record.get("url")
@@ -622,7 +622,10 @@ class DomainGuard:
 
         try:
             parsed = json.loads(raw, object_hook=_record_url)
-        except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError
+        except (
+            ValueError,
+            RecursionError,
+        ) as exc:  # JSONDecodeError, UnicodeDecodeError, deep nesting
             raise UrlhausFeedError(f"archive JSON unreadable: {type(exc).__name__}") from None
         if not isinstance(parsed, dict):
             raise UrlhausFeedError("archive JSON is not a dict")

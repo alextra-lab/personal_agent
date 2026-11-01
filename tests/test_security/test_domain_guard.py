@@ -15,6 +15,7 @@ import csv
 import io
 import json
 import os
+import zipfile
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -932,7 +933,33 @@ def _raise_read_timeout(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadTimeout(f"timed out on {request.url}", request=request)
 
 
+def _urlhaus_zip(
+    records: dict[str, list[dict[str, object]]], member: str = "urlhaus_full.json"
+) -> bytes:
+    """Return a ``full.json.zip`` body: one JSON member, a dict of id → list of records."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(member, json.dumps(records))
+    return buf.getvalue()
+
+
+def _record(url: str, status: str = "online") -> dict[str, object]:
+    """Return one full-dump record, with the fields abuse.ch lists."""
+    return {
+        "dateadded": "2026-10-30 08:00:00 UTC",
+        "url": url,
+        "url_status": status,
+        "last_online": "2026-10-31 08:00:00 UTC",
+        "threat": "malware_download",
+        "tags": ["elf", "mirai"],
+        "urlhaus_link": "https://urlhaus.abuse.ch/url/1/",
+        "reporter": "reporter",
+    }
+
+
 class TestFre1718KeyedUrlhausExport:
+    """FRE-1718: the keyed full.json.zip export replaces the retired keyless text feed."""
+
     @pytest.mark.asyncio
     async def test_fetch_requests_the_keyed_export_and_reads_the_url_column(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -951,13 +978,116 @@ class TestFre1718KeyedUrlhausExport:
         entries = await g._fetch_urlhaus()
 
         assert [r.url.host for r in seen] == ["urlhaus-api.abuse.ch"]
-        assert seen[0].url.path == f"/v2/files/exports/{_FAKE_KEY}/urls_recent.txt"
+        assert seen[0].url.path == f"/v2/files/exports/{_FAKE_KEY}/full.json.zip"
         assert entries == {
             "203.0.113.9",
             "dedicated-malware.example",
             "github.com/badactor/repo/releases/download/x/payload.exe",
             "raw.githubusercontent.com/badactor/repo/main/dropper.sh",
         }
+
+    @pytest.mark.asyncio
+    async def test_fetch_reads_the_full_json_archive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1 mechanics: the zip member is read by name and every record gives one entry."""
+        body = _urlhaus_zip(
+            {
+                "101": [_record("http://dedicated-malware.example/a.exe")],
+                "102": [
+                    _record("http://203.0.113.9:8080/bin.sh", "offline"),
+                    _record("https://github.com/badactor/repo/releases/download/x/payload.exe"),
+                ],
+                "103": [_record("http://dedicated-malware.example/other/b.exe")],
+            }
+        )
+        seen = _mock_feed(monkeypatch, lambda r: httpx.Response(200, content=body))
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        entries = await g._fetch_urlhaus()
+
+        assert [r.url.path for r in seen] == [f"/v2/files/exports/{_FAKE_KEY}/full.json.zip"]
+        assert entries == {
+            "dedicated-malware.example",
+            "203.0.113.9",  # an offline URL still counts: the host is listed as malicious
+            "github.com/badactor/repo/releases/download/x/payload.exe",
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_archive_loads_the_guard_and_blocks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The whole path: fetch the zip, install the list, block a listed host."""
+        body = _urlhaus_zip({"1": [_record("http://dedicated-malware.example/a.exe")]})
+        _mock_feed(monkeypatch, lambda r: httpx.Response(200, content=body))
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        with structlog.testing.capture_logs() as logs:
+            await g.ensure_loaded()
+
+        assert g.check_url("https://dedicated-malware.example/x").allowed is False
+        refreshed = _event(logs, "domain_guard_refreshed")
+        assert refreshed["export"] == "full.json.zip"
+        assert refreshed["count"] == 1 + len(_BUNDLED_BLOCKLIST)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            (b"PK\x03\x04 this is not a zip", "BadZipFile"),
+            (_urlhaus_zip({"1": [_record("http://x.example/")]}, member="other.json"), "KeyError"),
+            (b"", "no entries"),
+        ],
+        ids=["truncated_zip", "member_missing", "empty_body"],
+    )
+    async def test_an_unreadable_archive_keeps_the_old_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: bytes, message: str
+    ) -> None:
+        """A bad body is a failed fetch: the guard keeps its list, and the text has no key."""
+        _mock_feed(monkeypatch, lambda r: httpx.Response(200, content=body))
+        cache_path = tmp_path / "blocklist.json"
+        _write_cache(cache_path, ["old-evil.net"], timedelta(hours=2))
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with structlog.testing.capture_logs() as logs:
+            await g._refresh()
+
+        assert message in str(_event(logs, "domain_guard_feed_unavailable")["error"])
+        assert _event(logs, "domain_guard_using_fallback")["source"] == "stale_cache"
+        assert g.check_url("https://old-evil.net/x").allowed is False
+        assert _FAKE_KEY not in repr(logs)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "member_text",
+        ["{not json", '["a", "b"]'],
+        ids=["bad_json", "list_not_dict"],
+    )
+    async def test_a_json_member_in_the_wrong_shape_is_a_failed_fetch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, member_text: str
+    ) -> None:
+        """Bad JSON, or JSON that is not id → list of records, never replaces the list."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            archive.writestr("urlhaus_full.json", member_text)
+        _mock_feed(monkeypatch, lambda r: httpx.Response(200, content=buf.getvalue()))
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        with pytest.raises(UrlhausFeedError):
+            await g._fetch_urlhaus()
+
+    @pytest.mark.asyncio
+    async def test_an_archive_member_over_the_size_limit_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bad archive cannot use up the memory: the unpacked size has a fixed limit."""
+        body = _urlhaus_zip({"1": [_record("http://dedicated-malware.example/a.exe")]})
+        _mock_feed(monkeypatch, lambda r: httpx.Response(200, content=body))
+        monkeypatch.setattr(security_module, "_MAX_UNPACKED_BYTES", 100)
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        with pytest.raises(UrlhausFeedError, match="over the limit"):
+            await g._fetch_urlhaus()
 
     @pytest.mark.asyncio
     async def test_fetch_reads_the_plain_text_url_list_too(
@@ -970,7 +1100,7 @@ class TestFre1718KeyedUrlhausExport:
 
         entries = await g._fetch_urlhaus()
 
-        assert [r.url.path for r in seen] == [f"/v2/files/exports/{_FAKE_KEY}/urls_recent.txt"]
+        assert [r.url.path for r in seen] == [f"/v2/files/exports/{_FAKE_KEY}/full.json.zip"]
         assert entries == {
             "203.0.113.9",
             "dedicated-malware.example",

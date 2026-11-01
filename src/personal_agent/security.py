@@ -9,6 +9,7 @@ import io
 import ipaddress
 import json
 import re
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -89,9 +90,15 @@ def _canonical_escape(match: re.Match[str]) -> str:
 # URLhaus bulk export (FRE-1718). abuse.ch retired the keyless /downloads/ path (HTTP 410);
 # the export now needs an Auth-Key as a URL path segment.
 _URLHAUS_EXPORT_BASE = "https://urlhaus-api.abuse.ch/v2/files/exports"
-# The one line that picks the export file (owner-confirmed 2026-11-01: the plain-text URL
-# list, one URL per line). A CSV export also parses: its URL is in column 3 (index 2).
-_URLHAUS_EXPORT_FILE = "urls_recent.txt"
+# The one line that picks the export file (owner-provided 2026-11-01): the full JSON dump,
+# a zip with one member. The parser also reads a plain-text URL list (one URL per line) or a
+# CSV dump (URL in column 3, index 2), so another file is a one-line change.
+_URLHAUS_EXPORT_FILE = "full.json.zip"
+_URLHAUS_ARCHIVE_MEMBER = "urlhaus_full.json"
+# The member is about 90 MB unpacked. A larger one is refused, so a bad archive cannot use up
+# the memory of the gateway.
+_MAX_UNPACKED_BYTES = 200 * 1024 * 1024
+_ZIP_MAGIC = b"PK\x03\x04"
 _URLHAUS_URL_COLUMN = 2
 # A plain-text export line is a URL; a CSV row starts with a quote or a number.
 _URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
@@ -526,41 +533,106 @@ class DomainGuard:
         except (httpx.HTTPError, httpx.InvalidURL) as exc:
             raise UrlhausFeedError(f"feed request failed: {type(exc).__name__}") from None
 
-        # About 120,000 rows: parse off the event loop (the loop also serves the gateway).
-        return await asyncio.to_thread(self._parse_urlhaus_export, resp.text)
+        # About 160,000 records: parse off the event loop (the loop also serves the gateway).
+        return await asyncio.to_thread(self._parse_urlhaus_export, resp.content)
 
     @staticmethod
-    def _parse_urlhaus_export(text: str) -> set[str]:
+    def _blocklist_entry(url: str) -> str | None:
+        """Return the blocklist entry for a feed *url*, or None when it has no usable host.
+
+        The entry is the hostname, or the URL entry when the host is a shared platform.
+        """
+        hostname = DomainGuard._extract_hostname(url)
+        if not hostname:
+            return None
+        if hostname in _SHARED_PLATFORM_HOSTS:
+            return DomainGuard._url_entry(url)
+        return hostname
+
+    @staticmethod
+    def _parse_urlhaus_export(body: bytes) -> set[str]:
         """Extract blocklist entries from a URLhaus export.
 
-        Accepts both export shapes: the plain-text URL list (one URL per line) and the
-        CSV dump (the URL in column ``_URLHAUS_URL_COLUMN``). A line that starts with a
-        URL scheme is a plain URL, even when the URL holds a comma.
+        A body that starts with the zip signature is the full JSON dump. Any other body is
+        text: a plain URL list (one URL per line) or a CSV dump (the URL in column
+        ``_URLHAUS_URL_COLUMN``). A text line that starts with a URL scheme is a plain URL,
+        even when the URL holds a comma. Lines that start with ``#`` are comments.
 
         Args:
-            text: The export body. Lines that start with ``#`` are comments.
+            body: The export body.
 
         Returns:
-            The hostname of each URL, or the URL entry when the host is a shared platform.
+            One entry per URL (see ``_blocklist_entry``).
+
+        Raises:
+            UrlhausFeedError: The archive is unreadable, too large, or not in the expected shape.
         """
-        lines = (line for line in io.StringIO(text) if not line.startswith("#"))
-        entries: set[str] = set()
-        for line in lines:
-            if _URL_SCHEME.match(line):
-                url = line.strip()
-            else:
-                row = next(csv.reader([line]), [])
-                if len(row) <= _URLHAUS_URL_COLUMN:
-                    continue
-                url = row[_URLHAUS_URL_COLUMN].strip()
-            hostname = DomainGuard._extract_hostname(url)
-            if not hostname:
+        if body.startswith(_ZIP_MAGIC):
+            urls = DomainGuard._urls_from_archive(body)
+        else:
+            urls = DomainGuard._urls_from_text(body.decode("utf-8", errors="replace"))
+        return {entry for url in urls if (entry := DomainGuard._blocklist_entry(url))}
+
+    @staticmethod
+    def _urls_from_text(text: str) -> list[str]:
+        """Return the URL of each data line of a plain-text or CSV export."""
+        urls: list[str] = []
+        for line in io.StringIO(text):
+            if line.startswith("#"):
                 continue
-            if hostname in _SHARED_PLATFORM_HOSTS:
-                entries.add(DomainGuard._url_entry(url))
-            else:
-                entries.add(hostname)
-        return entries
+            if _URL_SCHEME.match(line):
+                urls.append(line.strip())
+                continue
+            row = next(csv.reader([line]), [])
+            if len(row) > _URLHAUS_URL_COLUMN:
+                urls.append(row[_URLHAUS_URL_COLUMN].strip())
+        return urls
+
+    @staticmethod
+    def _urls_from_archive(body: bytes) -> list[str]:
+        """Return the URL of each record in the full JSON dump (a zip with one member).
+
+        The JSON is a dict: a URLhaus id as the key and a list of records as the value.
+        Each record dict is reduced to its URL while the JSON is parsed, so the 160,000
+        records are never held in memory.
+
+        Raises:
+            UrlhausFeedError: The zip or the JSON is unreadable, the member is missing or
+                larger than ``_MAX_UNPACKED_BYTES``, or the JSON has another shape.
+        """
+        try:
+            with zipfile.ZipFile(io.BytesIO(body)) as archive:
+                info = archive.getinfo(_URLHAUS_ARCHIVE_MEMBER)
+                if info.file_size > _MAX_UNPACKED_BYTES:
+                    raise UrlhausFeedError(
+                        f"archive member is {info.file_size} bytes, over the limit "
+                        f"of {_MAX_UNPACKED_BYTES}"
+                    )
+                # The header size can be wrong in a bad archive: bound the read as well.
+                with archive.open(info) as member:
+                    raw = member.read(_MAX_UNPACKED_BYTES + 1)
+        except (zipfile.BadZipFile, KeyError, EOFError, NotImplementedError) as exc:
+            raise UrlhausFeedError(f"archive unreadable: {type(exc).__name__}") from None
+        if len(raw) > _MAX_UNPACKED_BYTES:
+            raise UrlhausFeedError(f"archive member is over the limit of {_MAX_UNPACKED_BYTES}")
+
+        def _record_url(record: dict[str, object]) -> object:
+            url = record.get("url")
+            return url if isinstance(url, str) else record
+
+        try:
+            parsed = json.loads(raw, object_hook=_record_url)
+        except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError
+            raise UrlhausFeedError(f"archive JSON unreadable: {type(exc).__name__}") from None
+        if not isinstance(parsed, dict):
+            raise UrlhausFeedError("archive JSON is not a dict")
+        return [
+            item
+            for records in parsed.values()
+            if isinstance(records, list)
+            for item in records
+            if isinstance(item, str)
+        ]
 
 
 # ---------------------------------------------------------------------------

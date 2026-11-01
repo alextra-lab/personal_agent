@@ -93,3 +93,19 @@ Choice of a fuller export (owner decision).
 The export is `urls_recent.txt` (plain-text URL list, one URL per line, 12.7 MB, 121,765 lines). The parser takes
 both shapes: a line that starts with a URL scheme is a plain URL, any other line is a CSV row (URL in column 3).
 Replace-on-fetch stays. The old cache copy in the telemetry volume is a reference only and no code reads it.
+
+## Update 2026-11-01 (master, owner-provided): full.json.zip
+
+The export is `full.json.zip` (7.0 MB zip, one member `urlhaus_full.json`, 90 MB unpacked, 162,589 records, active URLs
+plus the last 90 days, regenerated every 5 minutes). The JSON is a dict: URLhaus id → list of records with `url`,
+`url_status`, `dateadded`, `last_online`, `threat`, `tags`, `urlhaus_link`, `reporter`. Counted the way the guard counts:
+18,241 whole hosts plus 112,785 exact URLs.
+
+- `_parse_urlhaus_export(body: bytes)` picks the reader by the zip signature. A zip is read with `zipfile` and `json`;
+  other bodies keep the text and CSV reader.
+- The member is read by name. The unpacked size limit is `_MAX_UNPACKED_BYTES` (200 MiB). The header size is checked,
+  and the read itself is bounded, because a bad archive can state a wrong size.
+- `json.loads(object_hook=...)` reduces each record dict to its URL while parsing, so the 160,000 records are not held.
+  Measured on a synthetic 80 MB member (162,589 records): +205 MB peak RSS and 8.5 s in a worker thread, so about 230 MB for the real 90 MB member, once per refresh.
+- Offline records count: the host is listed as malicious. Replace-on-fetch, the key redaction, the throttle and the 410
+  test are unchanged.

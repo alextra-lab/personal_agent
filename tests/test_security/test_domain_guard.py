@@ -951,7 +951,7 @@ class TestFre1718KeyedUrlhausExport:
         entries = await g._fetch_urlhaus()
 
         assert [r.url.host for r in seen] == ["urlhaus-api.abuse.ch"]
-        assert seen[0].url.path == f"/v2/files/exports/{_FAKE_KEY}/recent.csv"
+        assert seen[0].url.path == f"/v2/files/exports/{_FAKE_KEY}/urls_recent.txt"
         assert entries == {
             "203.0.113.9",
             "dedicated-malware.example",
@@ -970,7 +970,7 @@ class TestFre1718KeyedUrlhausExport:
 
         entries = await g._fetch_urlhaus()
 
-        assert len(seen) == 1
+        assert [r.url.path for r in seen] == [f"/v2/files/exports/{_FAKE_KEY}/urls_recent.txt"]
         assert entries == {
             "203.0.113.9",
             "dedicated-malware.example",

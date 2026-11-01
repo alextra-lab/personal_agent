@@ -23,7 +23,7 @@ The only signal is a log line.
 1. **Setting.** `abuse_ch_auth_key: str | None` in `config/settings.py`, `json_schema_extra={"secret": True}`
    (same style as `perplexity_api_key`). Env name `AGENT_ABUSE_CH_AUTH_KEY`. Add the name, no value, to `.env.example`.
    Add the field to the `"secrets"` group in `service/settings_menu_groups.py`.
-2. **Constants** in `security.py`: `_URLHAUS_EXPORT_BASE`, `_URLHAUS_EXPORT_FILE = "recent.csv"`,
+2. **Constants** in `security.py`: `_URLHAUS_EXPORT_BASE`, `_URLHAUS_EXPORT_FILE = "urls_recent.txt"`,
    `_URLHAUS_URL_COLUMN = 2`, `_FEED_TIMEOUT_SECONDS = 60.0` (32 MB body), `_MIN_FEED_FETCH_INTERVAL_SECONDS = 300.0`,
    `_STALE_BLOCKLIST_ALERT_SECONDS = 86400.0`.
 3. **Fetch.** `_fetch_urlhaus`:
@@ -49,7 +49,7 @@ The only signal is a log line.
 
 1. Tests first in `tests/test_security/test_domain_guard.py`, class `TestFre1718KeyedUrlhausExport`
    (fake key `"test-key-not-real"`, `httpx.MockTransport` through a patched `AsyncClient`):
-   - request path is `/v2/files/exports/test-key-not-real/recent.csv` (AC-1 mechanics).
+   - request path is `/v2/files/exports/test-key-not-real/urls_recent.txt` (AC-1 mechanics).
    - CSV parse: comments skipped, column 2 used, quoted comma in `tags` ok, shared-platform URL entry kept,
      header row without `#` skipped.
    - **AC-2**: a 410 response with a stale disk cache → `domain_guard_using_fallback` has `source=stale_cache` and
@@ -87,3 +87,9 @@ Choice of a fuller export (owner decision).
 3. Low, the empty-feed test passes through the missing-key path → accepted. The test sets the key through an autouse
    fixture and asserts the mocked request ran.
 4. Low, `CONFIG_INVENTORY.md` is mandatory → accepted. Regenerated with `scripts/audit/config_inventory.py generate`.
+
+## Update 2026-11-01 (master, owner-confirmed)
+
+The export is `urls_recent.txt` (plain-text URL list, one URL per line, 12.7 MB, 121,765 lines). The parser takes
+both shapes: a line that starts with a URL scheme is a plain URL, any other line is a CSV row (URL in column 3).
+Replace-on-fetch stays. The old cache copy in the telemetry volume is a reference only and no code reads it.

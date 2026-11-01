@@ -89,8 +89,9 @@ def _canonical_escape(match: re.Match[str]) -> str:
 # URLhaus bulk export (FRE-1718). abuse.ch retired the keyless /downloads/ path (HTTP 410);
 # the export now needs an Auth-Key as a URL path segment.
 _URLHAUS_EXPORT_BASE = "https://urlhaus-api.abuse.ch/v2/files/exports"
-# The one line that picks the export file. recent.csv has the URL in column 3 (index 2).
-_URLHAUS_EXPORT_FILE = "recent.csv"
+# The one line that picks the export file (owner-confirmed 2026-11-01: the plain-text URL
+# list, one URL per line). A CSV export also parses: its URL is in column 3 (index 2).
+_URLHAUS_EXPORT_FILE = "urls_recent.txt"
 _URLHAUS_URL_COLUMN = 2
 # A plain-text export line is a URL; a CSV row starts with a quote or a number.
 _URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")

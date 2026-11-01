@@ -657,7 +657,9 @@ describe('edit a role binding and a saved choice (FRE-1722)', () => {
     await userEvent.selectOptions(within(row).getByRole('combobox'), 'gpt-5.4-mini');
     await userEvent.click(within(row).getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/no credential on this gateway/);
+    expect(await within(row).findByRole('alert')).toHaveTextContent(/no credential on this gateway/);
+    expect(within(row).getByRole('combobox')).toHaveValue('gpt-5.4-mini');
+    expect(within(row).getByTestId('setting-live-value')).toHaveTextContent('claude_sonnet');
   });
 
   it('clears a role binding through the override API, not the preference API', async () => {

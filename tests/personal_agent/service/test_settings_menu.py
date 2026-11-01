@@ -636,6 +636,18 @@ def test_inherit_role_can_be_edited_and_shows_its_literal_binding() -> None:
     assert row.file_default.value == "inherit"
 
 
+def test_an_inherit_row_reads_its_own_override_not_the_primary_override() -> None:
+    own = build_menu(_overridden_inputs("compressor", "inherit", is_owner=True))
+    row = _row(own, "models_per_role", "role.compressor")
+    assert row.source == "override"
+    assert row.clearable is True
+
+    primary = build_menu(_overridden_inputs("primary", _other_llm("primary"), is_owner=True))
+    row = _row(primary, "models_per_role", "role.sub_agent")
+    assert row.source == "config file"
+    assert row.clearable is False
+
+
 def test_a_saved_choice_row_shows_a_control_and_its_default_to_every_user() -> None:
     row = _row(build_menu(_inputs(is_owner=False)), "saved_choices", "saved_choice.tool_iteration_limit")
     assert row.value == "not set"

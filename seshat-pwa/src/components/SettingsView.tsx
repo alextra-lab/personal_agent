@@ -47,6 +47,9 @@ import type { SettingRow, SettingsGroup, SettingsMenu, SettingValue } from '@/li
 
 const SAVED_CHOICE_PREFIX = 'saved_choice.';
 
+/** Writes one edit and reloads the menu. Rejects with the API's reason. */
+type SaveHandler = (row: SettingRow, value: string) => Promise<unknown>;
+
 function isScalar(value: SettingValue): value is string | number | boolean | null {
   return value === null || typeof value !== 'object';
 }
@@ -97,38 +100,57 @@ function SourceBadge({ source }: { source: string }) {
   );
 }
 
-/** A select and a Save button. The draft follows the stored value when the menu reloads. */
-function EditControl({ row, onSave }: { row: SettingRow; onSave: (row: SettingRow, value: string) => void }) {
+/**
+ * A select and a Save button. The draft follows the stored value when the menu reloads. A refused
+ * save keeps the draft and shows the reason here, because a banner can be off-screen on a phone.
+ */
+function EditControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
   const current = row.edit?.current ?? '';
   const [draft, setDraft] = useState(current);
+  const [error, setError] = useState<string | undefined>(undefined);
   useEffect(() => setDraft(current), [current]);
+
+  const save = () => {
+    setError(undefined);
+    onSave(row, draft).catch((err: unknown) =>
+      setError(`Could not save: ${err instanceof Error ? err.message : 'unknown error'}`),
+    );
+  };
+
   return (
-    <div className="flex items-center gap-2 sm:pl-[15rem]">
-      <select
-        aria-label={`New value for ${row.name}`}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        className="min-w-0 text-xs px-2 py-1 rounded border border-line bg-bg text-ink"
-      >
-        {current === '' && (
-          <option value="" disabled>
-            Choose a value
-          </option>
-        )}
-        {row.edit?.options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        disabled={draft === '' || draft === current}
-        onClick={() => onSave(row, draft)}
-        className="text-xs px-2 py-0.5 rounded border border-accent/40 text-accent hover:bg-surface flex-shrink-0 disabled:opacity-40"
-      >
-        Save
-      </button>
+    <div className="space-y-1 sm:pl-[15rem]">
+      <div className="flex items-center gap-2">
+        <select
+          aria-label={`New value for ${row.name}`}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className="min-w-0 text-xs px-2 py-1 rounded border border-line bg-bg text-ink"
+        >
+          {current === '' && (
+            <option value="" disabled>
+              Choose a value
+            </option>
+          )}
+          {row.edit?.options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={draft === '' || draft === current}
+          onClick={save}
+          className="text-xs px-2 py-0.5 rounded border border-accent/40 text-accent hover:bg-surface flex-shrink-0 disabled:opacity-40"
+        >
+          Save
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="text-xs text-ink">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -140,7 +162,7 @@ function Row({
 }: {
   row: SettingRow;
   onClear: (row: SettingRow) => void;
-  onSave: (row: SettingRow, value: string) => void;
+  onSave: SaveHandler;
 }) {
   const repeatsDefault = JSON.stringify(row.overrides) === JSON.stringify(row.file_default);
   return (
@@ -206,7 +228,7 @@ function Group({
 }: {
   group: SettingsGroup;
   onClear: (row: SettingRow) => void;
-  onSave: (row: SettingRow, value: string) => void;
+  onSave: SaveHandler;
 }) {
   const [open, setOpen] = useState(false);
   const headingId = `settings-group-${group.id}`;
@@ -317,16 +339,11 @@ export function SettingsView({ view }: { view: 'menu' | 'system' }) {
 
   const handleSave = useCallback(
     (row: SettingRow, value: string) => {
-      setWriteError(undefined);
       const write: Promise<unknown> =
         row.edit?.kind === 'saved_choice'
           ? setConstraintPreference(row.name.slice(SAVED_CHOICE_PREFIX.length), value)
           : setSettingOverride(row.name, value);
-      write
-        .then(() => load())
-        .catch((err: unknown) =>
-          setWriteError(`Could not save ${row.name}: ${err instanceof Error ? err.message : 'unknown error'}`),
-        );
+      return write.then(() => load());
     },
     [load],
   );

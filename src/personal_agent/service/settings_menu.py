@@ -537,7 +537,7 @@ def _group_models_per_role(inp: MenuInputs) -> list[SettingRow]:
                 SettingRow(
                     name=f"role.{role}",
                     value=primary,
-                    source="session" if primary_default is not None else primary_source,
+                    source="session" if primary_default is not None else _binding_source(inp, role),
                     note=f"{note}; inherits the primary model",
                 )
             )

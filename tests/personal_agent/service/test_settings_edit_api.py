@@ -21,7 +21,7 @@ from personal_agent.config.model_loader import (
     resolve_role_model_key,
     resolve_role_target,
 )
-from personal_agent.config.setting_overrides import replace_overrides
+from personal_agent.config.setting_overrides import current_overrides, replace_overrides
 from personal_agent.service import settings_edit
 from personal_agent.service.app import app
 from personal_agent.service.auth import RequestUser, get_request_user
@@ -225,6 +225,24 @@ def test_ac3_each_edit_and_each_clear_writes_one_audit_row(store: _Store) -> Non
     ]
     assert {r["parameter"] for r in store.audit} == {_PARAMETER}
     assert all(isinstance(r["changed_by"], UUID) for r in store.audit)
+
+
+def test_the_process_copy_follows_the_committed_value_with_no_re_read(
+    store: _Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed read after the commit must not leave turns on the old model."""
+
+    async def _fail(_self: object) -> None:
+        raise AssertionError("no re-read after a commit")
+
+    monkeypatch.setattr(_FakeRepository, "list_all", _fail)
+    target = _other_llm()
+    client = _client()
+
+    assert client.put(_URL, json={"parameter": _PARAMETER, "value": target}).status_code == 200
+    assert resolve_role_target(_ROLE)[0] == target
+    assert client.delete(_URL, params={"parameter": _PARAMETER}).status_code == 200
+    assert _PARAMETER not in current_overrides()
 
 
 def test_ac3_clear_with_nothing_stored_writes_no_audit_row(store: _Store) -> None:

@@ -21,7 +21,11 @@ from personal_agent.config.model_loader import (
     load_model_config,
     validate_role_override,
 )
-from personal_agent.config.setting_overrides import ROLE_PARAMETER_PREFIX, replace_overrides
+from personal_agent.config.setting_overrides import (
+    ROLE_PARAMETER_PREFIX,
+    current_overrides,
+    replace_overrides,
+)
 from personal_agent.llm_client.models import INHERIT_DEPLOYMENT
 from personal_agent.orchestrator.constraint_options import build_provider_availability
 from personal_agent.service.auth import RequestUser
@@ -33,8 +37,8 @@ from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 
-#: Covers the write, the re-read and the replace of the process copy. Without it, an older
-#: re-read can replace a newer one, and turns then use a value that the table no longer holds.
+#: Covers the write and the update of the process copy. Without it, the copy can take the writes
+#: in another order than the table, and turns then use a value that the table no longer holds.
 _edit_lock = asyncio.Lock()
 
 
@@ -56,9 +60,7 @@ def is_owner(user: RequestUser) -> bool:
     """
     owner_email = settings.agent_owner_email
     return bool(
-        settings.gateway_auth_enabled
-        and owner_email
-        and user.email.casefold() == owner_email.casefold()
+        settings.gateway_auth_enabled and owner_email and user.email.lower() == owner_email.lower()
     )
 
 
@@ -134,7 +136,7 @@ async def set_override(
         stored = await repo.get(parameter)
         old_value = stored if stored is not None else file_value(parameter)
         await repo.set(parameter=parameter, value=value, changed_by=changed_by, old_value=old_value)
-        replace_overrides(await repo.list_all())
+        replace_overrides({**current_overrides(), parameter: value})
     log.info(
         "setting_override_stored",
         parameter=parameter,
@@ -164,8 +166,8 @@ async def clear_override(
         cleared = await repo.clear(
             parameter=parameter, changed_by=changed_by, new_value=file_value(parameter)
         )
-        if cleared:
-            replace_overrides(await repo.list_all())
+        remaining = {key: val for key, val in current_overrides().items() if key != parameter}
+        replace_overrides(remaining)
     log.info(
         "setting_override_cleared",
         parameter=parameter,

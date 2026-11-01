@@ -46,8 +46,8 @@ cannot read Postgres. So:
   (Codex plan review). Six callers use this path (captains_log, insights, compressor,
   session_summary, consolidator, entity_extraction).
 
-The snapshot is loaded in the gateway lifespan after `init_db`, and replaced after each committed
-write, from a re-read of the table. A load failure logs a warning and the file values apply.
+The snapshot is loaded in the gateway lifespan after `init_db`, and updated after each committed
+write with the committed value. A load failure logs a warning and the file values apply.
 
 **Assumption: the gateway is one process.** `docker-compose.cloud.yml`, `Dockerfile.gateway` and
 `make dev` run uvicorn with no `--workers`. A second worker would not see an edit until restart. A
@@ -75,9 +75,10 @@ the next turn or sooner" and needs no per-turn pin.
   is not a live health check. A provider that is down fails the same way as a file binding to it.
   Any other parameter name is refused with a reason in this part.
 - Set and Clear each commit one transaction that holds the override write and one audit row. Then
-  the snapshot is replaced from a re-read. A process-level `asyncio.Lock` covers the write, the
-  re-read and the replace, so an older read cannot replace a newer one (Codex plan review). Clear
-  with no stored row returns `cleared: false` and writes no audit row.
+  the snapshot takes the committed value. There is no re-read, because a failed re-read after the
+  commit leaves the snapshot stale. A process-level `asyncio.Lock` covers the write and the update,
+  so the snapshot takes the writes in the order of the table (Codex plan review). Clear with no
+  stored row returns `cleared: false` and writes no audit row.
 - Audit values for a role binding are the values that apply: old is the stored override or the
   file value. New is the new override, or the file value on Clear.
 

@@ -13,19 +13,25 @@
  *
  * FRE-1722 AC-4: a role binding and a saved choice each show the edit control, the live value, the
  *   file default and Clear.
+ *
+ * FRE-1724: each input type sends a typed value, a hidden value starts empty, and a read-only row shows
+ *   its reason and no control.
  */
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
-import type { SettingsMenu } from '@/lib/types';
+import type { SettingEdit, SettingRow, SettingsMenu } from '@/lib/types';
 
 const mockGetSettingsMenu = vi.fn();
 const mockClear = vi.fn();
 const mockSetPreference = vi.fn();
 const mockSetOverride = vi.fn();
 const mockClearOverride = vi.fn();
+const mockSetSessionSelection = vi.fn();
+const mockSetSessionEffort = vi.fn();
+const mockUpdateLocation = vi.fn();
 const mockResolveLastSessionId = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
@@ -35,6 +41,9 @@ vi.mock('@/lib/agui-client', () => ({
   setConstraintPreference: (...args: unknown[]) => mockSetPreference(...args),
   setSettingOverride: (...args: unknown[]) => mockSetOverride(...args),
   clearSettingOverride: (...args: unknown[]) => mockClearOverride(...args),
+  setSessionSelection: (...args: unknown[]) => mockSetSessionSelection(...args),
+  setSessionEffort: (...args: unknown[]) => mockSetSessionEffort(...args),
+  updateLocationPreference: (...args: unknown[]) => mockUpdateLocation(...args),
 }));
 
 vi.mock('@/lib/session', () => ({
@@ -92,7 +101,7 @@ function menu(overrides: Partial<SettingsMenu> = {}): SettingsMenu {
     })),
     system: {
       id: 'system',
-      title: 'System (read-only)',
+      title: 'System',
       error: null,
       rows: [
         {
@@ -191,7 +200,7 @@ describe('SettingsView System page (AC-1)', () => {
     mockGetSettingsMenu.mockResolvedValue(menu());
     render(<SettingsView view="system" />);
 
-    expect(await screen.findByRole('heading', { level: 2, name: /^System \(read-only\)/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: /^System/ })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^Saved choices/ })).not.toBeInTheDocument();
     await openGroup('System');
     const row = screen.getByText('setting.neo4j_password').closest('[data-testid="setting-row"]') as HTMLElement;
@@ -925,5 +934,162 @@ describe('edit an effort preset and a budget cap (FRE-1723)', () => {
     expect(within(preset).getByRole('spinbutton', { name: /sub_agent_rounds/ })).toHaveValue(20);
     expect(save(cap)).toBeDisabled();
     expect(save(preset)).toBeDisabled();
+  });
+});
+
+
+describe('FRE-1724 setting controls', () => {
+  function withRow(row: Partial<SettingRow> & { name: string }): SettingsMenu {
+    const base = menu();
+    const full: SettingRow = {
+      value: 1,
+      source: 'code default',
+      overrides: null,
+      clearable: false,
+      note: null,
+      file_default: null,
+      edit: null,
+      ...row,
+    };
+    return {
+      ...base,
+      groups: base.groups.map((g) => (g.id === 'turn_runs' ? { ...g, rows: [full] } : g)),
+    };
+  }
+
+  async function open(row: Partial<SettingRow> & { name: string }): Promise<void> {
+    mockGetSettingsMenu.mockResolvedValue(withRow(row));
+    mockSetOverride.mockResolvedValue({ parameter: row.name, value: null });
+    render(<SettingsView view="menu" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /How a turn runs/ })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /How a turn runs/ }));
+  }
+
+  function edit(input: NonNullable<SettingEdit['input']>, current: string | null, options: string[] = [], nullable = false) {
+    return { kind: 'setting' as const, options, current, input, nullable };
+  }
+
+  it('a number control sends a number', async () => {
+    await open({ name: 'setting.a', edit: edit('number', '3') });
+    const field = screen.getByLabelText('New value for setting.a');
+    await userEvent.clear(field);
+    await userEvent.type(field, '12');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mockSetOverride).toHaveBeenCalledWith('setting.a', 12);
+  });
+
+  it('a boolean control sends a boolean', async () => {
+    await open({ name: 'setting.a', edit: edit('boolean', 'true') });
+    await userEvent.selectOptions(screen.getByLabelText('New value for setting.a'), 'false');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mockSetOverride).toHaveBeenCalledWith('setting.a', false);
+  });
+
+  it('a select control sends the option', async () => {
+    await open({ name: 'setting.a', edit: edit('select', 'one', ['one', 'two']) });
+    await userEvent.selectOptions(screen.getByLabelText('New value for setting.a'), 'two');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mockSetOverride).toHaveBeenCalledWith('setting.a', 'two');
+  });
+
+  it('an empty nullable control sends null', async () => {
+    await open({ name: 'setting.a', edit: edit('text', 'old', [], true) });
+    await userEvent.clear(screen.getByLabelText('New value for setting.a'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mockSetOverride).toHaveBeenCalledWith('setting.a', null);
+  });
+
+  it('a JSON control sends the parsed value, and invalid JSON turns Save off', async () => {
+    await open({ name: 'tool.a', edit: edit('json', '{"x": 1}') });
+    const field = screen.getByLabelText('New value for tool.a');
+    await userEvent.clear(field);
+    await userEvent.type(field, '{{"x"');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await userEvent.clear(field);
+    await userEvent.type(field, '{{"x": 2}');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mockSetOverride).toHaveBeenCalledWith('tool.a', { x: 2 });
+  });
+
+  it('a hidden value starts empty and Save stays off until the owner types', async () => {
+    await open({ name: 'setting.a', value: 'set', edit: edit('text', null) });
+    const field = screen.getByLabelText('New value for setting.a') as HTMLInputElement;
+    expect(field.value).toBe('');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await userEvent.type(field, 'new');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('a read-only row shows its reason and no control', async () => {
+    await open({
+      name: 'setting.a',
+      value: 'set',
+      applies: 'read_only',
+      read_only_reason: 'this is a secret or a credential',
+    });
+    expect(screen.getByTestId('setting-read-only-reason')).toHaveTextContent('this is a secret or a credential');
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
+  it('a refused save shows the reason on the row', async () => {
+    mockSetOverride.mockRejectedValue(new Error('the settings checks refuse this value'));
+    mockGetSettingsMenu.mockResolvedValue(withRow({ name: 'setting.a', edit: edit('number', '3') }));
+    render(<SettingsView view="menu" />);
+    await userEvent.click(await screen.findByRole('button', { name: /How a turn runs/ }));
+    const field = screen.getByLabelText('New value for setting.a');
+    await userEvent.clear(field);
+    await userEvent.type(field, '9');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('the settings checks refuse this value');
+  });
+
+  it('the conversation rows and the consent write through their own routes', async () => {
+    mockSearchParams = new URLSearchParams('session=abc');
+    mockSetSessionSelection.mockResolvedValue(undefined);
+    mockSetSessionEffort.mockResolvedValue(undefined);
+    mockUpdateLocation.mockResolvedValue(undefined);
+    const base = menu();
+    const row = (name: string, kind: SettingEdit['kind'], current: string, options: string[], input?: SettingEdit['input']): SettingRow => ({
+      name,
+      value: current,
+      source: 'session',
+      overrides: null,
+      clearable: false,
+      note: null,
+      file_default: null,
+      edit: { kind, options, current, input },
+    });
+    mockGetSettingsMenu.mockResolvedValue({
+      ...base,
+      groups: base.groups.map((g) =>
+        g.id === 'conversation'
+          ? {
+              ...g,
+              rows: [
+                row('session.primary_model', 'session_primary', 'm1', ['m1', 'm2']),
+                row('session.effort_level', 'session_effort', 'normal', ['fast', 'normal']),
+                row('location.consent', 'location_consent', 'false', [], 'boolean'),
+              ],
+            }
+          : g,
+      ),
+    });
+    render(<SettingsView view="menu" />);
+    await userEvent.click(await screen.findByRole('button', { name: /This conversation/ }));
+
+    const saves = () => screen.getAllByRole('button', { name: 'Save' });
+    await userEvent.selectOptions(screen.getByLabelText('New value for session.primary_model'), 'm2');
+    await userEvent.click(saves()[0]);
+    expect(mockSetSessionSelection).toHaveBeenCalledWith('abc', 'primary', 'm2');
+
+    await userEvent.selectOptions(screen.getByLabelText('New value for session.effort_level'), 'fast');
+    await userEvent.click(saves()[1]);
+    expect(mockSetSessionEffort).toHaveBeenCalledWith('abc', 'fast');
+
+    await userEvent.selectOptions(screen.getByLabelText('New value for location.consent'), 'true');
+    await userEvent.click(saves()[2]);
+    expect(mockUpdateLocation).toHaveBeenCalledWith(true);
+    expect(mockSetOverride).not.toHaveBeenCalled();
+    mockSearchParams = new URLSearchParams();
   });
 });

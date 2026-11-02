@@ -6,6 +6,7 @@ real rows is in ``test_settings_edit_db.py``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -14,9 +15,13 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+import structlog
 from fastapi.testclient import TestClient
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError, model_validator
 
+from personal_agent.brainstem.consumers.mode_controller import ModeControllerConsumer
+from personal_agent.config import settings
+from personal_agent.config.governance_loader import file_governance_config, load_governance_config
 from personal_agent.config.model_loader import (
     load_model_config,
     resolve_role_model_key,
@@ -25,17 +30,26 @@ from personal_agent.config.model_loader import (
 from personal_agent.config.seshat_effort import (
     effort_spec,
     file_seshat_effort,
+    get_seshat_effort,
     preset_values,
     reset_current_effort,
     rounds_for_turn,
     set_current_effort,
 )
-from personal_agent.config.setting_overrides import current_overrides, replace_overrides
+from personal_agent.config.setting_classes import READ_ONLY_SETTINGS
+from personal_agent.config.setting_overrides import (
+    apply_setting_overrides,
+    current_overrides,
+    replace_overrides,
+)
+from personal_agent.config.settings import AppConfig
 from personal_agent.cost_gate import BudgetConfig, BudgetConfigError, CapEntry, CostGate
+from personal_agent.orchestrator.executor import _resolve_max_iterations
 from personal_agent.service import settings_edit
 from personal_agent.service.app import app
 from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import get_db_session
+from personal_agent.service.settings_menu import MenuInputs, build_menu
 
 _URL = "/api/v1/settings/overrides"
 _OWNER = "owner@example.com"
@@ -63,11 +77,19 @@ class _FakeRepository:
     async def list_all(self) -> dict[str, JsonValue]:
         return dict(self.store.overrides)
 
-    async def get(self, parameter: str) -> JsonValue:
-        return self.store.overrides.get(parameter)
+    async def find(self, parameter: str) -> tuple[JsonValue] | None:
+        if parameter not in self.store.overrides:
+            return None
+        return (self.store.overrides[parameter],)
 
     async def set(
-        self, *, parameter: str, value: JsonValue, changed_by: UUID, old_value: JsonValue
+        self,
+        *,
+        parameter: str,
+        value: JsonValue,
+        changed_by: UUID,
+        old_value: JsonValue,
+        hidden: bool = False,
     ) -> None:
         self.store.overrides[parameter] = value
         self.store.audit.append(
@@ -76,11 +98,13 @@ class _FakeRepository:
                 "action": "set",
                 "changed_by": changed_by,
                 "old_value": old_value,
-                "new_value": value,
+                "new_value": "set" if hidden else value,
             }
         )
 
-    async def clear(self, *, parameter: str, changed_by: UUID, new_value: JsonValue) -> bool:
+    async def clear(
+        self, *, parameter: str, changed_by: UUID, new_value: JsonValue, hidden: bool = False
+    ) -> bool:
         if parameter not in self.store.overrides:
             return False
         old_value = self.store.overrides.pop(parameter)
@@ -89,7 +113,7 @@ class _FakeRepository:
                 "parameter": parameter,
                 "action": "clear",
                 "changed_by": changed_by,
-                "old_value": old_value,
+                "old_value": "set" if hidden else old_value,
                 "new_value": new_value,
             }
         )
@@ -173,7 +197,7 @@ def test_ac2_an_invalid_value_is_refused_with_a_reason_and_writes_nothing(
 
 
 @pytest.mark.parametrize(
-    "parameter", ["role.no_such_role", "setting.llm_timeout_seconds", "saved_choice.x", ""]
+    "parameter", ["role.no_such_role", "setting.no_such_setting", "saved_choice.x", ""]
 )
 def test_ac2_a_parameter_that_cannot_be_edited_writes_nothing(
     store: _Store, parameter: str
@@ -476,3 +500,435 @@ def test_fre1723_a_cap_edit_mirrors_the_enforced_caps_and_a_mirror_failure_keeps
     monkeypatch.setattr(settings_edit, "sync_budget_policies_to_db", _fail)
     assert client.put(_URL, json={"parameter": _CAP, "value": 1}).status_code == 200
     assert gate.config.caps[0].cap_usd == Decimal("1.0")
+
+
+# ---------------------------------------------------------------------------
+# FRE-1724: AppConfig settings, governance, deployments and role estimates
+# ---------------------------------------------------------------------------
+
+_SENTINEL = "sk-sentinel-secret-value-1724"
+
+
+@pytest.fixture
+def clean_settings() -> Iterator[None]:
+    yield
+    replace_overrides({})
+    apply_setting_overrides(at_start=True)
+
+
+def _execution_context() -> SimpleNamespace:
+    return SimpleNamespace(tool_iteration_bonus=0, grounding_retrieval_grant=0)
+
+
+def test_fre1724_ac3_next_turn_an_edit_changes_what_the_reader_gets_and_clear_restores(
+    store: _Store, clean_settings: None
+) -> None:
+    before = _resolve_max_iterations(_execution_context())  # type: ignore[arg-type]
+    edited = settings.orchestrator_spend_threshold + 7
+
+    resp = _client().put(
+        _URL, json={"parameter": "setting.orchestrator_max_tool_iterations", "value": edited}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["value"] == edited
+    assert _resolve_max_iterations(_execution_context()) == edited  # type: ignore[arg-type]
+
+    cleared = _client().delete(
+        _URL, params={"parameter": "setting.orchestrator_max_tool_iterations"}
+    )
+
+    assert cleared.status_code == 200
+    assert _resolve_max_iterations(_execution_context()) == before  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_fre1724_ac3_next_restart_an_edit_changes_the_reader_at_the_next_start_only(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parameter = "setting.mode_evaluation_interval_seconds"
+    before = settings.mode_evaluation_interval_seconds
+    edited = before + 11
+
+    resp = _client().put(_URL, json={"parameter": parameter, "value": edited})
+
+    assert resp.status_code == 200, resp.text
+    assert settings.mode_evaluation_interval_seconds == before
+    assert _mode_controller()._eval_interval == before
+
+    # A new process: an empty copy, then the startup load from the stored rows.
+    replace_overrides({})
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+    await settings_edit.load_overrides_at_startup()
+
+    assert settings.mode_evaluation_interval_seconds == edited
+    assert _mode_controller()._eval_interval == edited
+
+
+class _FakeSessionFactory:
+    async def __aenter__(self) -> object:
+        return object()
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+def _mode_controller() -> ModeControllerConsumer:
+    return ModeControllerConsumer(mode_manager=SimpleNamespace())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["many", True, None, [1], -1],
+)
+def test_fre1724_an_invalid_setting_is_refused_and_writes_nothing(
+    store: _Store, clean_settings: None, value: JsonValue
+) -> None:
+    resp = _client().put(
+        _URL, json={"parameter": "setting.orchestrator_max_tool_iterations", "value": value}
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]
+    assert store.overrides == {}
+    assert store.audit == []
+
+
+def test_fre1724_a_read_only_setting_is_refused_with_its_reason(
+    store: _Store, clean_settings: None
+) -> None:
+    resp = _client().put(_URL, json={"parameter": "setting.database_echo", "value": True})
+
+    assert resp.status_code == 422
+    assert "imports" in resp.json()["detail"]
+    assert store.overrides == {}
+
+
+def test_fre1724_a_cross_field_refusal_keeps_the_settings_check_reason(
+    store: _Store, clean_settings: None
+) -> None:
+    resp = _client().put(
+        _URL,
+        json={
+            "parameter": "setting.orchestrator_spend_threshold",
+            "value": settings.orchestrator_max_tool_iterations + 1,
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "orchestrator" in resp.json()["detail"]
+
+
+def test_fre1724_a_ceiling_below_a_preset_is_refused(store: _Store, clean_settings: None) -> None:
+    resp = _client().put(
+        _URL, json={"parameter": "setting.sub_agent_max_tool_iterations", "value": 1}
+    )
+
+    assert resp.status_code == 422
+    assert "exceed" in resp.json()["detail"]
+    assert store.overrides == {}
+
+
+def test_fre1724_a_non_owner_cannot_edit_a_setting(store: _Store, clean_settings: None) -> None:
+    resp = _client(email="other@example.com").put(
+        _URL, json={"parameter": "setting.orchestrator_max_tool_iterations", "value": 3}
+    )
+
+    assert resp.status_code == 403
+    assert store.overrides == {}
+
+
+def test_fre1724_the_stored_form_passes_the_same_check_on_reload(
+    store: _Store, clean_settings: None
+) -> None:
+    resp = _client().put(_URL, json={"parameter": "setting.llm_timeout_seconds", "value": 77})
+
+    assert resp.status_code == 200, resp.text
+    settings_edit.validate_override(
+        "setting.llm_timeout_seconds", store.overrides["setting.llm_timeout_seconds"]
+    )
+
+
+def test_fre1724_a_tool_edit_reaches_the_reader_and_writes_one_audit_row(
+    store: _Store,
+) -> None:
+    tool = next(iter(file_governance_config().tools))
+    parameter = f"tool.{tool}"
+    file_value = file_governance_config().tools[tool].loop_max_consecutive
+
+    resp = _client().put(
+        _URL, json={"parameter": parameter, "value": {"loop_max_consecutive": file_value + 2}}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert load_governance_config().tools[tool].loop_max_consecutive == file_value + 2
+    assert len(store.audit) == 1
+    assert store.audit[0]["old_value"]["loop_max_consecutive"] == file_value  # type: ignore[index]
+
+    _client().delete(_URL, params={"parameter": parameter})
+
+    assert load_governance_config().tools[tool].loop_max_consecutive == file_value
+
+
+def test_fre1724_a_deployment_edit_reaches_the_catalog(store: _Store) -> None:
+    key = next(iter(load_model_config().models))
+    before = load_model_config().models[key].default_timeout
+
+    resp = _client().put(
+        _URL, json={"parameter": f"deployment.{key}", "value": {"default_timeout": before + 3}}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert load_model_config().models[key].default_timeout == before + 3
+
+
+def test_fre1724_uncapped_roles_and_grounding_state_cannot_be_edited(store: _Store) -> None:
+    for parameter in ("uncapped_roles", "grounding_enforcement.a_model"):
+        resp = _client().put(_URL, json={"parameter": parameter, "value": []})
+        assert resp.status_code == 422
+    assert store.overrides == {}
+
+
+# ---------------------------------------------------------------------------
+# FRE-1724 AC-4: a secret value never reaches a response, an audit row or a log line
+# ---------------------------------------------------------------------------
+
+
+SECRET_PARAMETERS = sorted(
+    f"setting.{field}" for field, reason in READ_ONLY_SETTINGS.items() if "secret" in reason
+)
+
+
+def test_fre1724_ac4_the_secret_list_is_not_empty() -> None:
+    assert "setting.openai_api_key" in SECRET_PARAMETERS
+    assert len(SECRET_PARAMETERS) >= 16
+
+
+@pytest.mark.parametrize("parameter", SECRET_PARAMETERS)
+def test_fre1724_ac4_a_secret_is_refused_and_appears_nowhere(
+    store: _Store, clean_settings: None, parameter: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with structlog.testing.capture_logs() as entries:
+        resp = _client().put(_URL, json={"parameter": parameter, "value": _SENTINEL})
+
+    assert resp.status_code == 422
+    assert _SENTINEL not in resp.text
+    assert store.overrides == {}
+    assert store.audit == []
+    assert _SENTINEL not in str(entries)
+    assert _SENTINEL not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f'"{_SENTINEL}"',
+        f'["{_SENTINEL}"]',
+        f'{{"value": "{_SENTINEL}"}}',
+        f'{{"parameter": 1, "value": "{_SENTINEL}"}}',
+        f'{{"parameter": "setting.openai_api_key", "value": "{_SENTINEL}"',
+        f"{_SENTINEL}",
+    ],
+)
+def test_fre1724_ac4_a_malformed_body_does_not_echo_the_value(
+    store: _Store, clean_settings: None, body: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with structlog.testing.capture_logs() as entries:
+        resp = _client().put(_URL, content=body, headers={"content-type": "application/json"})
+
+    assert resp.status_code == 422
+    assert _SENTINEL not in resp.text
+    assert _SENTINEL not in str(entries)
+    assert _SENTINEL not in caplog.text
+    assert store.audit == []
+
+
+def test_fre1724_ac4_a_password_in_a_url_is_refused_on_every_setting(
+    store: _Store, clean_settings: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    value = f"http://user:{_SENTINEL}@example.test"
+
+    with structlog.testing.capture_logs() as entries:
+        resp = _client().put(_URL, json={"parameter": "setting.searxng_base_url", "value": value})
+
+    assert resp.status_code == 422
+    assert _SENTINEL not in resp.text
+    assert _SENTINEL not in str(entries)
+    assert _SENTINEL not in caplog.text
+    assert store.overrides == {}
+
+
+def test_fre1724_ac4_a_write_only_row_holds_set_in_the_response_the_audit_and_the_log(
+    store: _Store, clean_settings: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    value = f"http://{_SENTINEL}.example.test"
+    parameter = "setting.searxng_base_url"
+
+    with structlog.testing.capture_logs() as entries:
+        put = _client().put(_URL, json={"parameter": parameter, "value": value})
+        second = _client().put(_URL, json={"parameter": parameter, "value": f"{value}/second"})
+        cleared = _client().delete(_URL, params={"parameter": parameter})
+
+    assert put.status_code == 200, put.text
+    assert second.status_code == 200, second.text
+    assert cleared.status_code == 200
+    assert put.json()["value"] == "set"
+    assert _SENTINEL not in put.text + second.text + cleared.text
+    assert len(store.audit) == 3
+    assert _SENTINEL not in str(store.audit)
+    # The capture must hold the write lines, or the next check proves nothing.
+    assert {"setting_override_stored", "setting_override_cleared"} <= {
+        str(entry["event"]) for entry in entries
+    }
+    assert _SENTINEL not in str(entries)
+    assert _SENTINEL not in caplog.text
+
+
+def test_fre1724_ac4_a_refused_hidden_value_keeps_the_error_type_only(
+    store: _Store, clean_settings: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with structlog.testing.capture_logs() as entries:
+        resp = _client().put(
+            _URL, json={"parameter": "setting.ws_max_message_size", "value": _SENTINEL}
+        )
+
+    assert resp.status_code == 422
+    assert _SENTINEL not in resp.text
+    assert _SENTINEL not in str(entries)
+    assert _SENTINEL not in caplog.text
+
+
+def test_fre1724_ac4_a_cross_field_message_with_a_url_does_not_reach_a_reason() -> None:
+    """Codex plan review: a validator message can quote a database URL with its password."""
+
+    class _Model(BaseModel):
+        value: int
+
+        @model_validator(mode="after")
+        def _check(self) -> _Model:
+            raise ValueError(f"database_url='postgresql://agent:{_SENTINEL}@db/x' is refused")
+
+    with pytest.raises(ValidationError) as excinfo:
+        _Model(value=1)
+
+    for hidden in (True, False):
+        reason = settings_edit._refusal_reason("setting.x", excinfo.value, hidden=hidden)
+        assert _SENTINEL not in reason
+        assert "postgresql" not in reason
+
+
+def test_fre1724_ac4_the_log_capture_sees_a_seeded_secret() -> None:
+    """A seeded negative: the checks above are only as good as this capture."""
+    with structlog.testing.capture_logs() as entries:
+        settings_edit.log.warning("seeded", value=_SENTINEL)
+
+    assert _SENTINEL in str(entries)
+
+
+@pytest.mark.asyncio
+async def test_fre1724_a_stored_ceiling_below_a_preset_logs_an_error_and_starts(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex plan review: the fatal effort check runs before the overrides load."""
+    store.overrides["setting.sub_agent_max_tool_iterations"] = 1
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    assert "effort_round_ceiling_conflict" in {str(entry["event"]) for entry in entries}
+
+
+def test_fre1724_every_control_value_passes_its_own_validator(
+    budget_file: None, clean_settings: None
+) -> None:
+    """A control starts from ``edit.current``, so an unchanged value must save. Real files."""
+    models = load_model_config()
+    menu = build_menu(
+        MenuInputs(
+            app_settings=settings,
+            models=models,
+            effort=get_seshat_effort(),
+            governance=load_governance_config(),
+            budget=settings_edit.load_budget_config(),
+            saved_choices={},
+            session=None,
+            location_consent=False,
+            grounding=[],
+            provider_available=lambda _provider: True,
+            is_owner=True,
+        )
+    )
+    groups = [*menu.groups, menu.system]
+
+    assert [group.id for group in groups if group.error] == []
+    checked = 0
+    for row in (row for group in groups for row in group.rows):
+        edit = row.edit
+        if edit is None or edit.kind != "setting" or edit.current is None:
+            continue
+        if edit.input in ("json", "number"):
+            value: JsonValue = json.loads(edit.current)
+        elif edit.input == "boolean":
+            value = edit.current == "true"
+        else:
+            value = edit.current
+        settings_edit.validate_override(row.name, value)
+        checked += 1
+    assert checked > 300
+
+
+def test_fre1724_a_clear_that_leaves_a_preset_above_the_ceiling_is_refused(
+    store: _Store, clean_settings: None
+) -> None:
+    """Code review: a Clear changes the live ceiling as an edit does."""
+    ceiling = "setting.sub_agent_max_tool_iterations"
+    file_ceiling = settings.sub_agent_max_tool_iterations
+    high = file_ceiling + 10
+    assert _client().put(_URL, json={"parameter": ceiling, "value": high}).status_code == 200
+    preset = _preset(rounds=file_ceiling + 5)
+    assert (
+        _client().put(_URL, json={"parameter": "effort.level.deep", "value": preset}).status_code
+        == 200
+    )
+
+    resp = _client().delete(_URL, params={"parameter": ceiling})
+
+    assert resp.status_code == 422
+    assert "exceed" in resp.json()["detail"]
+    assert ceiling in store.overrides
+    assert settings.sub_agent_max_tool_iterations == high
+
+    assert _client().delete(_URL, params={"parameter": "effort.level.deep"}).status_code == 200
+    assert _client().delete(_URL, params={"parameter": ceiling}).status_code == 200
+    assert settings.sub_agent_max_tool_iterations == file_ceiling
+
+
+def test_fre1724_raising_a_ceiling_reaches_a_preset_that_the_old_ceiling_skipped(
+    store: _Store, clean_settings: None
+) -> None:
+    """The cached presets depend on the ceiling, so an edit of it must drop the cache."""
+    file_ceiling = settings.sub_agent_max_tool_iterations
+    replace_overrides({"effort.level.deep": _preset(rounds=file_ceiling + 5)})
+    assert preset_values(get_seshat_effort(), "deep") != _preset(rounds=file_ceiling + 5)
+
+    resp = _client().put(
+        _URL,
+        json={"parameter": "setting.sub_agent_max_tool_iterations", "value": file_ceiling + 10},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert preset_values(get_seshat_effort(), "deep") == _preset(rounds=file_ceiling + 5)
+
+
+def test_fre1724_the_audit_tells_a_stored_null_from_no_row(
+    store: _Store, clean_settings: None
+) -> None:
+    """Code review: ``repo.get`` returned None for both, so the audit named the file value."""
+    field_info = AppConfig.model_fields["linear_personal_agent_label_id"]
+    assert field_info.annotation == str | None
+    parameter = "setting.linear_personal_agent_label_id"
+    assert _client().put(_URL, json={"parameter": parameter, "value": None}).status_code == 200
+    assert _client().put(_URL, json={"parameter": parameter, "value": "x"}).status_code == 200
+
+    assert store.audit[1]["old_value"] == "not set"

@@ -65,8 +65,10 @@ class SettingsOverridesRepository:
         )
         return {str(parameter): value for parameter, value in result.all()}
 
-    async def get(self, parameter: str) -> JsonValue:
-        """Return the stored value of one parameter, or ``None`` when no row exists.
+    async def find(self, parameter: str) -> tuple[JsonValue] | None:
+        """Return the stored value of one parameter in a tuple, or ``None`` when no row exists.
+
+        The tuple tells a stored JSON null from no row.
 
         Args:
             parameter: The settings menu row name.
@@ -74,8 +76,8 @@ class SettingsOverridesRepository:
         result = await self.db.execute(
             select(SettingsOverrideModel.value).where(SettingsOverrideModel.parameter == parameter)
         )
-        value: JsonValue = result.scalar_one_or_none()
-        return value
+        row = result.first()
+        return (row[0],) if row is not None else None
 
     async def set(
         self,
@@ -84,6 +86,7 @@ class SettingsOverridesRepository:
         value: JsonValue,
         changed_by: UUID,
         old_value: JsonValue,
+        hidden: bool = False,
     ) -> None:
         """Store an override and its audit row in one transaction.
 
@@ -91,7 +94,8 @@ class SettingsOverridesRepository:
             parameter: The settings menu row name.
             value: The validated new value.
             changed_by: The user who made the edit.
-            old_value: The value that applied before this edit.
+            old_value: The value that applied before this edit, in the form for the audit row.
+            hidden: The audit row holds ``"set"`` in place of the value (FRE-1724).
         """
         now = datetime.now(UTC)
         await self.db.execute(
@@ -108,7 +112,7 @@ class SettingsOverridesRepository:
             action="set",
             changed_by=changed_by,
             old_value=old_value,
-            new_value=value,
+            new_value="set" if hidden else value,
         )
         await self.db.commit()
 
@@ -118,13 +122,15 @@ class SettingsOverridesRepository:
         parameter: str,
         changed_by: UUID,
         new_value: JsonValue,
+        hidden: bool = False,
     ) -> bool:
         """Remove an override and write its audit row in one transaction.
 
         Args:
             parameter: The settings menu row name.
             changed_by: The user who pressed Clear.
-            new_value: The value that applies after the row is gone.
+            new_value: The value that applies after the row is gone, in the form for the audit row.
+            hidden: The audit row holds ``"set"`` in place of the deleted value (FRE-1724).
 
         Returns:
             ``True`` when a row existed. With no row, nothing is written.
@@ -143,7 +149,7 @@ class SettingsOverridesRepository:
             parameter=parameter,
             action="clear",
             changed_by=changed_by,
-            old_value=row[0],
+            old_value="set" if hidden else row[0],
             new_value=new_value,
         )
         await self.db.commit()

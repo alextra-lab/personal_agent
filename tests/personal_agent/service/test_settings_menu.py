@@ -842,9 +842,245 @@ def test_a_stale_cap_says_so_and_can_be_cleared() -> None:
     assert row.note is not None and "not usable" in row.note
 
 
-def test_role_estimates_stay_read_only_for_the_owner() -> None:
+def test_uncapped_roles_stays_read_only_with_its_reason_for_the_owner() -> None:
     menu = build_menu(_inputs(**_budgets(), is_owner=True))
-    group = next(g for g in menu.groups if g.id == "budgets")
-    for row in group.rows:
-        if not row.name.startswith("cap."):
-            assert row.edit is None
+    row = _row(menu, "budgets", "uncapped_roles")
+    assert row.edit is None
+    assert row.applies == "read_only"
+    assert row.read_only_reason
+
+
+def test_fre1724_a_role_estimate_has_a_json_control_for_the_owner_only() -> None:
+    owner = build_menu(_inputs(**_budgets(), is_owner=True))
+    other = build_menu(_inputs(**_budgets()))
+    role_row = next(r for r in _rows(owner) if r.name.startswith("role_estimate."))
+
+    assert role_row.edit is not None and role_row.edit.input == "json"
+    assert role_row.applies == "next_turn"
+    assert next(r for r in _rows(other) if r.name == role_row.name).edit is None
+
+
+# ---------------------------------------------------------------------------
+# FRE-1724: every row has a class, and every editable setting has a control
+# ---------------------------------------------------------------------------
+
+
+def test_fre1724_ac2_every_menu_row_has_a_class() -> None:
+    """``_with_class`` raises on a row with no entry, which makes the group unavailable."""
+    from personal_agent.config import load_governance_config
+
+    menu = build_menu(_inputs(**_budgets(), governance=load_governance_config(), is_owner=True))
+
+    assert [g.id for g in menu.groups if g.error] == []
+    assert menu.system.error is None
+    for row in _rows(menu):
+        assert row.applies in {"next_turn", "next_restart", "read_only"}, row.name
+        if row.applies == "read_only":
+            assert row.read_only_reason, row.name
+            assert row.edit is None, row.name
+
+
+def test_fre1724_ac2_a_row_family_with_no_entry_is_unavailable_not_silently_left_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from personal_agent.service import settings_menu
+
+    monkeypatch.setattr(
+        settings_menu,
+        "_group_system",
+        lambda _inp: [
+            settings_menu.SettingRow(name="a_new_family.x", value=1, source="config file")
+        ],
+    )
+
+    assert build_menu(_inputs()).system.error == "unavailable"
+
+
+def test_fre1724_a_read_only_setting_shows_its_reason_and_no_control() -> None:
+    menu = build_menu(_inputs(is_owner=True))
+    row = next(r for r in _rows(menu) if r.name == "setting.openai_api_key")
+
+    assert row.applies == "read_only"
+    assert row.read_only_reason
+    assert row.edit is None
+    assert row.value in ("set", "not set")
+    assert row.file_default is None
+
+
+def test_fre1724_a_next_turn_setting_has_a_control_and_a_default_for_the_owner_only() -> None:
+    owner = next(
+        r
+        for r in _rows(build_menu(_inputs(is_owner=True)))
+        if r.name == "setting.orchestrator_max_tool_iterations"
+    )
+    other = next(
+        r
+        for r in _rows(build_menu(_inputs()))
+        if r.name == "setting.orchestrator_max_tool_iterations"
+    )
+
+    assert owner.edit is not None
+    assert owner.edit.kind == "setting"
+    assert owner.edit.input == "number"
+    assert owner.file_default is not None
+    assert owner.applies == "next_turn"
+    assert other.edit is None
+    assert other.file_default is None
+
+
+def test_fre1724_a_next_restart_setting_says_so() -> None:
+    row = next(
+        r
+        for r in _rows(build_menu(_inputs(is_owner=True)))
+        if r.name == "setting.mode_evaluation_interval_seconds"
+    )
+
+    assert row.applies == "next_restart"
+    assert row.note == "applies at the next gateway restart"
+
+
+def test_fre1724_a_pending_restart_edit_shows_the_live_value_and_the_stored_value() -> None:
+    from personal_agent.config import settings as live_settings
+
+    live = live_settings.mode_evaluation_interval_seconds
+    menu = build_menu(
+        _inputs(is_owner=True, overrides={"setting.mode_evaluation_interval_seconds": live + 5})
+    )
+    row = next(r for r in _rows(menu) if r.name == "setting.mode_evaluation_interval_seconds")
+
+    assert row.value == live
+    assert row.source != "override"
+    assert row.clearable
+    assert str(live + 5) in (row.note or "")
+
+
+def test_fre1724_an_applied_setting_shows_override_and_the_value_it_overrides() -> None:
+    from personal_agent.config import settings as live_settings
+
+    live = live_settings.orchestrator_max_tool_iterations
+    menu = build_menu(
+        _inputs(
+            is_owner=True,
+            overrides={"setting.orchestrator_max_tool_iterations": live},
+            applied_settings={"orchestrator_max_tool_iterations": live + 1},
+        )
+    )
+    row = next(r for r in _rows(menu) if r.name == "setting.orchestrator_max_tool_iterations")
+
+    assert row.source == "override"
+    assert row.clearable
+    assert row.file_default is not None and row.file_default.value == live + 1
+
+
+def test_fre1724_a_hidden_editable_setting_is_write_only() -> None:
+    from personal_agent.config import settings as live_settings
+
+    menu = build_menu(
+        _inputs(
+            is_owner=True,
+            overrides={"setting.searxng_base_url": "http://sentinel-host.test"},
+        )
+    )
+    row = next(r for r in _rows(menu) if r.name == "setting.searxng_base_url")
+
+    assert row.applies == "next_turn"
+    assert row.value == ("set" if live_settings.searxng_base_url else "not set")
+    assert row.edit is not None and row.edit.current is None
+    assert "sentinel-host" not in row.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("field", "control"),
+    [
+        ("expansion_enabled", "boolean"),
+        ("llm_timeout_seconds", "number"),
+        ("searxng_default_categories", "text"),
+        ("grounding_verification_mode", "select"),
+        ("tool_result_digest_exclude_tools", "json"),
+    ],
+)
+def test_fre1724_the_control_follows_the_annotation(field: str, control: str) -> None:
+    row = next(r for r in _rows(build_menu(_inputs(is_owner=True))) if r.name == f"setting.{field}")
+
+    assert row.edit is not None
+    assert row.edit.input == control
+
+
+def test_fre1724_a_role_with_one_option_is_read_only() -> None:
+    """Master's note on the ticket: a control with one choice does nothing."""
+    menu = build_menu(_inputs(is_owner=True))
+    role = next(r for r in _rows(menu) if r.name == "role.embedding")
+
+    assert role.applies == "read_only"
+    assert role.read_only_reason
+    assert role.edit is None
+
+
+def test_fre1724_governance_and_deployment_rows_have_a_json_control() -> None:
+    from personal_agent.config import load_governance_config
+
+    menu = build_menu(_inputs(governance=load_governance_config(), is_owner=True))
+    names = {r.name: r for r in _rows(menu)}
+
+    for name in ("sub_agent_tools", "mode_transition_rules"):
+        assert names[name].edit is not None, name
+    tool_row = next(r for n, r in names.items() if n.startswith("tool."))
+    deployment_row = next(r for n, r in names.items() if n.startswith("deployment."))
+
+    assert tool_row.edit is not None and "allowed_paths" not in (tool_row.edit.current or "")
+    assert isinstance(tool_row.value, dict) and isinstance(tool_row.value["allowed_paths"], int)
+    assert deployment_row.edit is not None
+    assert "endpoint" not in (deployment_row.edit.current or "")
+    assert "max_concurrency" in (deployment_row.note or "")
+
+
+def test_fre1724_a_json_control_with_a_path_in_it_is_dropped_and_not_masked() -> None:
+    from personal_agent.service import settings_menu
+
+    row = settings_menu.SettingRow(
+        name="sub_agent_tools",
+        value=1,
+        source="config file",
+        edit=settings_menu.SettingEdit(
+            kind="setting", options=[], current='{"a": "http://host"}', input="json"
+        ),
+    )
+
+    scrubbed = settings_menu._scrub_row(row)
+
+    assert scrubbed.edit is None
+    assert "stays in the file" in (scrubbed.note or "")
+
+
+def test_fre1724_session_rows_write_through_the_session_routes_when_a_conversation_is_open() -> (
+    None
+):
+    session = SessionInputs(selections={}, effort_level=None)
+    open_menu = build_menu(_inputs(session=session))
+    closed_menu = build_menu(_inputs())
+
+    assert _row(open_menu, "conversation", "session.effort_level").edit.kind == "session_effort"  # type: ignore[union-attr]
+    assert _row(open_menu, "conversation", "session.primary_model").edit.kind == "session_primary"  # type: ignore[union-attr]
+    for name in ("session.effort_level", "session.primary_model"):
+        row = _row(closed_menu, "conversation", name)
+        assert row.edit is None
+        assert row.applies == "read_only"
+
+
+def test_fre1724_location_consent_has_a_control_only_when_the_feature_is_on() -> None:
+    from personal_agent.config import settings as live_settings
+
+    on = live_settings.model_copy(update={"location_enabled": True})
+    off = live_settings.model_copy(update={"location_enabled": False})
+
+    row = _row(
+        build_menu(_inputs(app_settings=on, location_consent=False)),
+        "saved_choices",
+        "location.consent",
+    )
+    assert row.edit is not None and row.edit.kind == "location_consent"
+    assert row.edit.current == "false"
+
+    row = _row(build_menu(_inputs(app_settings=off)), "saved_choices", "location.consent")
+    assert row.edit is None
+    assert row.applies == "read_only"

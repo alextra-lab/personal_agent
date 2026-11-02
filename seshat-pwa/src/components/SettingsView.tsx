@@ -1,14 +1,14 @@
 /**
- * SettingsView — menu of every parameter that changes a turn (FRE-1702, FRE-1722, FRE-1723; FRE-1698).
+ * SettingsView — menu of every parameter that changes a turn (FRE-1702, FRE-1722, FRE-1723, FRE-1724; FRE-1698).
  *
  * Nine groups on `/settings`, and the System group on `/settings/system`. Each group is an
  * accordion section, closed by default (FRE-1710). The closed header shows the group name,
  * its parameter count, and a marker when the group holds a saved choice. Each row shows
  * the parameter name, its live value and the source that wins. A saved choice shows beside
- * the default that it overrides. A role binding, a saved choice, an effort preset and a budget cap
- * carry an edit control, a file default line, and Clear when an edit exists. A saved choice writes
- * to `/api/v1/preferences/constraint`. The others write to `/api/v1/settings/overrides`, for the
- * owner only.
+ * the default that it overrides. An editable row carries an edit control, a default line, and Clear
+ * when an edit exists. A read-only row shows its reason. A saved choice, a conversation row and the
+ * location consent write through their own routes. The others write to `/api/v1/settings/overrides`,
+ * for the owner only.
  *
  * MANUAL TEST PLAN
  * ================
@@ -32,6 +32,12 @@
  *    shows the reason, and the value stays.
  * 8. As the owner, open "Effort presets and model modes". Change the rounds of a preset and press
  *    Save, then reload. Expected: the new value, "override", the file default, and Clear.
+ * 9. As the owner, open "How a turn runs". Change a number setting and press Save. Expected: the new
+ *    value, "override", the default, and Clear. Press Clear. Expected: the first value.
+ * 10. Open "System". Find a row that says "applies at the next gateway restart". Change it and press
+ *    Save. Expected: the old value, and a note that the stored value waits for the restart.
+ * 11. Open a secret row in "System". Expected: "set" or "not set", the reason, and no control.
+ * 12. Open "Tools and governance". Edit the JSON of a tool. Enter invalid JSON. Expected: Save is off.
  */
 
 'use client';
@@ -45,10 +51,13 @@ import {
   clearSettingOverride,
   getSettingsMenu,
   setConstraintPreference,
+  setSessionEffort,
+  setSessionSelection,
   setSettingOverride,
+  updateLocationPreference,
 } from '@/lib/agui-client';
 import { LAST_SESSION_KEY, resolveLastSessionId } from '@/lib/session';
-import type { SettingRow, SettingsGroup, SettingsMenu, SettingValue } from '@/lib/types';
+import type { SeshatEffort, SettingRow, SettingsGroup, SettingsMenu, SettingValue } from '@/lib/types';
 
 const SAVED_CHOICE_PREFIX = 'saved_choice.';
 
@@ -299,6 +308,87 @@ function PresetControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }
   );
 }
 
+/** The value that a draft saves, or `undefined` when the draft is not valid. */
+function settingValue(row: SettingRow, draft: string): SettingValue | undefined {
+  const nullable = row.edit?.nullable === true;
+  if (draft === '') return nullable ? null : row.edit?.input === 'text' ? '' : undefined;
+  switch (row.edit?.input) {
+    case 'boolean':
+      return draft === 'true';
+    case 'number':
+      return Number.isNaN(Number(draft)) ? undefined : Number(draft);
+    case 'json':
+      try {
+        return JSON.parse(draft) as SettingValue;
+      } catch {
+        return undefined;
+      }
+    default:
+      return draft;
+  }
+}
+
+/** A control for one setting, by the type that the server states. A hidden value starts empty. */
+function SettingControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
+  const edit = row.edit;
+  const current = edit?.current ?? '';
+  const [draft, setDraft] = useState(current);
+  const { error, save } = useSaveWithReason(row, onSave);
+  useEffect(() => setDraft(current), [current]);
+
+  const label = `New value for ${row.name}`;
+  const value = settingValue(row, draft);
+  const hidden = edit?.current == null && row.value === 'set';
+  const unusable = value === undefined || draft === current;
+  const options = edit?.input === 'boolean' ? ['true', 'false'] : (edit?.options ?? []);
+
+  let field;
+  if (edit?.input === 'boolean' || edit?.input === 'select') {
+    field = (
+      <select aria-label={label} value={draft} onChange={(e) => setDraft(e.target.value)} className={FIELD_CLASS}>
+        {(current === '' || edit?.nullable) && <option value="">{edit?.nullable ? 'none' : 'Choose a value'}</option>}
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    );
+  } else if (edit?.input === 'json') {
+    field = (
+      <textarea
+        aria-label={label}
+        rows={4}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className={`${FIELD_CLASS} w-full font-mono`}
+      />
+    );
+  } else {
+    field = (
+      <input
+        type={edit?.input === 'number' ? 'number' : 'text'}
+        step="any"
+        aria-label={label}
+        placeholder={hidden ? 'The value is hidden. Enter a new value.' : undefined}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className={`${FIELD_CLASS} flex-1`}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-1 sm:pl-[15rem]">
+      <div className="flex items-center gap-2">
+        {field}
+        <SaveButton disabled={unusable} onClick={() => save(value as SettingValue)} />
+      </div>
+      <SaveError error={error} />
+    </div>
+  );
+}
+
 function RowControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
   switch (row.edit?.kind) {
     case undefined:
@@ -307,6 +397,9 @@ function RowControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
       return <CapControl row={row} onSave={onSave} />;
     case 'effort_preset':
       return <PresetControl row={row} onSave={onSave} />;
+    case 'setting':
+    case 'location_consent':
+      return <SettingControl row={row} onSave={onSave} />;
     default:
       return <EditControl row={row} onSave={onSave} />;
   }
@@ -354,6 +447,11 @@ function Row({
         </p>
       )}
       {row.note && <p className="text-xs text-ink-muted sm:pl-[15rem]">{row.note}</p>}
+      {row.read_only_reason && (
+        <p data-testid="setting-read-only-reason" className="text-xs text-ink-muted sm:pl-[15rem]">
+          Read-only: {row.read_only_reason}
+        </p>
+      )}
       <RowControl row={row} onSave={onSave} />
     </div>
   );
@@ -496,13 +594,23 @@ export function SettingsView({ view }: { view: 'menu' | 'system' }) {
 
   const handleSave = useCallback(
     (row: SettingRow, value: SettingValue) => {
-      const write: Promise<unknown> =
-        row.edit?.kind === 'saved_choice'
-          ? setConstraintPreference(row.name.slice(SAVED_CHOICE_PREFIX.length), String(value))
-          : setSettingOverride(row.name, value);
-      return write.then(() => load());
+      const writeFor = (): Promise<unknown> => {
+        switch (row.edit?.kind) {
+          case 'saved_choice':
+            return setConstraintPreference(row.name.slice(SAVED_CHOICE_PREFIX.length), String(value));
+          case 'session_primary':
+            return setSessionSelection(sessionId ?? '', 'primary', String(value));
+          case 'session_effort':
+            return setSessionEffort(sessionId ?? '', value as SeshatEffort);
+          case 'location_consent':
+            return updateLocationPreference(value === true);
+          default:
+            return setSettingOverride(row.name, value);
+        }
+      };
+      return writeFor().then(() => load());
     },
-    [load],
+    [load, sessionId],
   );
 
   const title = view === 'menu' ? 'Settings' : 'System';
@@ -549,7 +657,8 @@ export function SettingsView({ view }: { view: 'menu' | 'system' }) {
           <>
             <p className="text-xs text-ink-muted">
               This menu shows the live values. A row with a Save button can be edited. An edit applies
-              with no rebuild, and Clear restores the default.
+              with no rebuild, at the next turn or at the next gateway restart, as the row states. Clear
+              restores the default.
             </p>
             {menu.groups.map((group) => (
               <Group key={group.id} group={group} onClear={handleClear} onSave={handleSave} />

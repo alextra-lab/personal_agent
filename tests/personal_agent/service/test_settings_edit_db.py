@@ -28,7 +28,11 @@ from personal_agent.config.model_loader import (
     resolve_role_target,
 )
 from personal_agent.config.seshat_effort import effort_spec, file_seshat_effort, preset_values
-from personal_agent.config.setting_overrides import current_overrides, replace_overrides
+from personal_agent.config.setting_overrides import (
+    apply_setting_overrides,
+    current_overrides,
+    replace_overrides,
+)
 from personal_agent.cost_gate import (
     BudgetConfig,
     BudgetDenied,
@@ -466,3 +470,113 @@ async def test_fre1723_the_menu_shows_a_stored_preset_and_cap_after_a_reload(
     finally:
         set_default_gate(None)
         await gate.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# FRE-1724: AppConfig settings on real rows
+# ---------------------------------------------------------------------------
+
+_TURN_SETTING = "setting.orchestrator_max_tool_iterations"
+_RESTART_SETTING = "setting.mode_evaluation_interval_seconds"
+_HIDDEN_SETTING = "setting.searxng_base_url"
+_SENTINEL = "fre1724-sentinel-value"
+
+
+@pytest_asyncio.fixture
+async def clean_setting_rows(
+    sessions: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    async def _delete() -> None:
+        async with sessions() as db:
+            await db.execute(text("DELETE FROM settings_overrides WHERE parameter LIKE 'setting.%'"))
+            await db.commit()
+
+    await _delete()
+    yield sessions
+    await _delete()
+    replace_overrides({})
+    apply_setting_overrides(at_start=True)
+
+
+async def test_fre1724_ac3_next_turn_edit_and_clear_on_real_rows(
+    clean_setting_rows: async_sessionmaker[AsyncSession],
+) -> None:
+    maker = clean_setting_rows
+    user_id = await _user(maker, _OWNER)
+    before = app_settings.orchestrator_max_tool_iterations
+    edited = app_settings.orchestrator_spend_threshold + 7
+
+    async with _client(user_id) as client:
+        put = await client.put(_URL, json={"parameter": _TURN_SETTING, "value": edited})
+        assert put.status_code == 200, put.text
+        assert app_settings.orchestrator_max_tool_iterations == edited
+
+        cleared = await client.delete(_URL, params={"parameter": _TURN_SETTING})
+        assert cleared.status_code == 200
+
+    assert app_settings.orchestrator_max_tool_iterations == before
+    rows = [row for row in await _audit(maker, user_id) if row[0] == _TURN_SETTING]
+    assert [row[1] for row in rows][-2:] == ["set", "clear"]
+    assert rows[-2][3] == edited
+
+
+async def test_fre1724_ac3_next_restart_edit_applies_at_the_start_on_real_rows(
+    clean_setting_rows: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    maker = clean_setting_rows
+    user_id = await _user(maker, _OWNER)
+    before = app_settings.mode_evaluation_interval_seconds
+    edited = before + 11
+
+    async with _client(user_id) as client:
+        put = await client.put(_URL, json={"parameter": _RESTART_SETTING, "value": edited})
+    assert put.status_code == 200, put.text
+    assert app_settings.mode_evaluation_interval_seconds == before
+
+    # A new process: an empty copy, then the startup load from the table.
+    replace_overrides({})
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", maker)
+    await settings_edit.load_overrides_at_startup()
+
+    assert app_settings.mode_evaluation_interval_seconds == edited
+
+
+async def test_fre1724_ac4_a_write_only_row_stores_the_value_and_audits_set_on_real_rows(
+    clean_setting_rows: async_sessionmaker[AsyncSession],
+) -> None:
+    maker = clean_setting_rows
+    user_id = await _user(maker, _OWNER)
+    value = f"http://{_SENTINEL}.example.test"
+
+    async with _client(user_id) as client:
+        first = await client.put(_URL, json={"parameter": _HIDDEN_SETTING, "value": value})
+        second = await client.put(_URL, json={"parameter": _HIDDEN_SETTING, "value": f"{value}/2"})
+        cleared = await client.delete(_URL, params={"parameter": _HIDDEN_SETTING})
+
+    assert first.status_code == 200, first.text
+    assert first.json()["value"] == "set"
+    assert _SENTINEL not in first.text + second.text + cleared.text
+    rows = [row for row in await _audit(maker, user_id) if row[0] == _HIDDEN_SETTING]
+    assert len(rows) >= 3
+    assert _SENTINEL not in str(rows)
+
+
+async def test_fre1724_ac4_a_secret_writes_no_row_on_real_rows(
+    clean_setting_rows: async_sessionmaker[AsyncSession],
+) -> None:
+    maker = clean_setting_rows
+    user_id = await _user(maker, _OWNER)
+
+    async with _client(user_id) as client:
+        resp = await client.put(
+            _URL, json={"parameter": "setting.openai_api_key", "value": _SENTINEL}
+        )
+
+    assert resp.status_code == 422
+    assert _SENTINEL not in resp.text
+    async with maker() as db:
+        stored = await db.execute(
+            text("SELECT value FROM settings_overrides WHERE parameter = 'setting.openai_api_key'")
+        )
+        assert stored.scalar_one_or_none() is None
+    assert _SENTINEL not in str(await _audit(maker, user_id))

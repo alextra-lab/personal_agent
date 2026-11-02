@@ -1,10 +1,11 @@
-"""Settings menu payload (FRE-1702, FRE-1722, FRE-1723; FRE-1698).
+"""Settings menu payload (FRE-1702, FRE-1722, FRE-1723, FRE-1724; FRE-1698).
 
 Builds the one response that the PWA settings menu renders: nine groups and a System
 group. Each row carries the parameter name, its live value, the source that wins, and
-(for an override) the value it overrides. A role binding, a saved choice, an effort preset and a
-budget cap also carry the default that applies with no edit, and their edit control. The writes live in
-``settings_edit`` and in ``/api/v1/preferences/constraint``. This module writes nothing.
+(for an override) the value it overrides. A row also states when an edit applies, or why it is
+read-only (``config/setting_classes.py``), and an editable row carries the default that applies with
+no edit and its edit control. The writes live in ``settings_edit`` and in the existing preference and
+session routes. This module writes nothing.
 
 Values come from the running gateway: the loaded ``AppConfig``, the loaded catalogs, the
 live ``CostGate`` config, and the database rows. They do not come from repo files.
@@ -23,26 +24,46 @@ goes to the server log only.
 
 from __future__ import annotations
 
+import json
 import re
+import types
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, get_args
+from enum import Enum
+from typing import TYPE_CHECKING, Literal, Union, get_args, get_origin
 from uuid import UUID
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_core import to_jsonable_python
 
+from personal_agent.config.governance_loader import TOOL_PATH_FIELDS
 from personal_agent.config.seshat_effort import (
     EFFORT_LEVELS,
     PlannerPolicy,
     PrimaryModeName,
     preset_values,
 )
+from personal_agent.config.setting_classes import (
+    LOCATION_OFF_REASON,
+    NEVER_APPLIED_REASON,
+    NO_CONVERSATION_REASON,
+    ONE_OPTION_REASON,
+    PINNED_REASON,
+    ApplyClass,
+    row_class,
+    setting_class,
+)
 from personal_agent.config.setting_overrides import (
+    DEPLOYMENT_PARAMETER_PREFIX,
     EFFORT_DEFAULT_LEVEL_PARAMETER,
     EFFORT_LEVEL_PARAMETER_PREFIX,
+    MODE_TRANSITION_RULES_PARAMETER,
+    ROLE_ESTIMATE_PARAMETER_PREFIX,
     ROLE_PARAMETER_PREFIX,
+    SETTING_PARAMETER_PREFIX,
+    SUB_AGENT_TOOLS_PARAMETER,
+    TOOL_PARAMETER_PREFIX,
 )
 from personal_agent.config.settings import AppConfig
 from personal_agent.orchestrator.constraint_options import (
@@ -62,11 +83,14 @@ if TYPE_CHECKING:
     from personal_agent.config.seshat_effort import SeshatEffortConfig
     from personal_agent.cost_gate.types import BudgetConfig, CapEntry
     from personal_agent.governance.models import GovernanceConfig
-    from personal_agent.llm_client.models import ModelConfig
+    from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 
 log = structlog.get_logger(__name__)
 
 Source = Literal["code default", ".env", "config file", "database row", "session", "override"]
+
+#: Marks a parameter with no stored row. ``None`` cannot do this, because a stored value can be null.
+_NOT_STORED: JsonValue = "<not stored>"
 
 #: Fields whose default factory reads the process environment. ``model_fields_set`` does
 #: not list them, so the ``.env`` check treats them as env-driven.
@@ -96,13 +120,9 @@ _HIDDEN_SUFFIXES: tuple[str, ...] = (
 #: A URL, an absolute path of two or more segments, a home or variable path, or a glob.
 _PATH_LEAF = re.compile(r"://|\*\*|^~|^\$|^(?:/[^/\s]+){2,}")
 
-#: Governance fields that hold paths. The menu shows a count in their place.
-_COUNTED_TOOL_FIELDS: tuple[str, ...] = (
-    "allowed_paths",
-    "forbidden_paths",
-    "unattended_paths",
-)
-
+_RESTART_NOTE = "applies at the next gateway restart"
+_CONCURRENCY_NOTE = "an edit of max_concurrency applies at the next gateway restart"
+_HOLDS_PATH_NOTE = "this value holds a path or an address, so it stays in the file"
 _STALE_OVERRIDE_NOTE = "the stored override is not usable now, so the file value applies"
 _D7_NOTE = (
     "this is the default level: an edit changes its planner prompt, and no D7 run "
@@ -141,16 +161,28 @@ class SettingEdit(BaseModel):
         current: The stored or bound value, or ``None`` when nothing is stored. A preset has no
             single value, so its control reads the row value.
         preset_choices: For a preset, the values that each named field allows.
+        input: For a ``setting`` kind, which control the PWA shows.
+        nullable: Whether an empty control saves a null.
     """
 
     model_config = ConfigDict(frozen=True)
 
     kind: Literal[
-        "role_binding", "saved_choice", "effort_default_level", "effort_preset", "budget_cap"
+        "role_binding",
+        "saved_choice",
+        "effort_default_level",
+        "effort_preset",
+        "budget_cap",
+        "setting",
+        "session_primary",
+        "session_effort",
+        "location_consent",
     ]
     options: list[str]
     current: str | None
     preset_choices: dict[str, list[str]] | None = None
+    input: Literal["boolean", "number", "text", "select", "json"] | None = None
+    nullable: bool = False
 
 
 class SettingRow(BaseModel):
@@ -166,6 +198,8 @@ class SettingRow(BaseModel):
         note: A short plain-language remark about the row.
         file_default: The value that applies with no edit, and where it lives.
         edit: The edit control, for a row that this user can edit.
+        applies: When an edit applies. ``read_only`` means that no edit reaches it.
+        read_only_reason: Why the row is read-only.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -178,6 +212,8 @@ class SettingRow(BaseModel):
     note: str | None = None
     file_default: Overridden | None = None
     edit: SettingEdit | None = None
+    applies: ApplyClass | None = None
+    read_only_reason: str | None = None
 
 
 class SettingsGroup(BaseModel):
@@ -192,7 +228,7 @@ class SettingsGroup(BaseModel):
 
 
 class SettingsMenu(BaseModel):
-    """The whole menu: nine groups, then the read-only System group."""
+    """The whole menu: nine groups, then the System group."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -237,6 +273,11 @@ class MenuInputs:
             file values.
         file_budget: The budget as the file states it. ``None`` means ``budget`` holds the file
             values.
+        file_governance: The governance files, with no override. ``None`` means ``governance``
+            holds the file values.
+        file_models: The catalog as the file states it. ``None`` means ``models`` holds the file
+            values.
+        applied_settings: The original value of each ``AppConfig`` field that holds an override.
     """
 
     app_settings: AppConfig
@@ -254,6 +295,9 @@ class MenuInputs:
     is_owner: bool = False
     file_effort: SeshatEffortConfig | None = None
     file_budget: BudgetConfig | None = None
+    file_governance: GovernanceConfig | None = None
+    file_models: ModelConfig | None = None
+    applied_settings: Mapping[str, object] = field(default_factory=dict)
 
 
 class SessionNotFoundError(LookupError):
@@ -312,6 +356,10 @@ def _scrub_row(row: SettingRow) -> SettingRow:
         if row.edit is not None
         else None
     )
+    if edit is not None and edit.input == "json" and row.edit and edit.current != row.edit.current:
+        # The scrub would replace the whole JSON text, and a Save would then send the mask.
+        edit = None
+        note = f"{note}; {_HOLDS_PATH_NOTE}" if note else _HOLDS_PATH_NOTE
     return row.model_copy(
         update={
             "value": scrub(row.value),
@@ -343,7 +391,15 @@ def menu_group_of(field: str) -> str:
     return _APPENDIX_TO_MENU_GROUP.get(SETTING_GROUPS[field], "system")
 
 
-def _is_hidden(field: str) -> bool:
+def is_hidden_setting(field: str) -> bool:
+    """Return whether the menu, the audit record and the log hide the value of a setting.
+
+    Args:
+        field: An ``AppConfig`` field name.
+
+    Returns:
+        ``True`` for a secret, infrastructure or identity value.
+    """
     return (
         SETTING_GROUPS[field] in HIDDEN_VALUE_GROUPS
         or field in _HIDDEN_NAMES
@@ -363,28 +419,176 @@ def _code_default(field: str) -> tuple[bool, object]:
         return False, None
 
 
-def _setting_row(app_settings: AppConfig, field: str) -> SettingRow:
-    live = getattr(app_settings, field)
+def _unwrap_optional(annotation: object) -> tuple[object, bool]:
+    """Return ``(the annotation with no None, whether it allowed None)``."""
+    if get_origin(annotation) not in (Union, types.UnionType):
+        return annotation, False
+    args = [arg for arg in get_args(annotation) if arg is not type(None)]
+    nullable = len(args) != len(get_args(annotation))
+    return (args[0], nullable) if len(args) == 1 else (annotation, nullable)
+
+
+def _setting_input(
+    field: str,
+) -> tuple[Literal["boolean", "number", "text", "select", "json"], list[str], bool]:
+    """Return ``(control, select options, nullable)`` from the annotation of a field."""
+    annotation, nullable = _unwrap_optional(AppConfig.model_fields[field].annotation)
+    if annotation is bool:
+        return "boolean", [], nullable
+    if annotation in (int, float):
+        return "number", [], nullable
+    if annotation is str:
+        return "text", [], nullable
+    if get_origin(annotation) is Literal:
+        return "select", [str(arg) for arg in get_args(annotation)], nullable
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        return "select", [str(member.value) for member in annotation], nullable
+    return "json", [], nullable
+
+
+def _setting_edit(field: str, live: object, *, hidden: bool) -> SettingEdit:
+    control, options, nullable = _setting_input(field)
+    current: str | None
+    if hidden or live is None:
+        current = None
+    elif control == "json":
+        current = json.dumps(_json(live), sort_keys=True)
+    elif control == "boolean":
+        current = "true" if live else "false"
+    else:
+        value = _json(live)
+        current = str(value)
+    return SettingEdit(
+        kind="setting", options=options, current=current, input=control, nullable=nullable
+    )
+
+
+def _base_source(app_settings: AppConfig, field: str) -> Source:
     from_env = field in app_settings.model_fields_set or field in ENV_DRIVEN_FIELDS
-    source: Source = ".env" if from_env else "code default"
-    if _is_hidden(field):
-        return SettingRow(name=f"setting.{field}", value=_set_or_not(live), source=source)
+    return ".env" if from_env else "code default"
+
+
+def _setting_notes(inp: MenuInputs, field: str, *, hidden: bool) -> list[str]:
+    """Say what a stored row does on this process, when the live value does not show it."""
+    name = f"{SETTING_PARAMETER_PREFIX}{field}"
+    restart = setting_class(field).applies == "next_restart"
+    stored = inp.overrides.get(name, _NOT_STORED)
+    applied = field in inp.applied_settings
+    live = _json(getattr(inp.app_settings, field))
+    notes = [_RESTART_NOTE] if restart and inp.is_owner else []
+    if stored is _NOT_STORED:
+        if applied:
+            notes.append("Clear applies at the next gateway restart")
+        return notes
+    if applied and stored == live:
+        return notes
+    if not restart:
+        return [_STALE_OVERRIDE_NOTE]
+    notes.append(
+        "a stored value waits for the next gateway restart"
+        if hidden
+        else f"the stored value {json.dumps(stored)} waits for the next gateway restart"
+    )
+    return notes
+
+
+def _setting_row(inp: MenuInputs, field: str) -> SettingRow:
+    app_settings = inp.app_settings
+    name = f"{SETTING_PARAMETER_PREFIX}{field}"
+    live = getattr(app_settings, field)
+    hidden = is_hidden_setting(field)
+    applied = field in inp.applied_settings
+    base = inp.applied_settings[field] if applied else live
+    base_source = _base_source(app_settings, field)
+    source: Source = "override" if applied else base_source
+    editable = inp.is_owner and setting_class(field).applies != "read_only"
+    notes = _setting_notes(inp, field, hidden=hidden) if editable else []
+    common: dict[str, object] = {
+        "note": "; ".join(notes) if notes else None,
+        "clearable": editable and name in inp.overrides,
+        "edit": _setting_edit(field, live, hidden=hidden) if editable else None,
+    }
+    if hidden:
+        file_default = Overridden(value=_set_or_not(base), source=base_source) if editable else None
+        return SettingRow(
+            name=name, value=_set_or_not(live), source=source, file_default=file_default
+        ).model_copy(update=common)
     overrides = None
-    if from_env and field not in ENV_DRIVEN_FIELDS:
+    if applied:
+        overrides = Overridden(value=_json(base), source=base_source)
+    elif base_source == ".env" and field not in ENV_DRIVEN_FIELDS:
         has_default, default = _code_default(field)
         if has_default and _json(default) != _json(live):
             overrides = Overridden(value=_json(default), source="code default")
     return SettingRow(
-        name=f"setting.{field}", value=_json(live), source=source, overrides=overrides
-    )
+        name=name,
+        value=_json(live),
+        source=source,
+        overrides=overrides,
+        file_default=Overridden(value=_json(base), source=base_source) if editable else None,
+    ).model_copy(update=common)
 
 
 def _setting_rows(inp: MenuInputs, menu_group: str) -> list[SettingRow]:
     return [
-        _setting_row(inp.app_settings, field)
+        _setting_row(inp, field)
         for field in sorted(AppConfig.model_fields)
         if menu_group_of(field) == menu_group
     ]
+
+
+def _json_edit(current: JsonValue) -> SettingEdit:
+    return SettingEdit(
+        kind="setting", options=[], current=json.dumps(current, sort_keys=True), input="json"
+    )
+
+
+def _override_row(
+    inp: MenuInputs,
+    name: str,
+    value: JsonValue,
+    live: JsonValue,
+    file_fields: JsonValue,
+    *,
+    whole: bool = False,
+    owner_note: str | None = None,
+) -> SettingRow:
+    """Build a row that a JSON override edits.
+
+    Args:
+        inp: The menu inputs.
+        name: The row name.
+        value: The value that the row shows.
+        live: The editable fields that apply now, in the form of the stored value.
+        file_fields: The same fields as the file states them.
+        whole: A stored value replaces the whole row. Otherwise it holds the edited fields.
+        owner_note: A note that only the owner needs.
+
+    Returns:
+        The row, with its source, Clear, default and control.
+    """
+    stored = inp.overrides.get(name, _NOT_STORED)
+    applies = False
+    if stored is not _NOT_STORED:
+        applies = (
+            stored == live
+            if whole
+            else isinstance(stored, dict)
+            and isinstance(live, dict)
+            and all(live.get(key) == field_value for key, field_value in stored.items())
+        )
+    notes = [_STALE_OVERRIDE_NOTE] if stored is not _NOT_STORED and not applies else []
+    if inp.is_owner and owner_note:
+        notes.append(owner_note)
+    return SettingRow(
+        name=name,
+        value=value,
+        source="override" if applies else "config file",
+        note="; ".join(notes) if notes else None,
+        clearable=inp.is_owner and stored is not _NOT_STORED,
+        file_default=Overridden(value=file_fields, source="config file"),
+        edit=_json_edit(live) if inp.is_owner else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +629,12 @@ def _binding_source(inp: MenuInputs, role: str) -> Source:
     return "override" if _override_applies(inp, role) else "config file"
 
 
+_READ_ONLY_NO_CONVERSATION: Mapping[str, object] = {
+    "applies": "read_only",
+    "read_only_reason": NO_CONVERSATION_REASON,
+}
+
+
 def _group_conversation(inp: MenuInputs) -> list[SettingRow]:
     effort = _need(inp.effort)
     primary, primary_default = _effective_primary(inp)
@@ -455,7 +665,46 @@ def _group_conversation(inp: MenuInputs) -> list[SettingRow]:
             value=effort.default_level,
             source=_default_level_source(inp, effort),
         )
-    return [primary_row, effort_row]
+    return [
+        _with_session_primary_edit(primary_row, inp),
+        _with_session_effort_edit(effort_row, inp),
+    ]
+
+
+def _with_session_primary_edit(row: SettingRow, inp: MenuInputs) -> SettingRow:
+    """Add the model picker's write to the row. It goes through the existing selection route."""
+    from personal_agent.config.model_loader import role_binding_options
+
+    models = _need(inp.models)
+    if inp.session is None:
+        return row.model_copy(update=_READ_ONLY_NO_CONVERSATION)
+    binding = models.roles.get("primary")
+    if binding is None or not binding.open:
+        return row.model_copy(update={"applies": "read_only", "read_only_reason": PINNED_REASON})
+    options = role_binding_options("primary", models, is_provider_available=inp.provider_available)
+    current = str(row.value)
+    return row.model_copy(
+        update={
+            "edit": SettingEdit(
+                kind="session_primary",
+                options=options if current in options else [current, *options],
+                current=current,
+            )
+        }
+    )
+
+
+def _with_session_effort_edit(row: SettingRow, inp: MenuInputs) -> SettingRow:
+    """Add the effort control's write to the row. It goes through the existing effort route."""
+    if inp.session is None:
+        return row.model_copy(update=_READ_ONLY_NO_CONVERSATION)
+    return row.model_copy(
+        update={
+            "edit": SettingEdit(
+                kind="session_effort", options=list(EFFORT_LEVELS), current=str(row.value)
+            )
+        }
+    )
 
 
 def _saved_choice_default(constraint: str, inp: MenuInputs) -> Overridden:
@@ -500,6 +749,11 @@ def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
             else None
         )
         file_default, edit = _saved_choice_edit(constraint, saved, inp)
+        read_only: dict[str, object] = (
+            {"applies": "read_only", "read_only_reason": NEVER_APPLIED_REASON}
+            if constraint in PREFERENCE_NEVER_APPLIED
+            else {}
+        )
         if saved is None:
             rows.append(
                 SettingRow(
@@ -509,7 +763,7 @@ def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
                     note=note,
                     file_default=file_default,
                     edit=edit,
-                )
+                ).model_copy(update=read_only)
             )
             continue
         rows.append(
@@ -522,17 +776,35 @@ def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
                 note=note,
                 file_default=file_default,
                 edit=edit,
-            )
+            ).model_copy(update=read_only)
         )
     if inp.app_settings.location_enabled:
         consent: JsonValue = "unavailable" if inp.location_consent is None else inp.location_consent
-        rows.append(SettingRow(name="location.consent", value=consent, source="database row"))
+        rows.append(
+            SettingRow(
+                name="location.consent",
+                value=consent,
+                source="database row",
+                edit=(
+                    SettingEdit(
+                        kind="location_consent",
+                        options=[],
+                        current="true" if inp.location_consent else "false",
+                        input="boolean",
+                    )
+                    if inp.location_consent is not None
+                    else None
+                ),
+            )
+        )
     else:
         rows.append(
             SettingRow(
                 name="location.consent",
                 value="off (the operator flag location_enabled is off)",
                 source="code default",
+                applies="read_only",
+                read_only_reason=LOCATION_OFF_REASON,
             )
         )
     return [*rows, *_setting_rows(inp, "saved_choices")]
@@ -603,13 +875,14 @@ def _with_role_edit(row: SettingRow, inp: MenuInputs, models: ModelConfig) -> Se
         "file_default": Overridden(value=file_binding, source="config file"),
         "note": "; ".join(notes) if notes else None,
     }
+    options = role_binding_options(role, models, is_provider_available=inp.provider_available)
+    choices = options if binding in options else [binding, *options]
+    if len(choices) <= 1:
+        update["applies"] = "read_only"
+        update["read_only_reason"] = ONE_OPTION_REASON
     if inp.is_owner:
-        options = role_binding_options(role, models, is_provider_available=inp.provider_available)
-        update["edit"] = SettingEdit(
-            kind="role_binding",
-            options=options if binding in options else [binding, *options],
-            current=binding,
-        )
+        if len(choices) > 1:
+            update["edit"] = SettingEdit(kind="role_binding", options=choices, current=binding)
         update["clearable"] = stored is not None
     return row.model_copy(update=update)
 
@@ -726,12 +999,35 @@ def _group_effort_and_modes(inp: MenuInputs) -> list[SettingRow]:
         _effort_default_row(inp, effort),
         *(_effort_level_row(inp, effort, level) for level in effort.levels),
     ]
+    file_models = (inp.file_models or models).models
     for key, definition in models.models.items():
-        dump = definition.model_dump(mode="json", exclude_none=True)
-        if "endpoint" in dump:
-            dump["endpoint"] = _set_or_not(definition.endpoint)
-        rows.append(SettingRow(name=f"deployment.{key}", value=_json(dump), source="config file"))
+        rows.append(_deployment_row(inp, key, definition, file_models.get(key, definition)))
     return [*rows, *_setting_rows(inp, "effort_and_modes")]
+
+
+def _deployment_fields(definition: ModelDefinition) -> dict[str, JsonValue]:
+    """Return the editable fields of a deployment. The endpoint stays in the file."""
+    dump: dict[str, JsonValue] = definition.model_dump(
+        mode="json", exclude_none=True, exclude={"endpoint"}
+    )
+    return dump
+
+
+def _deployment_row(
+    inp: MenuInputs, key: str, definition: ModelDefinition, file_definition: ModelDefinition
+) -> SettingRow:
+    name = f"{DEPLOYMENT_PARAMETER_PREFIX}{key}"
+    dump = definition.model_dump(mode="json", exclude_none=True)
+    if "endpoint" in dump:
+        dump["endpoint"] = _set_or_not(definition.endpoint)
+    return _override_row(
+        inp,
+        name,
+        _json(dump),
+        _deployment_fields(definition),
+        _deployment_fields(file_definition),
+        owner_note=_CONCURRENCY_NOTE,
+    )
 
 
 def _cap_row(inp: MenuInputs, cap: CapEntry, file_cap: float | None) -> SettingRow:
@@ -763,14 +1059,12 @@ def _group_budgets(inp: MenuInputs) -> list[SettingRow]:
     budget = _need(inp.budget)
     file_caps = {cap_parameter(cap): float(cap.cap_usd) for cap in (inp.file_budget or budget).caps}
     rows = [_cap_row(inp, cap, file_caps.get(cap_parameter(cap))) for cap in budget.caps]
-    rows.extend(
-        SettingRow(
-            name=f"role_estimate.{role}",
-            value=_json(config.model_dump(mode="json")),
-            source="config file",
-        )
-        for role, config in budget.roles.items()
-    )
+    file_roles = (inp.file_budget or budget).roles
+    for role, config in budget.roles.items():
+        name = f"{ROLE_ESTIMATE_PARAMETER_PREFIX}{role}"
+        live = _json(config.model_dump(mode="json"))
+        file_fields = _json(file_roles.get(role, config).model_dump(mode="json"))
+        rows.append(_override_row(inp, name, live, live, file_fields))
     rows.append(
         SettingRow(name="uncapped_roles", value=list(budget.uncapped_roles), source="config file")
     )
@@ -779,30 +1073,33 @@ def _group_budgets(inp: MenuInputs) -> list[SettingRow]:
 
 def _group_tools(inp: MenuInputs) -> list[SettingRow]:
     governance = _need(inp.governance)
+    file_governance = inp.file_governance or governance
     rows: list[SettingRow] = []
     for name, policy in governance.tools.items():
-        dump = policy.model_dump(mode="json", exclude=set(_COUNTED_TOOL_FIELDS))
-        for counted in _COUNTED_TOOL_FIELDS:
-            dump[counted] = len(getattr(policy, counted))
-        rows.append(SettingRow(name=f"tool.{name}", value=_json(dump), source="config file"))
-    rows.append(
-        SettingRow(
-            name="sub_agent_tools",
-            value=_json(
-                {k: v.model_dump(mode="json") for k, v in governance.sub_agent_tools.items()}
-            ),
-            source="config file",
+        row_name = f"{TOOL_PARAMETER_PREFIX}{name}"
+        editable = policy.model_dump(mode="json", exclude=set(TOOL_PATH_FIELDS))
+        file_policy = file_governance.tools.get(name, policy)
+        dump = {**editable, **{field: len(getattr(policy, field)) for field in TOOL_PATH_FIELDS}}
+        rows.append(
+            _override_row(
+                inp,
+                row_name,
+                _json(dump),
+                _json(editable),
+                _json(file_policy.model_dump(mode="json", exclude=set(TOOL_PATH_FIELDS))),
+            )
         )
-    )
-    rows.append(
-        SettingRow(
-            name="mode_transition_rules",
-            value=_json(
-                {k: v.model_dump(mode="json") for k, v in governance.transition_rules.items()}
-            ),
-            source="config file",
-        )
-    )
+    for row_name, live, file_map in (
+        (SUB_AGENT_TOOLS_PARAMETER, governance.sub_agent_tools, file_governance.sub_agent_tools),
+        (
+            MODE_TRANSITION_RULES_PARAMETER,
+            governance.transition_rules,
+            file_governance.transition_rules,
+        ),
+    ):
+        live_json = _json({k: v.model_dump(mode="json") for k, v in live.items()})
+        file_json = _json({k: v.model_dump(mode="json") for k, v in file_map.items()})
+        rows.append(_override_row(inp, row_name, live_json, live_json, file_json, whole=True))
     return [*rows, *_setting_rows(inp, "tools")]
 
 
@@ -837,6 +1134,14 @@ def _group_builders() -> list[tuple[str, str, Callable[[MenuInputs], list[Settin
     ]
 
 
+def _with_class(row: SettingRow) -> SettingRow:
+    """Add the class of a row. A builder sets it first for a dynamic exception to the table."""
+    if row.applies is not None:
+        return row
+    result = row_class(row.name)
+    return row.model_copy(update={"applies": result.applies, "read_only_reason": result.reason})
+
+
 def _run_group(
     group_id: str,
     title: str,
@@ -845,7 +1150,7 @@ def _run_group(
     trace_id: str,
 ) -> SettingsGroup:
     try:
-        rows = [_scrub_row(row) for row in builder(inp)]
+        rows = [_with_class(_scrub_row(row)) for row in builder(inp)]
     except Exception as exc:
         log.warning(
             "settings_menu_group_failed",
@@ -873,7 +1178,7 @@ def build_menu(inp: MenuInputs, *, trace_id: str = "settings-menu") -> SettingsM
         _run_group(group_id, title, builder, inp, trace_id)
         for group_id, title, builder in _group_builders()
     ]
-    system = _run_group("system", "System (read-only)", _group_system, inp, trace_id)
+    system = _run_group("system", "System", _group_system, inp, trace_id)
     return SettingsMenu(groups=groups, system=system)
 
 
@@ -928,9 +1233,10 @@ async def collect_inputs(
         load_model_config,
         settings,
     )
-    from personal_agent.config.model_loader import file_role_deployments
+    from personal_agent.config.governance_loader import file_governance_config
+    from personal_agent.config.model_loader import file_model_config, file_role_deployments
     from personal_agent.config.seshat_effort import file_seshat_effort, get_seshat_effort
-    from personal_agent.config.setting_overrides import current_overrides
+    from personal_agent.config.setting_overrides import applied_settings, current_overrides
     from personal_agent.cost_gate import get_default_gate_or_none
     from personal_agent.orchestrator.constraint_options import build_provider_availability
     from personal_agent.service.models import GroundingEnforcementStateModel
@@ -995,4 +1301,7 @@ async def collect_inputs(
         is_owner=is_owner,
         file_effort=_load_or_none("file_effort", file_seshat_effort, trace_id),
         file_budget=gate.file_config if gate is not None else None,
+        file_governance=_load_or_none("file_governance", file_governance_config, trace_id),
+        file_models=_load_or_none("file_models", file_model_config, trace_id),
+        applied_settings=applied_settings(),
     )

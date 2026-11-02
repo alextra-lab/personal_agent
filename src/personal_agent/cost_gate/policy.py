@@ -24,8 +24,11 @@ import structlog
 from pydantic import JsonValue, ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
-from personal_agent.config.setting_overrides import CAP_PARAMETER_PREFIX
-from personal_agent.cost_gate.types import BudgetConfig, CapEntry
+from personal_agent.config.setting_overrides import (
+    CAP_PARAMETER_PREFIX,
+    ROLE_ESTIMATE_PARAMETER_PREFIX,
+)
+from personal_agent.cost_gate.types import BudgetConfig, CapEntry, RoleConfig
 
 log = structlog.get_logger(__name__)
 
@@ -162,6 +165,78 @@ def apply_cap_overrides(config: BudgetConfig, overrides: Mapping[str, JsonValue]
     if all(new is old for new, old in zip(caps, config.caps, strict=True)):
         return config
     return config.model_copy(update={"caps": caps})
+
+
+def _role_with_value(role: str, config: RoleConfig, value: JsonValue) -> RoleConfig:
+    """Return a role estimate with stored fields, checked by the model that loads the file."""
+    if not isinstance(value, dict):
+        raise BudgetConfigError(f"{ROLE_ESTIMATE_PARAMETER_PREFIX}{role} takes an object")
+    unknown = sorted(set(value) - set(RoleConfig.model_fields))
+    if unknown:
+        raise BudgetConfigError(f"unknown fields: {', '.join(unknown)}")
+    merged = {**config.model_dump(mode="json"), **value}
+    try:
+        return RoleConfig.model_validate_json(json.dumps(merged), strict=True)
+    except ValidationError as exc:
+        reasons = "; ".join(
+            f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}"
+            for err in exc.errors(include_input=False, include_url=False)
+        )
+        raise BudgetConfigError(f"{ROLE_ESTIMATE_PARAMETER_PREFIX}{role}: {reasons}") from None
+
+
+def validate_role_estimate_override(
+    config: BudgetConfig, parameter: str, value: JsonValue
+) -> JsonValue:
+    """Check one proposed role estimate edit (FRE-1724). An edit never adds a role.
+
+    Args:
+        config: The budget config as the file states it.
+        parameter: The settings menu row name.
+        value: The proposed fields.
+
+    Returns:
+        The edited fields to store.
+
+    Raises:
+        BudgetConfigError: With the reason, when the value is refused.
+    """
+    role = parameter.removeprefix(ROLE_ESTIMATE_PARAMETER_PREFIX)
+    if role not in config.roles:
+        raise BudgetConfigError(f"the role {role} is not in the budget file")
+    dump = _role_with_value(role, config.roles[role], value).model_dump(mode="json")
+    assert isinstance(value, dict)
+    return {field: dump[field] for field in sorted(value)}
+
+
+def apply_budget_overrides(
+    config: BudgetConfig, overrides: Mapping[str, JsonValue]
+) -> BudgetConfig:
+    """Return the config with the stored caps and role estimates applied (FRE-1724).
+
+    A stored row that fails is skipped with a warning, and the file value applies. Every paid
+    reservation reads this, so a stored row must never make it raise.
+
+    Args:
+        config: The budget config as the file states it.
+        overrides: Every stored override, keyed by parameter name.
+
+    Returns:
+        The same object when no stored row applies, else a copy.
+    """
+    config = apply_cap_overrides(config, overrides)
+    roles = dict(config.roles)
+    changed = False
+    for parameter, value in overrides.items():
+        role = parameter.removeprefix(ROLE_ESTIMATE_PARAMETER_PREFIX)
+        if not parameter.startswith(ROLE_ESTIMATE_PARAMETER_PREFIX) or role not in roles:
+            continue
+        try:
+            roles[role] = _role_with_value(role, roles[role], value)
+            changed = True
+        except BudgetConfigError as exc:
+            log.warning("role_estimate_override_skipped", parameter=parameter, error=str(exc))
+    return config.model_copy(update={"roles": roles}) if changed else config
 
 
 async def read_stored_caps(pool: asyncpg.Pool) -> dict[str, JsonValue]:

@@ -34,6 +34,7 @@ from personal_agent.captains_log.turn_evidence import (
 )
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
+from personal_agent.config.governance_loader import LiveGovernanceConfig
 from personal_agent.grounding.citations import (
     count_near_miss_markers,
     link_citation_markers,
@@ -163,17 +164,17 @@ log = get_logger(__name__)
 
 # ── Tool loop gate helpers ─────────────────────────────────────────────────
 
-_cached_governance_config: object = None
+_live_governance_config: LiveGovernanceConfig | None = None
 
 
 def _get_cached_governance_config() -> object:
-    """Module-level governance config cache. TODO: replace with @lru_cache after config singleton."""
-    global _cached_governance_config
-    if _cached_governance_config is None:
+    """Module-level governance config. It reloads when the stored overrides change (FRE-1724)."""
+    global _live_governance_config
+    if _live_governance_config is None:
         from personal_agent.config import load_governance_config  # noqa: PLC0415
 
-        _cached_governance_config = load_governance_config()
-    return _cached_governance_config
+        _live_governance_config = LiveGovernanceConfig(load_governance_config)
+    return _live_governance_config.get()
 
 
 def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:

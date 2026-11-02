@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # FRE-278: install diagnostic tools so run_python scripts can call ps, vmstat, etc.
 # procps (ps, top, free, vmstat, uptime), curl, jq, iproute2 (ss).

@@ -293,12 +293,17 @@ class ModeManager:
                     )
 
             try:
-                # Preferred path: schedule on the already-running loop (async context)
-                asyncio.get_running_loop().create_task(_publish_transition())
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                # Fallback: no running loop (sync test context / startup).  Schedule
-                # on the default loop so the coroutine is not leaked as unawaited.
-                asyncio.get_event_loop().create_task(_publish_transition())
+                # No running loop (sync test context / startup), so nothing can run the
+                # publish. Python 3.14 raises from asyncio.get_event_loop() here.
+                log.warning(
+                    "mode_transition_bus_publish_skipped",
+                    new_mode=new_mode.value,
+                    trace_id=trace_id,
+                )
+            else:
+                loop.create_task(_publish_transition())
 
     def _is_transition_allowed(self, from_mode: Mode, to_mode: Mode) -> bool:
         """Check if a mode transition is allowed.

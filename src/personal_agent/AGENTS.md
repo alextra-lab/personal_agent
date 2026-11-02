@@ -1,6 +1,6 @@
 # Personal Agent Package
 
-**Tech**: Python 3.12+, Pydantic, structlog, httpx, typer
+**Tech**: Python 3.14+, Pydantic, structlog, httpx, typer
 
 ## Commands
 

@@ -278,7 +278,7 @@ class DomainGuard:
         """
         try:
             host = httpx.URL(url).raw_host.decode("ascii")
-        except (httpx.InvalidURL, ValueError):
+        except httpx.InvalidURL, ValueError:
             return ""
         return host.lower().rstrip(".")
 
@@ -454,7 +454,7 @@ class DomainGuard:
             # guard must not fall back to the bundled list alone. The next refresh replaces
             # the dropped platforms with URL entries.
             return frozenset(data["domains"]) - _SHARED_PLATFORM_HOSTS, cached_at
-        except (json.JSONDecodeError, KeyError, ValueError, OSError, TypeError):
+        except json.JSONDecodeError, KeyError, ValueError, OSError, TypeError:
             # TypeError: the file parses but has the wrong shape (a list, a null field).
             return None
 
@@ -775,7 +775,7 @@ class NovelDestinationTracker:
     def _is_expired(self, last_seen_iso: str, now: datetime) -> bool:
         try:
             last_seen = datetime.fromisoformat(last_seen_iso)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return True
         return (now - last_seen).total_seconds() > self._window
 
@@ -787,7 +787,7 @@ class NovelDestinationTracker:
             if not isinstance(data, dict):
                 return {}
             return data
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError, OSError:
             return {}
 
     def _save(self, seen: dict[str, str]) -> None:

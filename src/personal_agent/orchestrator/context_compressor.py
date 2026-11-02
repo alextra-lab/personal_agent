@@ -355,7 +355,7 @@ def _shape_descriptor(content: str) -> str:
     """
     try:
         parsed = json.loads(content)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         compact = " ".join(content.split())
         return compact[:120]
     if isinstance(parsed, dict):

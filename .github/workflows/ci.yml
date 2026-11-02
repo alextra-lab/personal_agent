@@ -72,8 +72,8 @@ jobs:
           version: "latest"
           enable-cache: true
 
-      - name: Install Python 3.12
-        run: uv python install 3.12
+      - name: Install Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync
@@ -153,8 +153,8 @@ jobs:
           version: "latest"
           enable-cache: true
 
-      - name: Install Python 3.12
-        run: uv python install 3.12
+      - name: Install Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync
@@ -217,8 +217,8 @@ jobs:
           version: "latest"
           enable-cache: true
 
-      - name: Install Python 3.12
-        run: uv python install 3.12
+      - name: Install Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync
@@ -226,17 +226,17 @@ jobs:
       - name: mypy
         run: uv run mypy src/
 
-      # Pin ruff to the version the project resolves to (uv.lock: 0.15.15), matching
+      # Pin ruff to the version the project resolves to (uv.lock: 0.17.3), matching
       # local `make ruff-check`/`make ruff-format`. Unpinned `uv tool run ruff` pulls
       # the latest, which drifted: a new ruff release reformatted markdown code-blocks
       # and turned CI red on pre-existing, unchanged src/**/AGENTS.md files (FRE-953).
       # (ruff is a dev *extra*, not synced by `uv sync`, so `uv tool run` — not
       # `uv run` — is required; the version pin is what makes it deterministic.)
       - name: ruff check
-        run: uv tool run ruff@0.15.15 check src/
+        run: uv tool run ruff@0.17.3 check src/
 
       - name: ruff format (check only)
-        run: uv tool run ruff@0.15.15 format --check src/
+        run: uv tool run ruff@0.17.3 format --check src/
 
       # ADR-0132 D2 (FRE-1147): static bypass rule set for the outbound transport
       # factory. Pinned to the version verified in the implementation plan, matching
@@ -268,8 +268,8 @@ jobs:
           version: "latest"
           enable-cache: true
 
-      - name: Install Python 3.12
-        run: uv python install 3.12
+      - name: Install Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync
@@ -292,8 +292,8 @@ jobs:
           version: "latest"
           enable-cache: true
 
-      - name: Install Python 3.12
-        run: uv python install 3.12
+      - name: Install Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync

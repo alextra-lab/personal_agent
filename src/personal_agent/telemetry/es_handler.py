@@ -502,7 +502,7 @@ class ElasticsearchHandler(logging.Handler):
 
                 json.dumps(value)
                 event_data[key] = value
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 event_data[key] = str(value)
 
         # structlog stamps the event dict in its own processor chain, which is
@@ -784,7 +784,7 @@ class ElasticsearchHandler(logging.Handler):
 
         try:
             await asyncio.wait_for(_wait(), timeout=timeout)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError, asyncio.TimeoutError:
             self._count("drain_timeouts")
             await self._export_stats(force=True)
             return False

@@ -950,7 +950,7 @@ def _short_reason(response: httpx.Response) -> str:
         error = response.json().get("error", {})
         causes = error.get("root_cause") or [error]
         reason = str(causes[0].get("reason") or error.get("reason") or response.text)
-    except (ValueError, AttributeError, IndexError, TypeError):
+    except ValueError, AttributeError, IndexError, TypeError:
         reason = response.text
     return reason[:_ERROR_CHARS]
 

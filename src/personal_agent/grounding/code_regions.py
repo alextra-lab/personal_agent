@@ -131,7 +131,9 @@ _LINE_COMMENT_MARKERS: dict[str, tuple[str, ...]] = {
     "makefile": ("#",),
 }
 
-_PROSE_TOKEN_TYPES = frozenset({tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE})
+_PROSE_TOKEN_TYPES = frozenset(
+    {tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE, tokenize.TSTRING_MIDDLE}
+)
 """Token types whose content is prose rather than code.
 
 ``FSTRING_MIDDLE`` is the one that is easy to miss, and missing it is a full bypass of the
@@ -143,7 +145,10 @@ stays inside proven code and ships exempt without the classifier ever seeing it.
 ADR-0138 D1's own named exemplar with one character added, and f-strings are the idiomatic
 way to write such a literal — the common case, not an edge case.
 
-This project requires Python >=3.12 (``pyproject.toml``), so there is no older
+``TSTRING_MIDDLE`` is the same bypass for t-strings (PEP 750). Before Python 3.14 ``t"..."``
+was a ``SyntaxError``, so the fence never earned the exemption. On 3.14 it parses.
+
+This project requires Python >=3.14 (``pyproject.toml``), so there is no older
 tokenization to fall back to and no version guard to write.
 """
 
@@ -197,7 +202,7 @@ def _parses(language: str, body: str) -> bool:
             # would let any prose claim a `yaml` fence and be exempted, which is the
             # same bypass in a different costume.
             return not isinstance(loaded, str)
-    except (SyntaxError, ValueError, yaml.YAMLError):
+    except SyntaxError, ValueError, yaml.YAMLError:
         return False
     return False
 
@@ -226,7 +231,7 @@ def _python_prose_and_dependencies(
 
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(body).readline))
-    except (tokenize.TokenError, IndentationError, SyntaxError):  # pragma: no cover
+    except tokenize.TokenError, IndentationError, SyntaxError:  # pragma: no cover
         return prose, dependencies
 
     for token in tokens:

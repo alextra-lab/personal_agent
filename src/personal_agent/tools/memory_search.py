@@ -180,7 +180,7 @@ async def search_memory_executor(
 
             if global_memory_service and global_memory_service.connected:
                 memory_service = global_memory_service
-        except (ImportError, AttributeError):
+        except ImportError, AttributeError:
             pass
 
         if not memory_service or not memory_service.connected:

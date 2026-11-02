@@ -139,7 +139,7 @@ def _poll_gpu_via_macmon() -> dict[str, Any]:
                     if line and line.startswith("{"):
                         stdout = line
                         break
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except FileNotFoundError, subprocess.TimeoutExpired:
             pass
 
         # Approach 2: Direct subprocess with extended timeout

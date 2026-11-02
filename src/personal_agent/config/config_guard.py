@@ -1047,7 +1047,7 @@ def _serving_reranker_model() -> str | None:
 
     try:
         model_def = resolve_role_definition("reranker")
-    except (KeyError, ModelRoleError):
+    except KeyError, ModelRoleError:
         return None
     return None if model_def is None else model_def.id
 

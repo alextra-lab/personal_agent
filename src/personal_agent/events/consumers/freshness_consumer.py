@@ -285,6 +285,6 @@ class FreshnessConsumer:
 
             if _ms is not None and _ms.driver is not None:
                 return _ms.driver
-        except (ImportError, AttributeError):
+        except ImportError, AttributeError:
             pass
         return None

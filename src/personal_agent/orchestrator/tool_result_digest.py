@@ -138,7 +138,7 @@ def _try_parse_json(content: str) -> Any:
     """Parse *content* as JSON, returning ``None`` on failure."""
     try:
         return json.loads(content)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -434,7 +434,7 @@ def _is_existing_digest(content: str) -> bool:
     """True when *content* is already an ADR-0085 digest payload (idempotency guard)."""
     try:
         parsed = json.loads(content)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
     return isinstance(parsed, dict) and parsed.get("_digest") is True
 
@@ -443,7 +443,7 @@ def _safe_session_uuid(session_id: str) -> UUID | None:
     """Parse *session_id* as a UUID, returning ``None`` when it is not one."""
     try:
         return UUID(session_id)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

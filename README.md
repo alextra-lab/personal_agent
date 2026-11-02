@@ -115,7 +115,7 @@ The steps below start a local development stack. The production gateway runs fro
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
 - Docker (for PostgreSQL, Elasticsearch, Neo4j)
 - A llama.cpp model server, if you want local models. Set `AGENT_SLM_BASE_URL` to its origin, without `/v1`. Cloud-bound roles need the provider keys that `config/model_roles.yaml` lists under `required_secrets`.

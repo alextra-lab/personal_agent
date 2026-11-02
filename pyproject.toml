@@ -12,7 +12,7 @@ name = "personal-ai-agent"
 version = "0.1.0"
 description = "Research project: Personal local AI collaborator exploring cognitive architectures and agentic systems (learning/research, not production-ready)."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 
 license = { text = "MIT" }
 
@@ -63,7 +63,7 @@ dependencies = [
   "opentelemetry-sdk>=1.45.1",  # FRE-1711 — opentelemetry-api CVE-2026-114603 is fixed in 1.45.1; the SDK pins the API exactly, so the family moves together (was 1.44.0)
   "opentelemetry-exporter-otlp>=1.45.1",  # FRE-1711 — same family bump as opentelemetry-sdk (was 1.44.0)
   "opentelemetry-semantic-conventions==0.66b1",  # FRE-1711 — the version that opentelemetry-sdk 1.45.1 requires (was 0.65b0)
-  "tzdata>=2024.1",  # FRE-1298 — python:3.12-slim has no system tz database; zoneinfo needs this
+  "tzdata>=2024.1",  # FRE-1298 — python:3.14-slim has no system tz database; zoneinfo needs this
   "tree-sitter>=0.26.0",
   "tree-sitter-bash>=0.25.1",
 ]
@@ -157,7 +157,7 @@ markers = [
 # -----------------------------
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 warn_unused_configs = true
 plugins = ["pydantic.mypy"]
@@ -194,10 +194,10 @@ ignore_missing_imports = true
 # -----------------------------
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 100
 src = ["src"]
-# FRE-1715: *.md — ruff 0.17 formats Markdown code blocks; CI pins ruff 0.15.15, which does not.
+# FRE-1715: *.md — ruff 0.17 formats Markdown code blocks, and src/**/AGENTS.md are out of scope.
 exclude = ["venv", ".venv", "build", "dist", "scripts/archive", "tests/archive", "*.md"]
 
 [tool.ruff.lint]

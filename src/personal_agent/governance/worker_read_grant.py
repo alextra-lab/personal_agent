@@ -198,7 +198,7 @@ def _record(path: str) -> GrantedFile | None:
     try:
         real = Path(path).resolve(strict=True)
         info = os.lstat(real)
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         # A planner value must grant nothing, never raise (ValueError: an unusable path).
         return None
     if not stat.S_ISREG(info.st_mode):

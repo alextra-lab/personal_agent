@@ -348,7 +348,7 @@ async def rerank(
 
     try:
         model_id, endpoint = _get_reranker_config()
-    except (KeyError, ModelRoleError):
+    except KeyError, ModelRoleError:
         log.warning(
             "reranker_config_missing",
             trace_id=trace_id,
@@ -434,7 +434,7 @@ async def _rerank_fallback(
 
     try:
         model_id, endpoint = _get_reranker_fallback_config()
-    except (KeyError, ModelRoleError):
+    except KeyError, ModelRoleError:
         log.warning(
             "reranker_fallback_config_missing",
             trace_id=trace_id,

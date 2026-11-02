@@ -35,7 +35,7 @@ Do not commit machine-specific filesystem paths (e.g. absolute paths under your 
 
 ## Python Version & Compatibility
 
-- **Target**: Python 3.12+
+- **Target**: Python 3.14+
 - **Features allowed**: Type unions with `|`, `match/case`, structural pattern matching, PEP 695 type parameters
 - **No backward compatibility**: We control the environment (the Debian VPS and the gateway container), no need to support older Python
 

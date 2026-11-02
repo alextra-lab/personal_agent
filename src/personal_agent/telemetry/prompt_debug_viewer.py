@@ -75,7 +75,7 @@ def _load(path: pathlib.Path) -> Record | None:
     """Read one capture file, or ``None`` when it is not a JSON object."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return cast(Record, data) if isinstance(data, dict) else None
 

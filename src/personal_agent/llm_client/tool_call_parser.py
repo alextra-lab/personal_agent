@@ -139,14 +139,14 @@ def _parse_python_call_expr(expr: str) -> dict[str, Any] | None:
     for idx, arg in enumerate(node.args):
         try:
             arguments[f"arg{idx}"] = _literal(arg)
-        except (ValueError, SyntaxError):
+        except ValueError, SyntaxError:
             return None
     for kw in node.keywords:
         if kw.arg is None:  # **kwargs unpacking — reject
             return None
         try:
             arguments[kw.arg] = _literal(kw.value)
-        except (ValueError, SyntaxError):
+        except ValueError, SyntaxError:
             return None
 
     return {"name": node.func.id, "arguments": arguments}
@@ -202,7 +202,7 @@ def _parse_qwen_xml_tool_call(block: str) -> dict[str, Any] | None:
         # Try JSON first (handles arrays, objects, numbers, booleans)
         try:
             arguments[param_name] = json.loads(raw_value)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             arguments[param_name] = raw_value
 
     return {"name": func_name, "arguments": arguments}

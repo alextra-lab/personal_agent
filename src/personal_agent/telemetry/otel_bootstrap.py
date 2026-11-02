@@ -31,7 +31,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 #   lifespan(), two lines before the configure_tracing() call in the same function.
 # - "uvicorn.error": production boots via Uvicorn (docker-compose.cloud.yml), and the
 #   installed Uvicorn server itself logs through this stdlib logger ("Started server
-#   process", "Waiting for application startup" — .venv/lib/python3.12/site-packages/
+#   process", "Waiting for application startup" — .venv/lib/python3.14/site-packages/
 #   uvicorn/server.py) before the ASGI app's lifespan — and therefore configure_tracing
 #   — ever runs.
 PRE_BOOTSTRAP_LOGGERS: Final[frozenset[str]] = frozenset(

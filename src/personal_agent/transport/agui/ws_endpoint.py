@@ -826,7 +826,7 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError, Exception:
                 pass
     except Exception:
         log.exception("ws.handler_error", session_id=session_id)
@@ -876,7 +876,7 @@ async def _receive_connect(ws: WebSocket, session_id: str) -> _ConnectRequest | 
     try:
         raw = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
         msg = json.loads(raw)
-    except (asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect):
+    except asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect:
         log.warning("ws.connect_handshake_failed", session_id=session_id)
         return None
 

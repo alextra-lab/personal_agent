@@ -509,7 +509,7 @@ class ConsolidationQualityMonitor:
             value = record.get("value", 0.0)
             try:
                 return float(value)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return 0.0
 
     async def _run_list_query(self, query: str, **params: Any) -> list[Any]:

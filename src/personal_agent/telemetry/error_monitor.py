@@ -152,7 +152,7 @@ class ErrorMonitor:
         if fp_path.exists():
             try:
                 data: dict[str, Any] = json.loads(fp_path.read_text())
-            except (json.JSONDecodeError, OSError):
+            except json.JSONDecodeError, OSError:
                 data = {}
         else:
             data = {}

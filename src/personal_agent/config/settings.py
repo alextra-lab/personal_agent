@@ -2726,7 +2726,7 @@ class AppConfig(BaseSettings):
             if isinstance(parsed, dict):
                 return cast(dict[str, str], parsed)
             return {}
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             return {}
 
     # FRE-261 PIVOT-2: Primitive tools feature flags (ADR-0063 Phase 2)

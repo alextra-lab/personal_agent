@@ -144,7 +144,7 @@ def test_fstring_content_is_extracted_like_any_other_literal() -> None:
 
     That is ADR-0138 D1's own named exemplar with the quote prefixed by one character,
     and f-strings are the idiomatic way to write such a literal — the common case, not an
-    edge case. This project requires >=3.12, so the old behaviour was unreachable.
+    edge case. This project requires >=3.14, so the old behaviour is unreachable.
     """
     text = '```python\ndef banner() -> None:\n    print(f"Paris has 9 million residents")\n```\n'
     classified = " ".join(_of_kind(text, RegionKind.CLASSIFY))
@@ -155,6 +155,26 @@ def test_fstring_content_is_extracted_like_any_other_literal() -> None:
 def test_fstring_with_an_interpolation_still_yields_its_literal_text() -> None:
     """The claim and the interpolation live in one f-string; the claim must still surface."""
     text = '```python\nname = "x"\nprint(f"Basalt is denser than granite, {name}")\n```\n'
+    classified = " ".join(_of_kind(text, RegionKind.CLASSIFY))
+    assert "Basalt is denser than granite" in classified
+
+
+def test_tstring_content_is_extracted_like_any_other_literal() -> None:
+    """A t-string parses on Python 3.14, so it reaches the same bypass as an f-string.
+
+    Before 3.14 ``t"..."`` was a ``SyntaxError`` and the fence never earned the exemption. On
+    3.14 it parses, and ``tokenize`` emits ``TSTRING_START`` / ``TSTRING_MIDDLE`` /
+    ``TSTRING_END`` with no ``STRING`` token. Its text must still reach the classifier.
+    """
+    text = '```python\ndef banner() -> None:\n    print(t"Paris has 9 million residents")\n```\n'
+    classified = " ".join(_of_kind(text, RegionKind.CLASSIFY))
+    assert "Paris has 9 million residents" in classified
+    assert "Paris has 9 million residents" not in " ".join(_of_kind(text, RegionKind.PROVEN_CODE))
+
+
+def test_tstring_with_an_interpolation_still_yields_its_literal_text() -> None:
+    """The claim and the interpolation live in one t-string; the claim must still surface."""
+    text = '```python\nname = "x"\nprint(t"Basalt is denser than granite, {name}")\n```\n'
     classified = " ".join(_of_kind(text, RegionKind.CLASSIFY))
     assert "Basalt is denser than granite" in classified
 

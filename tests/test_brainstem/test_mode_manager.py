@@ -227,6 +227,22 @@ def test_mode_manager_no_publish_without_bus() -> None:
     assert mm.get_current_mode() == Mode.ALERT  # transition still happened
 
 
+def test_transition_with_a_bus_and_no_running_loop_keeps_the_mode_change() -> None:
+    """A sync caller with a bus gets the mode change, and the event is skipped.
+
+    On Python 3.14 ``asyncio.get_event_loop()`` raises ``RuntimeError`` when no current loop
+    exists. That raise must not escape after the mode already changed.
+    """
+    mock_bus = AsyncMock()
+    mm = ModeManager(event_bus=mock_bus)
+
+    mm.transition_to(Mode.ALERT, "sync caller", trace_id="trace-sync")
+
+    assert mm.get_current_mode() == Mode.ALERT
+    assert len(mm.get_transition_history()) == 1
+    mock_bus.publish.assert_not_called()
+
+
 def test_mode_manager_publish_error_is_swallowed() -> None:
     """Bus publish errors don't prevent the FSM transition."""
 

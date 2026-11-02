@@ -1398,7 +1398,7 @@ def _parse_and_validate_worker_report(content: str) -> WorkerReport | None:
     """
     try:
         data = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return None
     try:
         return WorkerReport.model_validate(data)

@@ -160,7 +160,9 @@ class CapEntry(BaseModel):
 
     time_window: Literal["daily", "weekly"]
     role: str
-    cap_usd: Decimal
+    # The limits of budget_policies.cap_usd, DECIMAL(10, 6). Zero is valid: it refuses every
+    # paid reservation on this cap.
+    cap_usd: Decimal = Field(ge=0, max_digits=10, decimal_places=6)
 
 
 class BudgetConfig(BaseModel):

@@ -703,3 +703,227 @@ describe('edit a role binding and a saved choice (FRE-1722)', () => {
     expect(header('Saved choices')).toHaveTextContent('saved choice');
   });
 });
+
+describe('edit an effort preset and a budget cap (FRE-1723)', () => {
+  const STANDARD = { expansion: true, sub_agent_rounds: 12, planner_policy: 'p2', primary_mode: null };
+  const FAST = { expansion: false, sub_agent_rounds: null, planner_policy: null, primary_mode: 'fast' };
+  const CHOICES = { planner_policy: ['baseline', 'p2'], primary_mode: ['fast', 'deep'] };
+
+  function editableMenu(): SettingsMenu {
+    const m = menu();
+    m.groups[3] = {
+      ...m.groups[3],
+      rows: [
+        {
+          name: 'effort.default_level',
+          value: 'standard',
+          source: 'config file',
+          overrides: null,
+          clearable: false,
+          note: null,
+          file_default: { value: 'standard', source: 'config file' },
+          edit: { kind: 'effort_default_level', options: ['fast', 'standard', 'deep'], current: 'standard' },
+        },
+        {
+          name: 'effort.level.standard',
+          value: STANDARD,
+          source: 'override',
+          overrides: null,
+          clearable: true,
+          note: null,
+          file_default: { value: { ...STANDARD, sub_agent_rounds: 20 }, source: 'config file' },
+          edit: { kind: 'effort_preset', options: [], current: null, preset_choices: CHOICES },
+        },
+        {
+          name: 'effort.level.fast',
+          value: FAST,
+          source: 'config file',
+          overrides: null,
+          clearable: false,
+          note: null,
+          file_default: { value: FAST, source: 'config file' },
+          edit: { kind: 'effort_preset', options: [], current: null, preset_choices: CHOICES },
+        },
+      ],
+    };
+    m.groups[4] = {
+      ...m.groups[4],
+      rows: [
+        {
+          name: 'cap.daily.main_inference',
+          value: 2.5,
+          source: 'override',
+          overrides: null,
+          clearable: true,
+          note: null,
+          file_default: { value: 10, source: 'config file' },
+          edit: { kind: 'budget_cap', options: [], current: '2.5' },
+        },
+      ],
+    };
+    return m;
+  }
+
+  async function openRow(group: string, name: string): Promise<HTMLElement> {
+    await screen.findByRole('heading', { name: new RegExp(`^${group}`) });
+    await openGroup(group);
+    return (await screen.findByText(name)).closest('[data-testid="setting-row"]') as HTMLElement;
+  }
+
+  function save(row: HTMLElement): HTMLElement {
+    return within(row).getByRole('button', { name: 'Save' });
+  }
+
+  it('a cap row shows a number input, the live value, the file default and Clear', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Budgets and cost', 'cap.daily.main_inference');
+
+    expect(within(row).getByRole('spinbutton', { name: /cap\.daily\.main_inference/ })).toHaveValue(2.5);
+    expect(within(row).getByTestId('setting-live-value')).toHaveTextContent('2.5');
+    expect(within(row).getByTestId('setting-file-default')).toHaveTextContent('file default 10 (config file)');
+    expect(within(row).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+    expect(save(row)).toBeDisabled();
+  });
+
+  it('saves a cap as a number through the override API, then reloads', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockResolvedValue({ parameter: 'cap.daily.main_inference', value: 1.25 });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Budgets and cost', 'cap.daily.main_inference');
+
+    const input = within(row).getByRole('spinbutton');
+    await userEvent.clear(input);
+    expect(save(row)).toBeDisabled();
+    await userEvent.type(input, '1.25');
+    await userEvent.click(save(row));
+
+    expect(mockSetOverride).toHaveBeenCalledWith('cap.daily.main_inference', 1.25);
+    await waitFor(() => expect(mockGetSettingsMenu).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows the reason when the API refuses a cap, and keeps the draft', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockRejectedValue(new Error('Input should be greater than or equal to 0'));
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Budgets and cost', 'cap.daily.main_inference');
+
+    const input = within(row).getByRole('spinbutton');
+    await userEvent.clear(input);
+    await userEvent.type(input, '-1');
+    await userEvent.click(save(row));
+
+    expect(await within(row).findByRole('alert')).toHaveTextContent(/greater than or equal to 0/);
+    expect(input).toHaveValue(-1);
+    expect(within(row).getByTestId('setting-live-value')).toHaveTextContent('2.5');
+  });
+
+  it('a preset row shows its four fields from the live value', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Effort presets', 'effort.level.standard');
+
+    expect(within(row).getByRole('checkbox', { name: /expansion/ })).toBeChecked();
+    expect(within(row).getByRole('spinbutton', { name: /sub_agent_rounds/ })).toHaveValue(12);
+    expect(within(row).getByRole('combobox', { name: /planner_policy/ })).toHaveValue('p2');
+    expect(within(row).getByRole('combobox', { name: /primary_mode/ })).toHaveValue('');
+    expect(within(row).getByTestId('setting-file-default')).toHaveTextContent('file default');
+    expect(within(row).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+    expect(save(row)).toBeDisabled();
+  });
+
+  it('saves the whole preset through the override API, then reloads', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockResolvedValue({ parameter: 'effort.level.standard', value: STANDARD });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Effort presets', 'effort.level.standard');
+
+    const rounds = within(row).getByRole('spinbutton', { name: /sub_agent_rounds/ });
+    await userEvent.clear(rounds);
+    await userEvent.type(rounds, '5');
+    await userEvent.selectOptions(within(row).getByRole('combobox', { name: /primary_mode/ }), 'deep');
+    await userEvent.click(save(row));
+
+    expect(mockSetOverride).toHaveBeenCalledWith('effort.level.standard', {
+      expansion: true,
+      sub_agent_rounds: 5,
+      planner_policy: 'p2',
+      primary_mode: 'deep',
+    });
+    await waitFor(() => expect(mockGetSettingsMenu).toHaveBeenCalledTimes(2));
+  });
+
+  it('sends null rounds and a null policy when expansion is off', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockResolvedValue({ parameter: 'effort.level.standard', value: FAST });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Effort presets', 'effort.level.standard');
+
+    await userEvent.click(within(row).getByRole('checkbox', { name: /expansion/ }));
+    expect(within(row).getByRole('spinbutton', { name: /sub_agent_rounds/ })).toBeDisabled();
+    expect(within(row).getByRole('combobox', { name: /planner_policy/ })).toBeDisabled();
+    await userEvent.click(save(row));
+
+    expect(mockSetOverride).toHaveBeenCalledWith('effort.level.standard', {
+      expansion: false,
+      sub_agent_rounds: null,
+      planner_policy: null,
+      primary_mode: null,
+    });
+  });
+
+  it('a preset with no expansion sends null rounds when the owner turns expansion on and leaves them', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockRejectedValue(new Error("level 'fast' expands, so it needs sub_agent_rounds"));
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Effort presets', 'effort.level.fast');
+
+    await userEvent.click(within(row).getByRole('checkbox', { name: /expansion/ }));
+    await userEvent.click(save(row));
+
+    expect(mockSetOverride).toHaveBeenCalledWith('effort.level.fast', {
+      expansion: true,
+      sub_agent_rounds: null,
+      planner_policy: null,
+      primary_mode: 'fast',
+    });
+    expect(await within(row).findByRole('alert')).toHaveTextContent(/needs sub_agent_rounds/);
+  });
+
+  it('the default level uses the select and saves its name', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockResolvedValue({ parameter: 'effort.default_level', value: 'deep' });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Effort presets', 'effort.default_level');
+
+    await userEvent.selectOptions(within(row).getByRole('combobox'), 'deep');
+    await userEvent.click(save(row));
+
+    expect(mockSetOverride).toHaveBeenCalledWith('effort.default_level', 'deep');
+  });
+
+  it('the draft follows the live value after the menu reloads', async () => {
+    const after = editableMenu();
+    after.groups[3].rows[1] = {
+      ...after.groups[3].rows[1],
+      value: { ...STANDARD, sub_agent_rounds: 20 },
+    };
+    after.groups[4].rows[0] = {
+      ...after.groups[4].rows[0],
+      value: 10,
+      edit: { kind: 'budget_cap', options: [], current: '10' },
+    };
+    mockGetSettingsMenu.mockResolvedValueOnce(editableMenu()).mockResolvedValue(after);
+    mockClearOverride.mockResolvedValue({ parameter: 'x', cleared: true });
+    render(<SettingsView view="menu" />);
+
+    const cap = await openRow('Budgets and cost', 'cap.daily.main_inference');
+    const preset = await openRow('Effort presets', 'effort.level.standard');
+    await userEvent.click(within(cap).getByRole('button', { name: 'Clear' }));
+
+    await waitFor(() => expect(within(cap).getByRole('spinbutton')).toHaveValue(10));
+    expect(within(preset).getByRole('spinbutton', { name: /sub_agent_rounds/ })).toHaveValue(20);
+    expect(save(cap)).toBeDisabled();
+    expect(save(preset)).toBeDisabled();
+  });
+});

@@ -21,6 +21,7 @@ from personal_agent.config.model_loader import file_role_deployments
 from personal_agent.config.seshat_effort import load_seshat_effort
 from personal_agent.config.settings import AppConfig
 from personal_agent.cost_gate import load_budget_config
+from personal_agent.cost_gate.policy import apply_cap_overrides
 from personal_agent.orchestrator.constraint_options import (
     CONSTRAINT_OPTIONS,
     PREFERENCE_NEVER_APPLIED,
@@ -581,7 +582,8 @@ def test_a_session_selection_still_beats_an_edited_primary_and_says_so() -> None
     session_key = next(
         key
         for key, model in load_model_config().models.items()
-        if model.kind.value == "llm" and key not in (target, load_model_config().roles["primary"].deployment)
+        if model.kind.value == "llm"
+        and key not in (target, load_model_config().roles["primary"].deployment)
     )
     menu = build_menu(
         _overridden_inputs(
@@ -610,7 +612,8 @@ def test_a_saved_choice_still_shows_beside_an_edited_artifact_builder_binding() 
     saved = next(
         key
         for key, model in load_model_config().models.items()
-        if model.kind.value == "llm" and key not in (target, load_model_config().roles["artifact_builder"].deployment)
+        if model.kind.value == "llm"
+        and key not in (target, load_model_config().roles["artifact_builder"].deployment)
     )
     menu = build_menu(
         _overridden_inputs(
@@ -649,7 +652,9 @@ def test_an_inherit_row_reads_its_own_override_not_the_primary_override() -> Non
 
 
 def test_a_saved_choice_row_shows_a_control_and_its_default_to_every_user() -> None:
-    row = _row(build_menu(_inputs(is_owner=False)), "saved_choices", "saved_choice.tool_iteration_limit")
+    row = _row(
+        build_menu(_inputs(is_owner=False)), "saved_choices", "saved_choice.tool_iteration_limit"
+    )
     assert row.value == "not set"
     assert row.file_default is not None
     assert "finish_now" in str(row.file_default.value)
@@ -687,3 +692,159 @@ def test_a_group_builder_keeps_working_with_no_catalog_for_saved_choices() -> No
     group = next(g for g in menu.groups if g.id == "saved_choices")
     assert group.error is None
     assert _row(menu, "saved_choices", "saved_choice.artifact_builder").edit is None
+
+
+# --- FRE-1723: effort presets and budget caps ------------------------------------------------
+
+
+_DEEP = "effort.level.deep"
+_PRESET = {
+    "expansion": True,
+    "sub_agent_rounds": 3,
+    "planner_policy": "baseline",
+    "primary_mode": None,
+}
+
+
+def _stored_effort(overrides: dict[str, object]) -> dict[str, object]:
+    """Return inputs as the gateway builds them while these overrides are stored."""
+    file_effort = load_seshat_effort()
+    levels = dict(file_effort.levels)
+    default_level = file_effort.default_level
+    if _DEEP in overrides:
+        levels["deep"] = levels["deep"].model_copy(update=dict(_PRESET))
+    if "effort.default_level" in overrides:
+        default_level = overrides["effort.default_level"]  # type: ignore[assignment]
+    return {
+        "effort": file_effort.model_copy(update={"levels": levels, "default_level": default_level}),
+        "file_effort": file_effort,
+        "overrides": overrides,
+    }
+
+
+def test_owner_sees_a_control_and_the_file_default_on_a_preset_row() -> None:
+    menu = build_menu(_inputs(file_effort=load_seshat_effort(), is_owner=True))
+    row = _row(menu, "effort_and_modes", _DEEP)
+    assert row.source == "config file"
+    assert row.edit is not None and row.edit.kind == "effort_preset"
+    assert row.edit.preset_choices == {
+        "planner_policy": ["baseline", "p2"],
+        "primary_mode": ["fast", "deep"],
+    }
+    assert row.file_default is not None and row.file_default.value == row.value
+    assert row.clearable is False
+
+
+def test_a_non_owner_sees_no_control_on_a_preset_a_default_level_or_a_cap() -> None:
+    menu = build_menu(_inputs(**_stored_effort({_DEEP: _PRESET})))
+    for group, name in (
+        ("effort_and_modes", _DEEP),
+        ("effort_and_modes", "effort.default_level"),
+        ("budgets", "cap.weekly._total"),
+    ):
+        row = _row(menu, group, name)
+        assert row.edit is None
+        assert row.clearable is False
+    assert _row(menu, "effort_and_modes", _DEEP).source == "override"
+
+
+def test_a_stored_preset_shows_the_live_value_the_file_default_and_clear() -> None:
+    menu = build_menu(_inputs(**_stored_effort({_DEEP: _PRESET}), is_owner=True))
+    row = _row(menu, "effort_and_modes", _DEEP)
+    assert row.value == _PRESET
+    assert row.source == "override"
+    assert row.clearable is True
+    assert row.file_default is not None
+    assert row.file_default.value == load_seshat_effort().levels["deep"].model_dump(
+        mode="json", exclude={"level"}
+    )
+
+
+def test_a_stale_preset_says_so_and_can_be_cleared() -> None:
+    stale = {**_PRESET, "sub_agent_rounds": 100000}
+    menu = build_menu(
+        _inputs(file_effort=load_seshat_effort(), overrides={_DEEP: stale}, is_owner=True)
+    )
+    row = _row(menu, "effort_and_modes", _DEEP)
+    assert row.source == "config file"
+    assert row.clearable is True
+    assert row.note is not None and "not usable" in row.note
+
+
+def test_the_default_level_rows_name_the_d7_routing_change_and_other_levels_do_not() -> None:
+    menu = build_menu(_inputs(file_effort=load_seshat_effort(), is_owner=True))
+    default_level = load_seshat_effort().default_level
+    other = next(level for level in load_seshat_effort().levels if level != default_level)
+    assert "D7" in (_row(menu, "effort_and_modes", f"effort.level.{default_level}").note or "")
+    assert _row(menu, "effort_and_modes", f"effort.level.{other}").note is None
+    row = _row(menu, "effort_and_modes", "effort.default_level")
+    assert "D7" in (row.note or "")
+    assert "new conversations" in (row.note or "")
+    assert row.edit is not None and row.edit.kind == "effort_default_level"
+    assert row.edit.options == ["fast", "standard", "deep"]
+    assert row.edit.current == default_level
+
+
+def test_a_stored_default_level_shows_its_source_and_the_conversation_row_names_it() -> None:
+    menu = build_menu(
+        _inputs(
+            **_stored_effort({"effort.default_level": "deep"}),
+            session=SessionInputs(selections={}, effort_level="fast"),
+            is_owner=True,
+        )
+    )
+    row = _row(menu, "effort_and_modes", "effort.default_level")
+    assert (row.value, row.source, row.clearable) == ("deep", "override", True)
+    conversation = _row(menu, "conversation", "session.effort_level")
+    assert conversation.overrides is not None
+    assert conversation.overrides.value == "deep"
+    assert conversation.overrides.source == "override"
+
+
+def _budgets() -> dict[str, object]:
+    file_budget = load_budget_config("config/governance/budget.yaml.example")
+    return {"budget": file_budget, "file_budget": file_budget}
+
+
+def test_owner_sees_a_number_control_on_a_cap_row() -> None:
+    menu = build_menu(_inputs(**_budgets(), is_owner=True))
+    row = _row(menu, "budgets", "cap.weekly._total")
+    assert row.edit is not None and row.edit.kind == "budget_cap"
+    assert row.edit.current == str(row.value)
+    assert row.file_default is not None and row.file_default.value == row.value
+    assert row.clearable is False
+
+
+def test_a_stored_cap_shows_the_enforced_value_the_file_default_and_clear() -> None:
+    file_budget = load_budget_config("config/governance/budget.yaml.example")
+    parameter = "cap.weekly._total"
+    file_cap = _row(build_menu(_inputs(budget=file_budget)), "budgets", parameter).value
+    overrides = {parameter: 0.5}
+    menu = build_menu(
+        _inputs(
+            budget=apply_cap_overrides(file_budget, overrides),
+            file_budget=file_budget,
+            overrides=overrides,
+            is_owner=True,
+        )
+    )
+    row = _row(menu, "budgets", parameter)
+    assert (row.value, row.source, row.clearable) == (0.5, "override", True)
+    assert row.file_default is not None and row.file_default.value == file_cap
+
+
+def test_a_stale_cap_says_so_and_can_be_cleared() -> None:
+    parameter = "cap.weekly._total"
+    menu = build_menu(_inputs(**_budgets(), overrides={parameter: "bad"}, is_owner=True))
+    row = _row(menu, "budgets", parameter)
+    assert row.source == "config file"
+    assert row.clearable is True
+    assert row.note is not None and "not usable" in row.note
+
+
+def test_role_estimates_stay_read_only_for_the_owner() -> None:
+    menu = build_menu(_inputs(**_budgets(), is_owner=True))
+    group = next(g for g in menu.groups if g.id == "budgets")
+    for row in group.rows:
+        if not row.name.startswith("cap."):
+            assert row.edit is None

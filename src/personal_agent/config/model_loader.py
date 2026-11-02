@@ -9,15 +9,16 @@ All configuration loaders live in the config/ module per ADR-0007.
 """
 
 import functools
+import json
 from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from urllib.parse import urlparse
 
 import structlog
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
-from personal_agent.config.setting_overrides import role_overrides
+from personal_agent.config.setting_overrides import deployment_overrides, role_overrides
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import (
     INHERIT_DEPLOYMENT,
@@ -210,9 +211,26 @@ def _with_role_deployment(
     return {**content, "roles": {**roles, role: {**roles[role], "deployment": deployment}}}
 
 
+def _with_deployment_fields(
+    content: Mapping[str, object], key: str, fields: Mapping[str, object]
+) -> dict[str, object]:
+    """Return catalog content with edited fields on one deployment (FRE-1724)."""
+    models = content.get("models")
+    if not isinstance(models, dict) or not isinstance(models.get(key), dict):
+        raise ModelConfigError(f"the deployment {key} is not in the catalog")
+    if "endpoint" in fields:
+        raise ModelConfigError("the endpoint of a deployment stays in the file")
+    unknown = sorted(set(fields) - set(ModelDefinition.model_fields))
+    if unknown:
+        raise ModelConfigError(f"unknown fields: {', '.join(unknown)}")
+    return {**content, "models": {**models, key: {**models[key], **fields}}}
+
+
 @functools.lru_cache(maxsize=8)
 def _load_model_config_with_overrides(
-    config_path_str: str, overrides: tuple[tuple[str, str], ...]
+    config_path_str: str,
+    overrides: tuple[tuple[str, str], ...],
+    deployments: tuple[tuple[str, str], ...] = (),
 ) -> ModelConfig:
     """Return the catalog with the stored role bindings applied (FRE-1722).
 
@@ -223,12 +241,25 @@ def _load_model_config_with_overrides(
     Args:
         config_path_str: The resolved path of a real catalog.
         overrides: ``(role, deployment)`` pairs from :func:`role_overrides`.
+        deployments: ``(key, JSON fields)`` pairs from :func:`deployment_overrides` (FRE-1724). They
+            apply first, because a role binding checks the deployment that it names.
 
     Returns:
         The catalog with each usable override applied.
     """
     config = _load_model_config_at_path(config_path_str)
     content: Mapping[str, object] = _read_catalog_content(Path(config_path_str))
+    for key, fields_json in deployments:
+        try:
+            fields = json.loads(fields_json)
+            if not isinstance(fields, dict):
+                raise ModelConfigError(f"the stored value of {key} is not an object")
+            candidate = _with_deployment_fields(content, key, fields)
+            config = _validate_catalog(candidate)
+        except ModelConfigError as exc:
+            log.warning("deployment_override_skipped", deployment=key, error=str(exc))
+            continue
+        content = candidate
     for role, deployment in overrides:
         try:
             candidate = _with_role_deployment(content, role, deployment)
@@ -253,6 +284,58 @@ def validate_role_override(role: str, deployment: str) -> None:
     """
     content = _read_catalog_content(CATALOG_PATH)
     _validate_catalog(_with_role_deployment(content, role, deployment))
+
+
+def validate_deployment_override(key: str, value: JsonValue) -> dict[str, JsonValue]:
+    """Check a proposed deployment edit with the models that load the file (FRE-1724).
+
+    Args:
+        key: A deployment key of the catalog.
+        value: The fields to change. A string does not coerce.
+
+    Returns:
+        The edited fields to store, in their canonical form.
+
+    Raises:
+        ModelConfigError: If the catalog refuses the edit. The message states the reason.
+    """
+    if not isinstance(value, dict) or not value:
+        raise ModelConfigError(f"{key} takes a non-empty object of deployment fields")
+    content = _with_deployment_fields(_read_catalog_content(CATALOG_PATH), key, value)
+    models = content["models"]
+    assert isinstance(models, dict)
+    try:
+        definition = ModelDefinition.model_validate_json(json.dumps(models[key]), strict=True)
+    except ValidationError as exc:
+        reasons = "; ".join(
+            f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}"
+            for err in exc.errors(include_input=False, include_url=False)
+        )
+        raise ModelConfigError(reasons) from None
+    _validate_catalog(content)
+    dump = definition.model_dump(mode="json")
+    return {field: dump[field] for field in sorted(value)}
+
+
+def file_model_config() -> ModelConfig:
+    """Return the catalog as the file states it, with no override (FRE-1724)."""
+    return _load_model_config_at_path(str(CATALOG_PATH))
+
+
+def file_deployment_fields(key: str) -> JsonValue:
+    """Return the fields of a deployment as the file states them, with no endpoint (FRE-1724).
+
+    Args:
+        key: A deployment key.
+
+    Returns:
+        The fields, or ``None`` when the file no longer holds this deployment.
+    """
+    definition = _load_model_config_at_path(str(CATALOG_PATH)).models.get(key)
+    if definition is None:
+        return None
+    dump: JsonValue = definition.model_dump(mode="json", exclude_none=True, exclude={"endpoint"})
+    return dump
 
 
 def file_role_deployments() -> Mapping[str, str]:
@@ -336,8 +419,9 @@ def load_model_config(
         raise ModelConfigError(f"Model config path is not a file: {config_path}")
 
     overrides = role_overrides()
-    if overrides and config_path in _REAL_CATALOGS:
-        config = _load_model_config_with_overrides(str(config_path), overrides)
+    deployments = deployment_overrides()
+    if (overrides or deployments) and config_path in _REAL_CATALOGS:
+        config = _load_model_config_with_overrides(str(config_path), overrides, deployments)
     else:
         config = _load_model_config_at_path(str(config_path))
     return _resolve_slm_endpoints(config, settings)

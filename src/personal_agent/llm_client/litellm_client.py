@@ -1558,17 +1558,20 @@ class LiteLLMClient:
         # reservers, raises BudgetDenied with a structured payload when any
         # cap would be exceeded, and is reconciled to the actual cost via
         # commit/refund below.
+        from personal_agent.config.setting_overrides import current_overrides  # noqa: PLC0415
         from personal_agent.cost_gate import (  # noqa: PLC0415 — lazy to avoid cycle
             BudgetDenied,
             get_default_gate,
             load_budget_config,
         )
+        from personal_agent.cost_gate.policy import apply_budget_overrides  # noqa: PLC0415
         from personal_agent.llm_client.cost_estimator import (  # noqa: PLC0415
             estimate_reservation_for_call,
         )
 
         gate = get_default_gate()
-        budget_config = load_budget_config()
+        # A stored role estimate wins over the file (FRE-1724).
+        budget_config = apply_budget_overrides(load_budget_config(), current_overrides())
         reservation_amount = estimate_reservation_for_call(
             role=self.budget_role,
             model=self._litellm_model,

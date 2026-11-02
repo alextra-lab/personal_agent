@@ -15,9 +15,11 @@ from pydantic import JsonValue, ValidationError
 from personal_agent.config.setting_overrides import replace_overrides
 from personal_agent.cost_gate import BudgetConfig, BudgetConfigError, CapEntry, CostGate
 from personal_agent.cost_gate.policy import (
+    apply_budget_overrides,
     apply_cap_overrides,
     cap_parameter,
     validate_cap_override,
+    validate_role_estimate_override,
 )
 
 _DAILY = "cap.daily.main_inference"
@@ -139,3 +141,75 @@ def test_validate_refuses_with_a_reason(parameter: str, value: JsonValue, reason
 def test_the_loader_model_refuses_a_negative_cap_in_the_file() -> None:
     with pytest.raises(ValidationError):
         CapEntry(time_window="daily", role="x", cap_usd=Decimal("-1"))
+
+
+def _budget_with_role() -> BudgetConfig:
+    return BudgetConfig.model_validate(
+        {
+            "version": 1,
+            "roles": {
+                "main_inference": {
+                    "default_output_tokens": 100,
+                    "safety_factor": 1.2,
+                    "on_denial": "raise",
+                }
+            },
+            "caps": [],
+        }
+    )
+
+
+def test_fre1724_a_role_estimate_edit_wins_and_a_gate_reads_it() -> None:
+    config = _budget_with_role()
+    overrides: dict[str, JsonValue] = {
+        "role_estimate.main_inference": {"default_output_tokens": 500}
+    }
+
+    applied = apply_budget_overrides(config, overrides)
+
+    assert applied.roles["main_inference"].default_output_tokens == 500
+    assert applied.roles["main_inference"].safety_factor == 1.2
+    assert config.roles["main_inference"].default_output_tokens == 100
+
+    gate = CostGate(config=config, db_url="postgresql://unused")
+    replace_overrides(overrides)
+    try:
+        assert gate.config.roles["main_inference"].default_output_tokens == 500
+    finally:
+        replace_overrides({})
+    assert gate.config.roles["main_inference"].default_output_tokens == 100
+
+
+@pytest.mark.parametrize(
+    "stale",
+    [
+        {"default_output_tokens": 0},
+        {"default_output_tokens": "many"},
+        {"a_typo": 1},
+        "text",
+    ],
+)
+def test_fre1724_a_stale_role_estimate_is_skipped_and_never_raises(stale: JsonValue) -> None:
+    config = _budget_with_role()
+
+    assert apply_budget_overrides(config, {"role_estimate.main_inference": stale}) is config
+
+
+def test_fre1724_a_role_estimate_for_a_role_the_file_lacks_has_no_effect() -> None:
+    config = _budget_with_role()
+
+    assert apply_budget_overrides(config, {"role_estimate.other": {"safety_factor": 2.0}}) is config
+
+
+def test_fre1724_validate_a_role_estimate() -> None:
+    config = _budget_with_role()
+
+    assert validate_role_estimate_override(
+        config, "role_estimate.main_inference", {"safety_factor": 1.5}
+    ) == {"safety_factor": 1.5}
+    with pytest.raises(BudgetConfigError, match="not in the budget file"):
+        validate_role_estimate_override(config, "role_estimate.other", {"safety_factor": 1.5})
+    with pytest.raises(BudgetConfigError):
+        validate_role_estimate_override(
+            config, "role_estimate.main_inference", {"safety_factor": 0.5}
+        )

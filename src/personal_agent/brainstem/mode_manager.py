@@ -9,7 +9,11 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from personal_agent.config.governance_loader import GovernanceConfigError, load_governance_config
+from personal_agent.config.governance_loader import (
+    GovernanceConfigError,
+    LiveGovernanceConfig,
+    load_governance_config,
+)
 from personal_agent.events.bus import EventBus
 from personal_agent.events.models import STREAM_MODE_TRANSITION, ModeTransitionEvent
 from personal_agent.governance.models import GovernanceConfig, Mode, TransitionRule
@@ -54,13 +58,14 @@ class ModeManager:
         Raises:
             ModeManagerError: If configuration cannot be loaded.
         """
+        # With no config passed, the rules follow the stored overrides (FRE-1724).
+        self._live_governance: LiveGovernanceConfig | None = None
+        self._governance_config = governance_config
         if governance_config is None:
             try:
-                self.governance_config = load_governance_config()
+                self._live_governance = LiveGovernanceConfig(load_governance_config)
             except GovernanceConfigError as e:
                 raise ModeManagerError(f"Failed to load governance config: {e}") from None
-        else:
-            self.governance_config = governance_config
 
         self._event_bus = event_bus
 
@@ -73,6 +78,18 @@ class ModeManager:
             initial_mode=self.current_mode.value,
             modes_available=list(self.governance_config.modes.keys()),
         )
+
+    @property
+    def governance_config(self) -> GovernanceConfig:
+        """Return the config passed to this manager, or the live config with the stored overrides."""
+        if self._governance_config is not None:
+            return self._governance_config
+        assert self._live_governance is not None
+        return self._live_governance.get()
+
+    @governance_config.setter
+    def governance_config(self, config: GovernanceConfig) -> None:
+        self._governance_config = config
 
     def get_current_mode(self) -> Mode:
         """Get current operational mode.

@@ -20,6 +20,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from personal_agent.brainstem import ModeManager, get_mode_manager
 from personal_agent.config import load_governance_config, settings
+from personal_agent.config.governance_loader import LiveGovernanceConfig
 from personal_agent.governance.models import GovernanceConfig, Mode
 from personal_agent.telemetry import (
     POLICY_VIOLATION,
@@ -624,10 +625,11 @@ class ToolExecutionLayer:
                 enabled, approval-required tools are denied (FRE-1535).
         """
         self.registry = registry
-        if governance_config is None:
-            self.governance_config = load_governance_config()
-        else:
-            self.governance_config = governance_config
+        # With no config passed, the layer follows the stored overrides (FRE-1724).
+        self._live_governance = (
+            LiveGovernanceConfig(load_governance_config) if governance_config is None else None
+        )
+        self._governance_config = governance_config
 
         if mode_manager is None:
             self.mode_manager = get_mode_manager()
@@ -637,6 +639,18 @@ class ToolExecutionLayer:
         self.transport = transport
 
         log.debug("tool_execution_layer_initialized")
+
+    @property
+    def governance_config(self) -> GovernanceConfig:
+        """Return the config passed to this layer, or the live config with the stored overrides."""
+        if self._governance_config is not None:
+            return self._governance_config
+        assert self._live_governance is not None
+        return self._live_governance.get()
+
+    @governance_config.setter
+    def governance_config(self, config: GovernanceConfig) -> None:
+        self._governance_config = config
 
     def _build_approve(
         self, tool_name: str, session_id: str | None, trace_ctx: TraceContext

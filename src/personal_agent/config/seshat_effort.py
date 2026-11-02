@@ -153,12 +153,20 @@ def load_seshat_effort(
         config = SeshatEffortConfig.model_validate(raw)
     except ValidationError as exc:
         raise SeshatEffortConfigError(f"{source} is invalid: {exc}") from exc
-    _check_round_ceilings(config, settings)
+    check_round_ceilings(config, settings)
     return config
 
 
-def _check_round_ceilings(config: SeshatEffortConfig, settings: AppConfig) -> None:
-    """Refuse presets that the global settings do not allow (ADR-0157 D3)."""
+def check_round_ceilings(config: SeshatEffortConfig, settings: AppConfig) -> None:
+    """Refuse presets that the global settings do not allow (ADR-0157 D3).
+
+    Args:
+        config: The presets.
+        settings: The settings that hold the ceiling.
+
+    Raises:
+        SeshatEffortConfigError: With the reason, when a preset does not fit.
+    """
     if settings.sub_agent_rounds_by_thoroughness:
         raise SeshatEffortConfigError(
             "sub_agent_rounds_by_thoroughness must be empty: a Seshat effort level sets one "
@@ -217,7 +225,7 @@ def _with_override(
             f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" for err in exc.errors()
         )
         raise SeshatEffortConfigError("; ".join(reasons)) from exc
-    _check_round_ceilings(candidate, get_settings())
+    check_round_ceilings(candidate, get_settings())
     return candidate
 
 
@@ -278,6 +286,11 @@ def _effort_with_overrides(overrides: tuple[tuple[str, str], ...]) -> SeshatEffo
         except SeshatEffortConfigError as exc:
             log.warning("effort_override_skipped", parameter=parameter, error=str(exc))
     return config
+
+
+def forget_effort_overrides() -> None:
+    """Drop the cached presets, after an edit of a ceiling that they depend on (FRE-1724)."""
+    _effort_with_overrides.cache_clear()
 
 
 def get_seshat_effort() -> SeshatEffortConfig:

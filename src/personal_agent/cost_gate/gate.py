@@ -34,7 +34,7 @@ import asyncpg  # type: ignore[import-untyped]
 import structlog
 
 from personal_agent.config.setting_overrides import current_overrides, replace_overrides
-from personal_agent.cost_gate.policy import apply_cap_overrides, read_stored_caps
+from personal_agent.cost_gate.policy import apply_budget_overrides, read_stored_caps
 from personal_agent.cost_gate.types import (
     BudgetConfig,
     BudgetDenied,
@@ -77,20 +77,20 @@ class CostGate:
         """
         self.file_config = config
         self._applied_overrides: Mapping[str, JsonValue] = current_overrides()
-        self._config = apply_cap_overrides(config, self._applied_overrides)
+        self._config = apply_budget_overrides(config, self._applied_overrides)
         self.db_url = _normalize_asyncpg_dsn(db_url)
         self.pool: asyncpg.Pool | None = None
 
     @property
     def config(self) -> BudgetConfig:
-        """Return the config to enforce: the file, with the stored caps applied (FRE-1723).
+        """Return the config to enforce: the file, with the stored rows applied (FRE-1723, FRE-1724).
 
         ``replace_overrides`` makes a new mapping for each edit, so an edit reaches the next
         reservation, and a reservation pays only an identity check.
         """
         overrides = current_overrides()
         if overrides is not self._applied_overrides:
-            self._config = apply_cap_overrides(self.file_config, overrides)
+            self._config = apply_budget_overrides(self.file_config, overrides)
             self._applied_overrides = overrides
         return self._config
 

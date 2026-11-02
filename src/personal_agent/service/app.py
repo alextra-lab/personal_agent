@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 import structlog
 from fastapi import Depends, FastAPI, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.brainstem import (
@@ -907,15 +907,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         await prune_captures_at_startup()
 
-        # Served-catalog drift guard (ADR-0145 D5): compare each local deployment's
-        # declared context_length/quantization against what its provider currently
-        # serves and warn-log a mismatch. Fire-and-forget, not awaited: the probe hits
-        # the owner's Mac over the SLM tunnel, which is not always on, and startup must
-        # never wait on (or fail over) a laptop being asleep.
-        from personal_agent.llm_client.provider_health import log_served_catalog_drift
-
-        asyncio.create_task(log_served_catalog_drift(), context=contextvars.Context())
-
         # Pre-flight: verify PostgreSQL is reachable before attempting any DB operations
         pg_host, pg_port = _parse_db_host_port(settings.database_url)
         await _preflight_check_tcp("PostgreSQL", pg_host, pg_port)
@@ -928,6 +919,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from personal_agent.service.settings_edit import load_overrides_at_startup
 
         await load_overrides_at_startup()
+
+        # Served-catalog drift guard (ADR-0145 D5): compare each local deployment's
+        # declared context_length/quantization against what its provider currently
+        # serves and warn-log a mismatch. Fire-and-forget, not awaited: the probe hits
+        # the owner's Mac over the SLM tunnel, which is not always on, and startup must
+        # never wait on (or fail over) a laptop being asleep. It starts after the overrides
+        # load, because it reads slm_base_url and the catalog (FRE-1724).
+        from personal_agent.llm_client.provider_health import log_served_catalog_drift
+
+        asyncio.create_task(log_served_catalog_drift(), context=contextvars.Context())
 
         # Route-trace ledger (FRE-452 / ADR-0088 D6): direct durable observability sink.
         # Connect early so every turn's terminal write has a pool; non-fatal on failure.
@@ -2254,23 +2255,26 @@ async def get_settings_menu(
 
 @app.put("/api/v1/settings/overrides")
 async def put_setting_override(
-    data: SettingOverrideUpdate,
+    request: _Request,
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> dict[str, JsonValue]:
     """Store one settings override (FRE-1722). It wins with no rebuild.
 
+    This route parses its own body. The default 422 of FastAPI echoes the input, and a body
+    that fails can hold a value that must stay hidden (FRE-1724 AC-4).
+
     Args:
-        data: The parameter name and its new value.
+        request: The request. Its JSON body holds the parameter name and the new value.
         request_user: Authenticated user (CF Access). Only the owner can edit.
         db: Async database session.
 
     Returns:
-        The stored parameter name and value.
+        The parameter name and the stored value. A hidden setting returns ``"set"``.
 
     Raises:
-        HTTPException: 403 for any user except the owner; 422 with the reason when the
-            parameter cannot be edited or the value is invalid. Neither stores a row.
+        HTTPException: 403 for any user except the owner; 422 with the reason when the body is
+            malformed, the parameter cannot be edited or the value is invalid. Neither stores a row.
     """
     from personal_agent.service import settings_edit
 
@@ -2279,10 +2283,15 @@ async def put_setting_override(
         log.warning(
             "setting_override_refused_not_owner",
             user_id=str(request_user.user_id),
-            parameter=data.parameter,
             trace_id=ctx.trace_id,
         )
         raise HTTPException(status_code=403, detail="only the owner can edit this setting")
+    try:
+        data = SettingOverrideUpdate.model_validate(await request.json())
+    except ValueError, ValidationError:
+        raise HTTPException(
+            status_code=422, detail="the body must be a JSON object with parameter and value"
+        ) from None
     try:
         stored = await settings_edit.set_override(
             db, data.parameter, data.value, changed_by=request_user.user_id, trace_id=ctx.trace_id
@@ -2312,7 +2321,8 @@ async def delete_setting_override(
         The parameter name and whether a row existed and was deleted.
 
     Raises:
-        HTTPException: 403 for any user except the owner.
+        HTTPException: 403 for any user except the owner; 422 with the reason when a Clear leaves
+            an effort preset above its ceiling.
     """
     from personal_agent.service import settings_edit
 
@@ -2325,9 +2335,12 @@ async def delete_setting_override(
             trace_id=ctx.trace_id,
         )
         raise HTTPException(status_code=403, detail="only the owner can edit this setting")
-    cleared = await settings_edit.clear_override(
-        db, parameter, changed_by=request_user.user_id, trace_id=ctx.trace_id
-    )
+    try:
+        cleared = await settings_edit.clear_override(
+            db, parameter, changed_by=request_user.user_id, trace_id=ctx.trace_id
+        )
+    except settings_edit.SettingEditRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"parameter": parameter, "cleared": cleared}
 
 

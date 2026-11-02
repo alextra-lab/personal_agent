@@ -526,13 +526,26 @@ export type SettingValue =
 
 /** The edit control of a row. `kind` names the write that the control calls. */
 export interface SettingEdit {
-  kind: 'role_binding' | 'saved_choice' | 'effort_default_level' | 'effort_preset' | 'budget_cap';
+  kind:
+    | 'role_binding'
+    | 'saved_choice'
+    | 'effort_default_level'
+    | 'effort_preset'
+    | 'budget_cap'
+    | 'setting'
+    | 'session_primary'
+    | 'session_effort'
+    | 'location_consent';
   /** The values that a select offers. Empty for a preset and a cap. */
   options: string[];
   /** The stored or bound value. Null when nothing is stored, and for a preset. */
   current: string | null;
   /** For a preset, the values that each named field allows. */
   preset_choices?: Record<string, string[]> | null;
+  /** For a `setting` kind, which control to show. */
+  input?: 'boolean' | 'number' | 'text' | 'select' | 'json' | null;
+  /** Whether an empty control saves a null. */
+  nullable?: boolean;
 }
 
 /** One parameter in the settings menu. */
@@ -549,6 +562,10 @@ export interface SettingRow {
   file_default: { value: SettingValue; source: SettingSource } | null;
   /** The edit control, for a row that this user can edit. */
   edit: SettingEdit | null;
+  /** When an edit applies. `read_only` means that no edit reaches this row. */
+  applies?: 'next_turn' | 'next_restart' | 'read_only' | null;
+  /** Why the row is read-only. */
+  read_only_reason?: string | null;
 }
 
 /** A menu group. `error` is the fixed code "unavailable" when the group failed to load. */
@@ -559,7 +576,7 @@ export interface SettingsGroup {
   error: 'unavailable' | null;
 }
 
-/** The whole menu: nine groups, then the read-only System group. */
+/** The whole menu: nine groups, then the System group. */
 export interface SettingsMenu {
   groups: SettingsGroup[];
   system: SettingsGroup;

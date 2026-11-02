@@ -1,6 +1,7 @@
-"""Edit settings through the API on real rows of the test Postgres (FRE-1722).
+"""Edit settings through the API on real rows of the test Postgres (FRE-1722, FRE-1723).
 
-Proves AC-1, AC-2 and AC-3 against the tables that the migration creates.
+Proves AC-1, AC-2 and AC-3 of both tickets against the tables that the migration creates. The
+FRE-1723 tests also reserve against a real ``CostGate``.
 
 Marker: ``integration`` — excluded from ``make test`` because it needs a live DB.
 """
@@ -8,7 +9,9 @@ Marker: ``integration`` — excluded from ``make test`` because it needs a live 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
@@ -24,7 +27,17 @@ from personal_agent.config.model_loader import (
     resolve_role_model_key,
     resolve_role_target,
 )
+from personal_agent.config.seshat_effort import effort_spec, file_seshat_effort, preset_values
 from personal_agent.config.setting_overrides import current_overrides, replace_overrides
+from personal_agent.cost_gate import (
+    BudgetConfig,
+    BudgetDenied,
+    CapEntry,
+    CostGate,
+    DenialReason,
+    set_default_gate,
+    sync_budget_policies_to_db,
+)
 from personal_agent.service import settings_edit
 from personal_agent.service.app import app
 from personal_agent.service.auth import RequestUser, get_or_create_user_by_email, get_request_user
@@ -211,3 +224,245 @@ async def test_startup_load_fills_the_process_copy_from_the_table(
 
     assert current_overrides()[_PARAMETER] == target
     assert resolve_role_model_key(_ROLE) == target
+
+
+# ---------------------------------------------------------------------------
+# FRE-1723: effort presets and budget caps
+# ---------------------------------------------------------------------------
+
+_DEEP = "effort.level.deep"
+_PRESET = {
+    "expansion": True,
+    "sub_agent_rounds": 3,
+    "planner_policy": "baseline",
+    "primary_mode": None,
+}
+
+
+@pytest_asyncio.fixture
+async def capped(
+    sessions: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[str]:
+    """A unique capped role, and budget file values that no test reads from the ignored file."""
+    role = f"test_fre1723_{uuid4().hex[:8]}"
+    budget = BudgetConfig(
+        roles={},
+        caps=[CapEntry(time_window="daily", role=role, cap_usd=Decimal("10.00"))],
+    )
+    monkeypatch.setattr(settings_edit, "load_budget_config", lambda: budget)
+    yield role
+    async with sessions() as db:
+        await db.execute(
+            text("DELETE FROM settings_overrides WHERE parameter IN (:cap, :deep)"),
+            {"cap": f"cap.daily.{role}", "deep": _DEEP},
+        )
+        await db.execute(
+            text(
+                "DELETE FROM budget_reservations WHERE counter_id IN "
+                "(SELECT id FROM budget_counters WHERE role = :r)"
+            ),
+            {"r": role},
+        )
+        await db.execute(text("DELETE FROM budget_counters WHERE role = :r"), {"r": role})
+        await db.execute(text("DELETE FROM budget_policies WHERE role = :r"), {"r": role})
+        await db.commit()
+
+
+def _file_budget(role: str) -> BudgetConfig:
+    return BudgetConfig(
+        roles={},
+        caps=[CapEntry(time_window="daily", role=role, cap_usd=Decimal("10.00"))],
+    )
+
+
+async def test_fre1723_ac2_a_lowered_cap_refuses_a_real_reservation_and_clear_restores(
+    sessions: async_sessionmaker[AsyncSession], capped: str
+) -> None:
+    user_id = await _user(sessions, _OWNER)
+    parameter = f"cap.daily.{capped}"
+    gate = CostGate(config=_file_budget(capped), db_url=app_settings.database_url)
+    await gate.connect()
+    try:
+        async with _client(user_id) as client:
+            resp = await client.put(_URL, json={"parameter": parameter, "value": 2})
+            assert resp.status_code == 200
+
+            with pytest.raises(BudgetDenied) as denied:
+                await gate.reserve(capped, Decimal("3.00"))
+            assert denied.value.cap == Decimal("2.0")
+            assert denied.value.denial_reason == DenialReason.CAP_EXCEEDED.value
+
+            resp = await client.delete(_URL, params={"parameter": parameter})
+            assert resp.json()["cleared"] is True
+
+        assert await gate.reserve(capped, Decimal("3.00")) is not None
+    finally:
+        await gate.disconnect()
+
+    assert [row[:4] for row in await _audit(sessions, user_id)] == [
+        (parameter, "set", 10.0, 2.0),
+        (parameter, "clear", 2.0, 10.0),
+    ]
+
+
+async def test_fre1723_ac2_a_gateway_restart_keeps_the_cap(
+    sessions: async_sessionmaker[AsyncSession],
+    capped: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = await _user(sessions, _OWNER)
+    parameter = f"cap.daily.{capped}"
+    async with _client(user_id) as client:
+        resp = await client.put(_URL, json={"parameter": parameter, "value": 2})
+        assert resp.status_code == 200
+
+    # A new process: an empty copy, the startup load, then a gate built from the file.
+    replace_overrides({})
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", sessions)
+    await settings_edit.load_overrides_at_startup()
+    gate = CostGate(config=_file_budget(capped), db_url=app_settings.database_url)
+    await gate.connect()
+    try:
+        with pytest.raises(BudgetDenied):
+            await gate.reserve(capped, Decimal("3.00"))
+        await sync_budget_policies_to_db(gate.config, gate.pool)
+        assert gate.pool is not None
+        async with gate.pool.acquire() as conn:
+            mirrored = await conn.fetchval(
+                "SELECT cap_usd FROM budget_policies WHERE role = $1", capped
+            )
+        assert mirrored == Decimal("2")
+    finally:
+        await gate.disconnect()
+
+
+async def test_fre1723_a_script_gate_enforces_the_stored_cap_and_takes_no_role_binding(
+    sessions: async_sessionmaker[AsyncSession], capped: str
+) -> None:
+    user_id = await _user(sessions, _OWNER)
+    parameter = f"cap.daily.{capped}"
+    async with _client(user_id) as client:
+        await client.put(_URL, json={"parameter": parameter, "value": 2})
+        await client.put(_URL, json={"parameter": _PARAMETER, "value": _other_llm()})
+
+    # A script: an empty copy, no startup load, a gate built from the file.
+    replace_overrides({})
+    gate = CostGate(config=_file_budget(capped), db_url=app_settings.database_url)
+    await gate.connect()
+    try:
+        with pytest.raises(BudgetDenied):
+            await gate.reserve(capped, Decimal("3.00"))
+    finally:
+        await gate.disconnect()
+    assert _PARAMETER not in current_overrides()
+
+
+async def test_fre1723_a_cap_edit_updates_budget_policies(
+    sessions: async_sessionmaker[AsyncSession], capped: str
+) -> None:
+    user_id = await _user(sessions, _OWNER)
+    parameter = f"cap.daily.{capped}"
+    gate = CostGate(config=_file_budget(capped), db_url=app_settings.database_url)
+    await gate.connect()
+    set_default_gate(gate)
+
+    async def _mirrored() -> Decimal:
+        assert gate.pool is not None
+        async with gate.pool.acquire() as conn:
+            value: Decimal = await conn.fetchval(
+                "SELECT cap_usd FROM budget_policies WHERE role = $1", capped
+            )
+        return value
+
+    try:
+        async with _client(user_id) as client:
+            await client.put(_URL, json={"parameter": parameter, "value": 2})
+            assert await _mirrored() == Decimal("2")
+            await client.delete(_URL, params={"parameter": parameter})
+            assert await _mirrored() == Decimal("10")
+    finally:
+        set_default_gate(None)
+        await gate.disconnect()
+
+
+async def test_fre1723_ac3_a_negative_cap_writes_no_row(
+    sessions: async_sessionmaker[AsyncSession], capped: str
+) -> None:
+    user_id = await _user(sessions, _OWNER)
+    parameter = f"cap.daily.{capped}"
+    async with _client(user_id) as client:
+        resp = await client.put(_URL, json={"parameter": parameter, "value": -1})
+    assert resp.status_code == 422
+    assert "greater than or equal to 0" in resp.json()["detail"]
+    async with sessions() as db:
+        result = await db.execute(
+            text("SELECT count(*) FROM settings_overrides WHERE parameter = :p"), {"p": parameter}
+        )
+        assert result.scalar_one() == 0
+    assert await _audit(sessions, user_id) == []
+
+
+async def test_fre1723_ac1_ac3_a_preset_edit_clear_and_restart_on_real_rows(
+    sessions: async_sessionmaker[AsyncSession],
+    capped: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = await _user(sessions, _OWNER)
+    file_preset = preset_values(file_seshat_effort(), "deep")
+    async with _client(user_id) as client:
+        resp = await client.put(_URL, json={"parameter": _DEEP, "value": _PRESET})
+        assert resp.status_code == 200
+        assert effort_spec("deep").sub_agent_rounds == 3
+
+        replace_overrides({})
+        assert effort_spec("deep") == file_seshat_effort().levels["deep"]
+        monkeypatch.setattr(settings_edit, "AsyncSessionLocal", sessions)
+        await settings_edit.load_overrides_at_startup()
+        assert effort_spec("deep").sub_agent_rounds == 3
+
+        resp = await client.delete(_URL, params={"parameter": _DEEP})
+        assert resp.json()["cleared"] is True
+    assert effort_spec("deep") == file_seshat_effort().levels["deep"]
+
+    assert [row[:4] for row in await _audit(sessions, user_id)] == [
+        (_DEEP, "set", file_preset, _PRESET),
+        (_DEEP, "clear", _PRESET, file_preset),
+    ]
+
+
+async def test_fre1723_the_menu_shows_a_stored_preset_and_cap_after_a_reload(
+    sessions: async_sessionmaker[AsyncSession], capped: str
+) -> None:
+    user_id = await _user(sessions, _OWNER)
+    parameter = f"cap.daily.{capped}"
+    gate = CostGate(config=_file_budget(capped), db_url=app_settings.database_url)
+    await gate.connect()
+    set_default_gate(gate)
+
+    def _row(menu: dict[str, Any], name: str) -> dict[str, Any]:
+        rows = (row for group in menu["groups"] for row in group["rows"])
+        return next(row for row in rows if row["name"] == name)
+
+    try:
+        async with _client(user_id) as client:
+            await client.put(_URL, json={"parameter": parameter, "value": 2})
+            await client.put(_URL, json={"parameter": _DEEP, "value": _PRESET})
+
+            menu = (await client.get("/api/v1/settings")).json()
+            cap = _row(menu, parameter)
+            assert (cap["value"], cap["source"], cap["clearable"]) == (2.0, "override", True)
+            assert cap["file_default"]["value"] == 10.0
+            preset = _row(menu, _DEEP)
+            assert (preset["value"], preset["source"]) == (_PRESET, "override")
+            assert preset["file_default"]["value"] == preset_values(file_seshat_effort(), "deep")
+
+            await client.delete(_URL, params={"parameter": parameter})
+            await client.delete(_URL, params={"parameter": _DEEP})
+
+            menu = (await client.get("/api/v1/settings")).json()
+            cap = _row(menu, parameter)
+            assert (cap["value"], cap["source"], cap["clearable"]) == (10.0, "config file", False)
+            assert _row(menu, _DEEP)["source"] == "config file"
+    finally:
+        set_default_gate(None)
+        await gate.disconnect()

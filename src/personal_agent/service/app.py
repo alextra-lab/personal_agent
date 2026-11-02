@@ -966,21 +966,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
             await cost_gate.connect()
             set_default_gate(cost_gate)
-            # Mirror budget.yaml's caps into budget_policies (FRE-1209): nothing
-            # else writes to that table, so it sat permanently empty and defeated
-            # the Cost & Budget dashboard's utilisation panel. Fail-open —
-            # enforcement reads the YAML directly (unchanged) and does not
+            # Mirror the enforced caps into budget_policies (FRE-1209), so a stored
+            # cap override survives this copy (FRE-1723): before FRE-1209 the
+            # table sat permanently empty and defeated the Cost & Budget
+            # dashboard's utilisation panel. Fail-open — enforcement does not
             # consult this table, so a DB hiccup here must not block startup.
             try:
                 assert cost_gate.pool is not None
-                await sync_budget_policies_to_db(budget_config, cost_gate.pool)
+                await sync_budget_policies_to_db(cost_gate.config, cost_gate.pool)
             except Exception as sync_exc:  # noqa: BLE001
                 log.error(
                     "budget_policies_sync_failed",
                     error=str(sync_exc),
                     remedy=(
                         "budget_policies audit table may be stale; enforcement is "
-                        "unaffected (still YAML-driven)."
+                        "unaffected (it does not read this table)."
                     ),
                     exc_info=True,
                 )
@@ -2284,12 +2284,12 @@ async def put_setting_override(
         )
         raise HTTPException(status_code=403, detail="only the owner can edit this setting")
     try:
-        await settings_edit.set_override(
+        stored = await settings_edit.set_override(
             db, data.parameter, data.value, changed_by=request_user.user_id, trace_id=ctx.trace_id
         )
     except settings_edit.SettingEditRefused as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"parameter": data.parameter, "value": data.value}
+    return {"parameter": data.parameter, "value": stored}
 
 
 @app.delete("/api/v1/settings/overrides")

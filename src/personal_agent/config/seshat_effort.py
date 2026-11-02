@@ -1,7 +1,8 @@
 """Seshat effort: one level per session sets the harness and the primary's reasoning (ADR-0157).
 
 The three presets live in ``config/seshat_effort.yaml``. The gateway loads them once at start
-into frozen models and refuses to start when the file is invalid (ADR-0157 D3).
+into frozen models and refuses to start when the file is invalid (ADR-0157 D3). A value that the
+owner stored in the settings menu wins over the file from the next turn (FRE-1723).
 
 At turn launch the chat path resolves the session's level into one frozen :class:`EffortSpec`
 and carries it through the turn in an async-safe context variable, the same mechanism that
@@ -26,14 +27,20 @@ from __future__ import annotations
 
 import contextvars
 import functools
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import structlog
 import yaml  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
+from personal_agent.config.setting_overrides import (
+    EFFORT_DEFAULT_LEVEL_PARAMETER,
+    EFFORT_LEVEL_PARAMETER_PREFIX,
+    effort_overrides,
+)
 from personal_agent.exceptions import SeshatEffortConfigError
 
 if TYPE_CHECKING:
@@ -146,7 +153,12 @@ def load_seshat_effort(
         config = SeshatEffortConfig.model_validate(raw)
     except ValidationError as exc:
         raise SeshatEffortConfigError(f"{source} is invalid: {exc}") from exc
+    _check_round_ceilings(config, settings)
+    return config
 
+
+def _check_round_ceilings(config: SeshatEffortConfig, settings: AppConfig) -> None:
+    """Refuse presets that the global settings do not allow (ADR-0157 D3)."""
     if settings.sub_agent_rounds_by_thoroughness:
         raise SeshatEffortConfigError(
             "sub_agent_rounds_by_thoroughness must be empty: a Seshat effort level sets one "
@@ -163,12 +175,11 @@ def load_seshat_effort(
             f"level round budgets {above} exceed sub_agent_max_tool_iterations ({ceiling}), "
             "the ceiling of every level (ADR-0157 D3)"
         )
-    return config
 
 
 @functools.lru_cache(maxsize=1)
-def get_seshat_effort() -> SeshatEffortConfig:
-    """Return the presets, loaded once per process.
+def file_seshat_effort() -> SeshatEffortConfig:
+    """Return the presets as the file states them, loaded once per process.
 
     Returns:
         The frozen presets.
@@ -177,6 +188,109 @@ def get_seshat_effort() -> SeshatEffortConfig:
         SeshatEffortConfigError: See :func:`load_seshat_effort`.
     """
     return load_seshat_effort()
+
+
+def _with_override(
+    config: SeshatEffortConfig, parameter: str, value: JsonValue
+) -> SeshatEffortConfig:
+    """Return presets with one stored value applied, checked as the file is checked (FRE-1723).
+
+    Strict, so a value that the file's YAML types could not hold (``"yes"``, ``true`` as a round
+    budget) is refused and not coerced.
+    """
+    from personal_agent.config import get_settings  # noqa: PLC0415
+
+    raw = config.model_dump(mode="json")
+    if parameter == EFFORT_DEFAULT_LEVEL_PARAMETER:
+        raw["default_level"] = value
+    else:
+        level = parameter.removeprefix(EFFORT_LEVEL_PARAMETER_PREFIX)
+        if level not in EFFORT_LEVELS:
+            raise SeshatEffortConfigError(f"{level} is not an effort level")
+        if not isinstance(value, dict) or "level" in value:
+            raise SeshatEffortConfigError(f"{parameter} takes the values of a preset")
+        raw["levels"][level] = {**value, "level": level}
+    try:
+        candidate = SeshatEffortConfig.model_validate(raw, strict=True)
+    except ValidationError as exc:
+        reasons = (
+            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" for err in exc.errors()
+        )
+        raise SeshatEffortConfigError("; ".join(reasons)) from exc
+    _check_round_ceilings(candidate, get_settings())
+    return candidate
+
+
+def validate_effort_override(parameter: str, value: JsonValue) -> JsonValue:
+    """Check one proposed preset edit against the file values (FRE-1723).
+
+    Each parameter stands alone: a level's checks read only that level, so another stored override
+    cannot change the result.
+
+    Args:
+        parameter: ``effort.default_level`` or ``effort.level.<level>``.
+        value: The proposed value.
+
+    Returns:
+        The value to store. For a preset, every field, with no ``level`` key.
+
+    Raises:
+        SeshatEffortConfigError: With the reason, when the value is refused.
+    """
+    config = _with_override(file_seshat_effort(), parameter, value)
+    if parameter == EFFORT_DEFAULT_LEVEL_PARAMETER:
+        return config.default_level
+    return preset_values(config, parameter.removeprefix(EFFORT_LEVEL_PARAMETER_PREFIX))
+
+
+def preset_values(config: SeshatEffortConfig, level: str) -> JsonValue:
+    """Return one level's values in the form that the override table stores (FRE-1723).
+
+    Args:
+        config: The presets to read.
+        level: A level name that ``config`` holds.
+
+    Returns:
+        Every field of the level, with no ``level`` key.
+    """
+    values: JsonValue = config.levels[level].model_dump(mode="json", exclude={"level"})  # type: ignore[index]
+    return values
+
+
+@functools.lru_cache(maxsize=8)
+def _effort_with_overrides(overrides: tuple[tuple[str, str], ...]) -> SeshatEffortConfig:
+    """Return the presets with the stored overrides applied.
+
+    A stored override that fails, for example after ``.env`` lowered the ceiling, is skipped. Every
+    turn reads this path, so a stored row must never make it raise. The settings menu shows a skipped
+    override as not usable.
+
+    Args:
+        overrides: ``(parameter, JSON value)`` pairs from :func:`effort_overrides`.
+
+    Returns:
+        The presets with each usable override applied.
+    """
+    config = file_seshat_effort()
+    for parameter, encoded in overrides:
+        try:
+            config = _with_override(config, parameter, json.loads(encoded))
+        except SeshatEffortConfigError as exc:
+            log.warning("effort_override_skipped", parameter=parameter, error=str(exc))
+    return config
+
+
+def get_seshat_effort() -> SeshatEffortConfig:
+    """Return the presets that apply now: the file, then the stored overrides (FRE-1723).
+
+    Returns:
+        The frozen presets.
+
+    Raises:
+        SeshatEffortConfigError: See :func:`load_seshat_effort`.
+    """
+    overrides = effort_overrides()
+    return _effort_with_overrides(overrides) if overrides else file_seshat_effort()
 
 
 def effort_spec(level: EffortLevel | None) -> EffortSpec:

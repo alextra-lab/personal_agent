@@ -1,9 +1,9 @@
-"""Settings menu payload (FRE-1702, FRE-1722; FRE-1698).
+"""Settings menu payload (FRE-1702, FRE-1722, FRE-1723; FRE-1698).
 
 Builds the one response that the PWA settings menu renders: nine groups and a System
 group. Each row carries the parameter name, its live value, the source that wins, and
-(for an override) the value it overrides. A role binding and a saved choice also carry the
-default that applies with no edit, and their edit control. The writes live in
+(for an override) the value it overrides. A role binding, a saved choice, an effort preset and a
+budget cap also carry the default that applies with no edit, and their edit control. The writes live in
 ``settings_edit`` and in ``/api/v1/preferences/constraint``. This module writes nothing.
 
 Values come from the running gateway: the loaded ``AppConfig``, the loaded catalogs, the
@@ -26,14 +26,24 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, get_args
 from uuid import UUID
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_core import to_jsonable_python
 
-from personal_agent.config.setting_overrides import ROLE_PARAMETER_PREFIX
+from personal_agent.config.seshat_effort import (
+    EFFORT_LEVELS,
+    PlannerPolicy,
+    PrimaryModeName,
+    preset_values,
+)
+from personal_agent.config.setting_overrides import (
+    EFFORT_DEFAULT_LEVEL_PARAMETER,
+    EFFORT_LEVEL_PARAMETER_PREFIX,
+    ROLE_PARAMETER_PREFIX,
+)
 from personal_agent.config.settings import AppConfig
 from personal_agent.orchestrator.constraint_options import (
     ARTIFACT_BUILDER_CONSTRAINT,
@@ -50,7 +60,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from personal_agent.config.seshat_effort import SeshatEffortConfig
-    from personal_agent.cost_gate.types import BudgetConfig
+    from personal_agent.cost_gate.types import BudgetConfig, CapEntry
     from personal_agent.governance.models import GovernanceConfig
     from personal_agent.llm_client.models import ModelConfig
 
@@ -93,6 +103,12 @@ _COUNTED_TOOL_FIELDS: tuple[str, ...] = (
     "unattended_paths",
 )
 
+_STALE_OVERRIDE_NOTE = "the stored override is not usable now, so the file value applies"
+_D7_NOTE = (
+    "this is the default level: an edit changes its planner prompt, and no D7 run "
+    "(ADR-0157) qualifies the new prompt"
+)
+
 _TURN_RUNS_APPENDIX_GROUPS = frozenset(
     {"routing and planner", "context and history", "timeouts and limits"}
 )
@@ -120,16 +136,21 @@ class SettingEdit(BaseModel):
     """The edit control of a row.
 
     Attributes:
-        kind: Which write the control calls.
-        options: The values that the control offers.
-        current: The stored or bound value, or ``None`` when nothing is stored.
+        kind: Which write the control calls, and which control it shows.
+        options: The values that a select offers. Empty for a preset and a cap.
+        current: The stored or bound value, or ``None`` when nothing is stored. A preset has no
+            single value, so its control reads the row value.
+        preset_choices: For a preset, the values that each named field allows.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["role_binding", "saved_choice"]
+    kind: Literal[
+        "role_binding", "saved_choice", "effort_default_level", "effort_preset", "budget_cap"
+    ]
     options: list[str]
     current: str | None
+    preset_choices: dict[str, list[str]] | None = None
 
 
 class SettingRow(BaseModel):
@@ -212,6 +233,10 @@ class MenuInputs:
             ``None`` means ``models`` holds the file values.
         overrides: The stored overrides that this process holds.
         is_owner: Whether the request user can edit a global setting.
+        file_effort: The presets as the file states them. ``None`` means ``effort`` holds the
+            file values.
+        file_budget: The budget as the file states it. ``None`` means ``budget`` holds the file
+            values.
     """
 
     app_settings: AppConfig
@@ -227,6 +252,8 @@ class MenuInputs:
     file_bindings: Mapping[str, str] | None = None
     overrides: Mapping[str, JsonValue] = field(default_factory=dict)
     is_owner: bool = False
+    file_effort: SeshatEffortConfig | None = None
+    file_budget: BudgetConfig | None = None
 
 
 class SessionNotFoundError(LookupError):
@@ -418,11 +445,15 @@ def _group_conversation(inp: MenuInputs) -> list[SettingRow]:
             name="session.effort_level",
             value=str(stored_level),
             source="session",
-            overrides=Overridden(value=effort.default_level, source="config file"),
+            overrides=Overridden(
+                value=effort.default_level, source=_default_level_source(inp, effort)
+            ),
         )
     else:
         effort_row = SettingRow(
-            name="session.effort_level", value=effort.default_level, source="config file"
+            name="session.effort_level",
+            value=effort.default_level,
+            source=_default_level_source(inp, effort),
         )
     return [primary_row, effort_row]
 
@@ -622,20 +653,79 @@ def _artifact_builder_role_row(
     )
 
 
+def _default_level_source(inp: MenuInputs, effort: SeshatEffortConfig) -> Source:
+    """Return where the default level comes from. A stale override does not count."""
+    stored = inp.overrides.get(EFFORT_DEFAULT_LEVEL_PARAMETER)
+    return "override" if stored is not None and stored == effort.default_level else "config file"
+
+
+def _effort_default_row(inp: MenuInputs, effort: SeshatEffortConfig) -> SettingRow:
+    file_effort = inp.file_effort or effort
+    source = _default_level_source(inp, effort)
+    stored = inp.overrides.get(EFFORT_DEFAULT_LEVEL_PARAMETER)
+    notes = [_STALE_OVERRIDE_NOTE] if stored is not None and source != "override" else []
+    if inp.is_owner:
+        notes.append(
+            f"a conversation keeps its level, so an edit reaches new conversations; {_D7_NOTE}"
+        )
+    return SettingRow(
+        name=EFFORT_DEFAULT_LEVEL_PARAMETER,
+        value=effort.default_level,
+        source=source,
+        note="; ".join(notes) if notes else None,
+        file_default=Overridden(value=file_effort.default_level, source="config file"),
+        clearable=inp.is_owner and stored is not None,
+        edit=(
+            SettingEdit(
+                kind="effort_default_level",
+                options=list(EFFORT_LEVELS),
+                current=effort.default_level,
+            )
+            if inp.is_owner
+            else None
+        ),
+    )
+
+
+def _effort_level_row(inp: MenuInputs, effort: SeshatEffortConfig, level: str) -> SettingRow:
+    file_effort = inp.file_effort or effort
+    name = f"{EFFORT_LEVEL_PARAMETER_PREFIX}{level}"
+    value = preset_values(effort, level)
+    stored = inp.overrides.get(name)
+    applies = stored is not None and stored == value
+    notes = [_STALE_OVERRIDE_NOTE] if stored is not None and not applies else []
+    if inp.is_owner and level == effort.default_level:
+        notes.append(_D7_NOTE)
+    return SettingRow(
+        name=name,
+        value=value,
+        source="override" if applies else "config file",
+        note="; ".join(notes) if notes else None,
+        file_default=Overridden(value=preset_values(file_effort, level), source="config file"),
+        clearable=inp.is_owner and stored is not None,
+        edit=(
+            SettingEdit(
+                kind="effort_preset",
+                options=[],
+                current=None,
+                preset_choices={
+                    "planner_policy": list(get_args(PlannerPolicy)),
+                    "primary_mode": list(get_args(PrimaryModeName)),
+                },
+            )
+            if inp.is_owner
+            else None
+        ),
+    )
+
+
 def _group_effort_and_modes(inp: MenuInputs) -> list[SettingRow]:
     effort = _need(inp.effort)
     models = _need(inp.models)
     rows = [
-        SettingRow(name="effort.default_level", value=effort.default_level, source="config file")
+        _effort_default_row(inp, effort),
+        *(_effort_level_row(inp, effort, level) for level in effort.levels),
     ]
-    for level, spec in effort.levels.items():
-        rows.append(
-            SettingRow(
-                name=f"effort.level.{level}",
-                value=_json(spec.model_dump(mode="json", exclude={"level"})),
-                source="config file",
-            )
-        )
     for key, definition in models.models.items():
         dump = definition.model_dump(mode="json", exclude_none=True)
         if "endpoint" in dump:
@@ -644,14 +734,35 @@ def _group_effort_and_modes(inp: MenuInputs) -> list[SettingRow]:
     return [*rows, *_setting_rows(inp, "effort_and_modes")]
 
 
+def _cap_row(inp: MenuInputs, cap: CapEntry, file_cap: float | None) -> SettingRow:
+    """Show the cap that the gate enforces, with the file value and the owner's control."""
+    from personal_agent.cost_gate.policy import cap_parameter
+
+    name = cap_parameter(cap)
+    value = float(cap.cap_usd)
+    stored = inp.overrides.get(name)
+    applies = isinstance(stored, int | float) and not isinstance(stored, bool) and stored == value
+    return SettingRow(
+        name=name,
+        value=value,
+        source="override" if applies else "config file",
+        note=_STALE_OVERRIDE_NOTE if stored is not None and not applies else None,
+        file_default=Overridden(
+            value=file_cap if file_cap is not None else value, source="config file"
+        ),
+        clearable=inp.is_owner and stored is not None,
+        edit=(
+            SettingEdit(kind="budget_cap", options=[], current=str(value)) if inp.is_owner else None
+        ),
+    )
+
+
 def _group_budgets(inp: MenuInputs) -> list[SettingRow]:
+    from personal_agent.cost_gate.policy import cap_parameter
+
     budget = _need(inp.budget)
-    rows = [
-        SettingRow(
-            name=f"cap.{cap.time_window}.{cap.role}", value=float(cap.cap_usd), source="config file"
-        )
-        for cap in budget.caps
-    ]
+    file_caps = {cap_parameter(cap): float(cap.cap_usd) for cap in (inp.file_budget or budget).caps}
+    rows = [_cap_row(inp, cap, file_caps.get(cap_parameter(cap))) for cap in budget.caps]
     rows.extend(
         SettingRow(
             name=f"role_estimate.{role}",
@@ -818,7 +929,7 @@ async def collect_inputs(
         settings,
     )
     from personal_agent.config.model_loader import file_role_deployments
-    from personal_agent.config.seshat_effort import load_seshat_effort
+    from personal_agent.config.seshat_effort import file_seshat_effort, get_seshat_effort
     from personal_agent.config.setting_overrides import current_overrides
     from personal_agent.cost_gate import get_default_gate_or_none
     from personal_agent.orchestrator.constraint_options import build_provider_availability
@@ -867,7 +978,7 @@ async def collect_inputs(
     return MenuInputs(
         app_settings=settings,
         models=models,
-        effort=_load_or_none("effort", load_seshat_effort, trace_id),
+        effort=_load_or_none("effort", get_seshat_effort, trace_id),
         governance=_load_or_none("governance", load_governance_config, trace_id),
         budget=gate.config if gate is not None else None,
         saved_choices=saved,
@@ -882,4 +993,6 @@ async def collect_inputs(
         file_bindings=_load_or_none("file_bindings", file_role_deployments, trace_id),
         overrides=current_overrides(),
         is_owner=is_owner,
+        file_effort=_load_or_none("file_effort", file_seshat_effort, trace_id),
+        file_budget=gate.file_config if gate is not None else None,
     )

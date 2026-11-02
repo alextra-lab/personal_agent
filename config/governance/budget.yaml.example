@@ -14,6 +14,9 @@
 # (CI) both assert that this role structure agrees with the `ModelRole` enum and
 # `cost_gate/role_map.py`. Adding a role to the code means adding it here too;
 # the dollar amounts are yours to choose, the role names are not.
+#
+# A cap_usd that the owner stores in the PWA settings menu wins over this file, with no rebuild
+# (FRE-1723). So a later edit of that cap here has no effect until Clear.
 version: 1
 
 roles:

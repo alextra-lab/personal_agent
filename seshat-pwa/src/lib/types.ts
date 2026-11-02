@@ -526,10 +526,13 @@ export type SettingValue =
 
 /** The edit control of a row. `kind` names the write that the control calls. */
 export interface SettingEdit {
-  kind: 'role_binding' | 'saved_choice';
+  kind: 'role_binding' | 'saved_choice' | 'effort_default_level' | 'effort_preset' | 'budget_cap';
+  /** The values that a select offers. Empty for a preset and a cap. */
   options: string[];
-  /** The stored or bound value. Null when nothing is stored. */
+  /** The stored or bound value. Null when nothing is stored, and for a preset. */
   current: string | null;
+  /** For a preset, the values that each named field allows. */
+  preset_choices?: Record<string, string[]> | null;
 }
 
 /** One parameter in the settings menu. */

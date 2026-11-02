@@ -33,6 +33,8 @@ from uuid import UUID
 import asyncpg  # type: ignore[import-untyped]
 import structlog
 
+from personal_agent.config.setting_overrides import current_overrides, replace_overrides
+from personal_agent.cost_gate.policy import apply_cap_overrides, read_stored_caps
 from personal_agent.cost_gate.types import (
     BudgetConfig,
     BudgetDenied,
@@ -44,7 +46,9 @@ from personal_agent.cost_gate.types import (
 from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
+
+    from pydantic import JsonValue
 
 log = structlog.get_logger(__name__)
 
@@ -66,13 +70,29 @@ class CostGate:
         """Initialise the gate.
 
         Args:
-            config: Loaded ``BudgetConfig`` (caps and per-role behaviour).
+            config: Loaded ``BudgetConfig`` (caps and per-role behaviour), as
+                the file states it. See :attr:`config` for the stored caps.
             db_url: Database URL — accepted in either SQLAlchemy or asyncpg
                 form; normalised internally.
         """
-        self.config = config
+        self.file_config = config
+        self._applied_overrides: Mapping[str, JsonValue] = current_overrides()
+        self._config = apply_cap_overrides(config, self._applied_overrides)
         self.db_url = _normalize_asyncpg_dsn(db_url)
         self.pool: asyncpg.Pool | None = None
+
+    @property
+    def config(self) -> BudgetConfig:
+        """Return the config to enforce: the file, with the stored caps applied (FRE-1723).
+
+        ``replace_overrides`` makes a new mapping for each edit, so an edit reaches the next
+        reservation, and a reservation pays only an identity check.
+        """
+        overrides = current_overrides()
+        if overrides is not self._applied_overrides:
+            self._config = apply_cap_overrides(self.file_config, overrides)
+            self._applied_overrides = overrides
+        return self._config
 
     async def connect(self) -> None:
         """Open the asyncpg pool. Call once at app startup."""
@@ -83,6 +103,24 @@ class CostGate:
             command_timeout=10,
         )
         log.info("cost_gate_connected")
+        await self._add_stored_caps()
+
+    async def _add_stored_caps(self) -> None:
+        """Add the stored caps to the process copy, so that a script's gate enforces them too.
+
+        A gate in a script runs in a process that never loads the overrides at startup, and it
+        shares the counters with the gateway. A failure logs a warning, and the file caps apply.
+        """
+        try:
+            stored = await read_stored_caps(self.pool)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "cost_gate_stored_caps_unread", error=str(exc), error_type=type(exc).__name__
+            )
+            return
+        if stored:
+            replace_overrides({**current_overrides(), **stored})
+            log.info("cost_gate_stored_caps_loaded", parameters=sorted(stored))
 
     async def disconnect(self) -> None:
         """Close the asyncpg pool. Call once at app shutdown."""

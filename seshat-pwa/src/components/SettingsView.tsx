@@ -1,14 +1,14 @@
 /**
- * SettingsView — menu of every parameter that changes a turn (FRE-1702, FRE-1722; FRE-1698).
+ * SettingsView — menu of every parameter that changes a turn (FRE-1702, FRE-1722, FRE-1723; FRE-1698).
  *
  * Nine groups on `/settings`, and the System group on `/settings/system`. Each group is an
  * accordion section, closed by default (FRE-1710). The closed header shows the group name,
  * its parameter count, and a marker when the group holds a saved choice. Each row shows
  * the parameter name, its live value and the source that wins. A saved choice shows beside
- * the default that it overrides. A role binding and a saved choice carry an edit control, a
- * file default line, and Clear when an edit exists. A role binding writes to
- * `/api/v1/settings/overrides`, for the owner only. A saved choice writes to
- * `/api/v1/preferences/constraint`.
+ * the default that it overrides. A role binding, a saved choice, an effort preset and a budget cap
+ * carry an edit control, a file default line, and Clear when an edit exists. A saved choice writes
+ * to `/api/v1/preferences/constraint`. The others write to `/api/v1/settings/overrides`, for the
+ * owner only.
  *
  * MANUAL TEST PLAN
  * ================
@@ -27,6 +27,11 @@
  *    a file default line. Choose another model and press Save. Expected: the row shows the new
  *    value, "override", and Clear. Press Clear. Expected: the file value and "config file".
  * 6. As another user, open "Models per role". Expected: no select and no Clear.
+ * 7. As the owner, open "Budgets and cost". Change a cap and press Save, then reload. Expected: the
+ *    new value, "override", the file default, and Clear. Enter -1 and press Save. Expected: the row
+ *    shows the reason, and the value stays.
+ * 8. As the owner, open "Effort presets and model modes". Change the rounds of a preset and press
+ *    Save, then reload. Expected: the new value, "override", the file default, and Clear.
  */
 
 'use client';
@@ -48,7 +53,7 @@ import type { SettingRow, SettingsGroup, SettingsMenu, SettingValue } from '@/li
 const SAVED_CHOICE_PREFIX = 'saved_choice.';
 
 /** Writes one edit and reloads the menu. Rejects with the API's reason. */
-type SaveHandler = (row: SettingRow, value: string) => Promise<unknown>;
+type SaveHandler = (row: SettingRow, value: SettingValue) => Promise<unknown>;
 
 function isScalar(value: SettingValue): value is string | number | boolean | null {
   return value === null || typeof value !== 'object';
@@ -100,22 +105,51 @@ function SourceBadge({ source }: { source: string }) {
   );
 }
 
-/**
- * A select and a Save button. The draft follows the stored value when the menu reloads. A refused
- * save keeps the draft and shows the reason here, because a banner can be off-screen on a phone.
- */
-function EditControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
-  const current = row.edit?.current ?? '';
-  const [draft, setDraft] = useState(current);
-  const [error, setError] = useState<string | undefined>(undefined);
-  useEffect(() => setDraft(current), [current]);
+const FIELD_CLASS = 'min-w-0 text-xs px-2 py-1 rounded border border-line bg-bg text-ink disabled:opacity-40';
 
-  const save = () => {
+/**
+ * Save and its error text. A refused save keeps the draft and shows the reason here, because a
+ * banner can be off-screen on a phone.
+ */
+function useSaveWithReason(row: SettingRow, onSave: SaveHandler) {
+  const [error, setError] = useState<string | undefined>(undefined);
+  const save = (value: SettingValue) => {
     setError(undefined);
-    onSave(row, draft).catch((err: unknown) =>
+    onSave(row, value).catch((err: unknown) =>
       setError(`Could not save: ${err instanceof Error ? err.message : 'unknown error'}`),
     );
   };
+  return { error, save };
+}
+
+function SaveButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="text-xs px-2 py-0.5 rounded border border-accent/40 text-accent hover:bg-surface flex-shrink-0 disabled:opacity-40"
+    >
+      Save
+    </button>
+  );
+}
+
+function SaveError({ error }: { error: string | undefined }) {
+  if (!error) return null;
+  return (
+    <p role="alert" className="text-xs text-ink">
+      {error}
+    </p>
+  );
+}
+
+/** A select and a Save button. The draft follows the stored value when the menu reloads. */
+function EditControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
+  const current = row.edit?.current ?? '';
+  const [draft, setDraft] = useState(current);
+  const { error, save } = useSaveWithReason(row, onSave);
+  useEffect(() => setDraft(current), [current]);
 
   return (
     <div className="space-y-1 sm:pl-[15rem]">
@@ -124,7 +158,7 @@ function EditControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) 
           aria-label={`New value for ${row.name}`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          className="min-w-0 text-xs px-2 py-1 rounded border border-line bg-bg text-ink"
+          className={FIELD_CLASS}
         >
           {current === '' && (
             <option value="" disabled>
@@ -137,22 +171,145 @@ function EditControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) 
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          disabled={draft === '' || draft === current}
-          onClick={save}
-          className="text-xs px-2 py-0.5 rounded border border-accent/40 text-accent hover:bg-surface flex-shrink-0 disabled:opacity-40"
-        >
-          Save
-        </button>
+        <SaveButton disabled={draft === '' || draft === current} onClick={() => save(draft)} />
       </div>
-      {error && (
-        <p role="alert" className="text-xs text-ink">
-          {error}
-        </p>
-      )}
+      <SaveError error={error} />
     </div>
   );
+}
+
+/** A number input and a Save button, for a budget cap in US dollars. */
+function CapControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
+  const current = row.edit?.current ?? '';
+  const [draft, setDraft] = useState(current);
+  const { error, save } = useSaveWithReason(row, onSave);
+  useEffect(() => setDraft(current), [current]);
+  const unusable = draft === '' || Number.isNaN(Number(draft)) || Number(draft) === Number(current);
+
+  return (
+    <div className="space-y-1 sm:pl-[15rem]">
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          step="any"
+          aria-label={`New value for ${row.name}, in US dollars`}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className={FIELD_CLASS}
+        />
+        <SaveButton disabled={unusable} onClick={() => save(Number(draft))} />
+      </div>
+      <SaveError error={error} />
+    </div>
+  );
+}
+
+interface PresetDraft {
+  expansion: boolean;
+  rounds: string;
+  policy: string;
+  mode: string;
+}
+
+function presetDraft(value: SettingValue): PresetDraft {
+  const preset = (value ?? {}) as { [key: string]: SettingValue };
+  return {
+    expansion: preset.expansion === true,
+    rounds: preset.sub_agent_rounds == null ? '' : String(preset.sub_agent_rounds),
+    policy: preset.planner_policy == null ? '' : String(preset.planner_policy),
+    mode: preset.primary_mode == null ? '' : String(preset.primary_mode),
+  };
+}
+
+/** The value that a draft saves. With expansion off, the rounds and the policy have no use. */
+function presetValue(draft: PresetDraft): SettingValue {
+  return {
+    expansion: draft.expansion,
+    sub_agent_rounds: draft.expansion && draft.rounds !== '' ? Number(draft.rounds) : null,
+    planner_policy: draft.expansion && draft.policy !== '' ? draft.policy : null,
+    primary_mode: draft.mode !== '' ? draft.mode : null,
+  };
+}
+
+/** The fields of an effort preset and a Save button. Save sends the whole preset. */
+function PresetControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
+  const liveKey = JSON.stringify(row.value);
+  const [draft, setDraft] = useState(() => presetDraft(row.value));
+  const { error, save } = useSaveWithReason(row, onSave);
+  useEffect(() => setDraft(presetDraft(JSON.parse(liveKey) as SettingValue)), [liveKey]);
+
+  const update = (change: Partial<PresetDraft>) => setDraft((old) => ({ ...old, ...change }));
+  const value = presetValue(draft);
+  const unchanged = JSON.stringify(value) === JSON.stringify(presetValue(presetDraft(row.value)));
+
+  return (
+    <div className="space-y-1 sm:pl-[15rem]">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+        <label className="flex items-center gap-1">
+          <input
+            type="checkbox"
+            checked={draft.expansion}
+            onChange={(e) => update({ expansion: e.target.checked })}
+          />
+          expansion
+        </label>
+        <label className="flex items-center gap-1">
+          sub_agent_rounds
+          <input
+            type="number"
+            min={1}
+            step={1}
+            disabled={!draft.expansion}
+            value={draft.rounds}
+            onChange={(e) => update({ rounds: e.target.value })}
+            className={`${FIELD_CLASS} w-16`}
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          planner_policy
+          <select
+            disabled={!draft.expansion}
+            value={draft.policy}
+            onChange={(e) => update({ policy: e.target.value })}
+            className={FIELD_CLASS}
+          >
+            <option value="">none</option>
+            {row.edit?.preset_choices?.planner_policy?.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-1">
+          primary_mode
+          <select value={draft.mode} onChange={(e) => update({ mode: e.target.value })} className={FIELD_CLASS}>
+            <option value="">model default</option>
+            {row.edit?.preset_choices?.primary_mode?.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <SaveButton disabled={unchanged} onClick={() => save(value)} />
+      </div>
+      <SaveError error={error} />
+    </div>
+  );
+}
+
+function RowControl({ row, onSave }: { row: SettingRow; onSave: SaveHandler }) {
+  switch (row.edit?.kind) {
+    case undefined:
+      return null;
+    case 'budget_cap':
+      return <CapControl row={row} onSave={onSave} />;
+    case 'effort_preset':
+      return <PresetControl row={row} onSave={onSave} />;
+    default:
+      return <EditControl row={row} onSave={onSave} />;
+  }
 }
 
 function Row({
@@ -197,7 +354,7 @@ function Row({
         </p>
       )}
       {row.note && <p className="text-xs text-ink-muted sm:pl-[15rem]">{row.note}</p>}
-      {row.edit && <EditControl row={row} onSave={onSave} />}
+      <RowControl row={row} onSave={onSave} />
     </div>
   );
 }
@@ -338,10 +495,10 @@ export function SettingsView({ view }: { view: 'menu' | 'system' }) {
   );
 
   const handleSave = useCallback(
-    (row: SettingRow, value: string) => {
+    (row: SettingRow, value: SettingValue) => {
       const write: Promise<unknown> =
         row.edit?.kind === 'saved_choice'
-          ? setConstraintPreference(row.name.slice(SAVED_CHOICE_PREFIX.length), value)
+          ? setConstraintPreference(row.name.slice(SAVED_CHOICE_PREFIX.length), String(value))
           : setSettingOverride(row.name, value);
       return write.then(() => load());
     },

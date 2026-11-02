@@ -11,6 +11,11 @@
 # change: it needs a passing ADR-0154 D7 probe run first, and the pin test
 # (tests/personal_agent/orchestrator/test_seshat_effort_prompt_pin.py) fails until the new
 # hash is posted (ADR-0157 D7 rule 2).
+#
+# A value that the owner stores in the PWA settings menu wins over this file from the next turn,
+# with no rebuild (FRE-1723). So a later edit here has no effect on that value until Clear. The
+# pin test reads this file, so it does not see a stored value. An owner edit of the default level
+# is the owner's own decision (FRE-1723), and no D7 run qualifies it.
 
 default_level: standard
 

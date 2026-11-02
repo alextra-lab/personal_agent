@@ -2284,12 +2284,12 @@ async def put_setting_override(
         )
         raise HTTPException(status_code=403, detail="only the owner can edit this setting")
     try:
-        await settings_edit.set_override(
+        stored = await settings_edit.set_override(
             db, data.parameter, data.value, changed_by=request_user.user_id, trace_id=ctx.trace_id
         )
     except settings_edit.SettingEditRefused as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"parameter": data.parameter, "value": data.value}
+    return {"parameter": data.parameter, "value": stored}
 
 
 @app.delete("/api/v1/settings/overrides")

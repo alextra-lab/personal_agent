@@ -372,6 +372,8 @@ def test_fre1723_ac2_a_lowered_cap_reaches_the_gate_and_clear_restores(
     resp = client.put(_URL, json={"parameter": _CAP, "value": 2.5})
     assert resp.status_code == 200
     assert resp.json() == {"parameter": _CAP, "value": 2.5}
+    assert client.put(_URL, json={"parameter": _CAP, "value": 5}).json()["value"] == 5.0
+    assert client.put(_URL, json={"parameter": _CAP, "value": 2.5}).status_code == 200
     assert gate.config.caps_for("main_inference")[0].cap_usd == Decimal("2.5")
 
     assert client.delete(_URL, params={"parameter": _CAP}).json()["cleared"] is True

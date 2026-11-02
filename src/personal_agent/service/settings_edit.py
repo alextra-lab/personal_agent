@@ -185,7 +185,7 @@ async def _mirror_caps(parameter: str, trace_id: str) -> None:
 
 async def set_override(
     db: AsyncSession, parameter: str, value: JsonValue, *, changed_by: UUID, trace_id: str
-) -> None:
+) -> JsonValue:
     """Validate and store one override. The next read of the parameter sees the new value.
 
     Args:
@@ -194,6 +194,9 @@ async def set_override(
         value: The proposed value.
         changed_by: The user who made the edit.
         trace_id: Trace identifier for the log.
+
+    Returns:
+        The value that was stored. A preset holds every field, and a cap is a float.
 
     Raises:
         SettingEditRefused: With the reason. Nothing is stored.
@@ -225,6 +228,7 @@ async def set_override(
         user_id=str(changed_by),
         trace_id=trace_id,
     )
+    return stored_value
 
 
 async def clear_override(

@@ -1,0 +1,22 @@
+[
+  {
+    "name": "ignored_user_statement",
+    "question": "Did the assistant ignore or contradict something that the user stated earlier in this conversation?"
+  },
+  {
+    "name": "repeated_request",
+    "question": "Did the assistant ask the user for information that the user had already given in this conversation?"
+  },
+  {
+    "name": "internal_failure_reported",
+    "question": "Did the assistant report an internal failure, a missing tool, or an inability to reach its records?"
+  },
+  {
+    "name": "task_not_delivered",
+    "question": "Did the assistant end the conversation without giving what the user asked for, or promise future work in its place?"
+  },
+  {
+    "name": "wrong_level",
+    "question": "Did the user say that an answer was too basic, too advanced, or did not fit what they asked for?"
+  }
+]

@@ -115,6 +115,7 @@ def test_eval_arms_maps_names_to_the_guarded_urls() -> None:
     assert EVAL_ARMS == {
         "control": "http://localhost:9002",
         "treatment": "http://localhost:9003",
+        "stub": "http://localhost:9014",
     }
 
 

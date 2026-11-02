@@ -1,0 +1,43 @@
+# FRE-1728: the eval gateways for the MemAudit pilot. An override on docker-compose.cloud.yml and docker-compose.eval.yml.
+#
+# Both gateways get the same values, so that a later fix on treatment compares with control.
+# Commands, order and the remaining differences from production: README.md in this directory.
+#
+# Use from /opt/seshat only. A compose run from a worktree recreates production's searxng.
+
+x-fre1728-env: &fre1728-env
+  # The simulated user is not the owner. The owner identity is the code path that the owner sees, so the pilot
+  # keeps it and only this display name changes.
+  AGENT_OWNER_NAME: "Sam"
+  # Production values that the eval compose leaves out. Each one shapes memory or the primary's tools.
+  AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
+  AGENT_APPROVAL_UI_ENABLED: "false"
+  AGENT_EXTRA_PERMISSION_RULES_PATH: config/governance/permissions.eval.yaml
+  AGENT_EXPANSION_ENABLED: "true"
+  AGENT_DELEGATION_ENABLED: "false"
+  AGENT_PROMOTION_PIPELINE_ENABLED: "true"
+  AGENT_FRESHNESS_ENABLED: "true"
+  AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED: "true"
+  AGENT_SESSION_SUMMARY_ENABLED: "true"
+  # Required. The relevance gate trusts only the calibrated reranker. Without this key the fallback reranker answers,
+  # the gate cannot tell, and every memory turn says "records could not be reached" (measured 2026-11-02). Each of
+  # those would rank as a false retrieval defect. Eval bash runs as `nobody` with an allowlisted environment
+  # (FRE-1505), so a model-chosen bash call cannot read this key.
+  AGENT_VOYAGE_API_KEY: ${AGENT_VOYAGE_API_KEY}
+  # The promotion consumer connects through this URL. The eval compose omits it because production's value names
+  # production Postgres, so promotion fails on eval. This is the eval store and init.sql's own dev password.
+  AGENT_SYSGRAPH_DATABASE_URL: postgresql+asyncpg://sysgraph_role:sysgraph_dev_password@postgres-eval:5432/personal_agent
+  # The ticket's choice: 900 s of idle time per session makes a run of 8 hours or more. These are the minimums.
+  AGENT_SESSION_SUMMARY_IDLE_THRESHOLD_SECONDS: "60"
+  AGENT_SESSION_SUMMARY_SWEEP_INTERVAL_SECONDS: "30"
+  # R2 tools register, as in production. A call fails at a host that never resolves (FRE-1590).
+  AGENT_R2_ENDPOINT_URL: http://r2-disabled.invalid
+  AGENT_R2_ACCESS_KEY_ID: eval-disabled
+  AGENT_R2_SECRET_ACCESS_KEY: eval-disabled
+  AGENT_R2_BUCKET_NAME: eval-disabled
+
+services:
+  seshat-gateway-control:
+    environment: *fre1728-env
+  seshat-gateway-treatment:
+    environment: *fre1728-env

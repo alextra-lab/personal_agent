@@ -40,12 +40,16 @@ EVAL_CHAT_BASE_URL = "http://localhost:9002"
 #: deliberate A/B and reporting it as the system's behaviour is the defect FRE-1350 records.
 EVAL_CHAT_BASE_URL_TREATMENT = "http://localhost:9003"
 
+#: FRE-1728: the stub-model gateway of `scripts/eval/fre1728/stub_stack.py`, for the dry run.
+EVAL_CHAT_BASE_URL_STUB = "http://localhost:9014"
+
 #: The only `/chat` endpoints this harness may drive, by arm name. The guard below checks
 #: membership of this mapping rather than equality with one constant, so adding an arm is a
 #: deliberate edit here and never an accident at a call site.
 EVAL_ARMS: dict[str, str] = {
     "control": EVAL_CHAT_BASE_URL,
     "treatment": EVAL_CHAT_BASE_URL_TREATMENT,
+    "stub": EVAL_CHAT_BASE_URL_STUB,
 }
 
 #: Full-graph wipe, same statement `fre435_memory_recall/harness.py`'s `WIPE_CYPHER` uses.

@@ -10,9 +10,10 @@ x-fre1728-env: &fre1728-env
   # keeps it and only this display name changes.
   AGENT_OWNER_NAME: "Sam"
   # Production values that the eval compose leaves out. Each one shapes memory or the primary's tools.
-  AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
-  AGENT_APPROVAL_UI_ENABLED: "false"
-  AGENT_EXTRA_PERMISSION_RULES_PATH: config/governance/permissions.eval.yaml
+  # Off on purpose, though production has them on. `read` expands environment variables in the path that a model
+  # supplies, and its error echoes the result, so with primitives on a model can read each key that this gateway
+  # holds (security review, FRE-1728). This pilot tests memory and conversation, not tool use.
+  AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
   AGENT_EXPANSION_ENABLED: "true"
   AGENT_DELEGATION_ENABLED: "false"
   AGENT_PROMOTION_PIPELINE_ENABLED: "true"
@@ -21,8 +22,7 @@ x-fre1728-env: &fre1728-env
   AGENT_SESSION_SUMMARY_ENABLED: "true"
   # Required. The relevance gate trusts only the calibrated reranker. Without this key the fallback reranker answers,
   # the gate cannot tell, and every memory turn says "records could not be reached" (measured 2026-11-02). Each of
-  # those would rank as a false retrieval defect. Eval bash runs as `nobody` with an allowlisted environment
-  # (FRE-1505), so a model-chosen bash call cannot read this key.
+  # those would rank as a false retrieval defect. This is safe only while primitive tools are off, above.
   AGENT_VOYAGE_API_KEY: ${AGENT_VOYAGE_API_KEY}
   # The promotion consumer connects through this URL. The eval compose omits it because production's value names
   # production Postgres, so promotion fails on eval. This is the eval store and init.sql's own dev password.

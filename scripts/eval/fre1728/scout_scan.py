@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -285,6 +286,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[scout] refused: the remaining budget is {args.remaining_usd:.2f} USD")
         return EXIT_OVER_BUDGET
 
+    # Scout's insert appends, so a second scan over an old database counts each finding twice.
+    shutil.rmtree(args.run_dir / "scout", ignore_errors=True)
     asyncio.run(_insert_transcripts(args.run_dir / "scout" / "db", episodes))
     findings = run_scan(args.run_dir, questions, args.model, args.model_base_url)
     (args.run_dir / "scout" / "findings.json").write_text(

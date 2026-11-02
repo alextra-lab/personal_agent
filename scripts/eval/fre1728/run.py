@@ -19,6 +19,7 @@ from pathlib import Path
 
 import asyncpg  # type: ignore[import-untyped]
 import uvicorn
+from scripts.eval.eval_isolation import wait_for_gateway_idle
 from scripts.eval.fre1728.bridge import GATEWAY_CONTAINERS, create_app
 from scripts.eval.fre1728.spend import PILOT_CAP_USD
 from scripts.eval.fre1728.stack import eval_postgres_dsn, open_stack
@@ -39,7 +40,10 @@ EXIT_SCOUT_FAILED = 6
 
 
 def driver_env(arm: str, host_env: Mapping[str, str]) -> dict[str, str]:
-    """Build the driver's environment. It holds no project secret but the OpenAI key on a paid arm.
+    """Build a child's environment. It holds no project secret but the OpenAI key on a paid arm.
+
+    A child starts in the run directory, because Scout searches upward from its working directory for a ``.env``
+    file, and from the repo it finds production's.
 
     Args:
         arm: The arm.
@@ -145,6 +149,7 @@ async def _run_scout(args: argparse.Namespace, run_dir: Path, remaining_usd: flo
         "--severity", str(args.severity),
         *base_url,
         env=driver_env(args.arm, os.environ),
+        cwd=run_dir,
     )  # fmt: skip
     return EXIT_SCOUT_FAILED if await process.wait() else 0
 
@@ -159,6 +164,8 @@ async def run(args: argparse.Namespace) -> int:
         The driver's exit code, ``EXIT_SCOUT_FAILED``, or 5 if a stub run booked a cost.
     """
     run_dir: Path = args.run_dir.resolve()
+    if (run_dir / "results").exists():
+        raise SystemExit(f"{run_dir} holds an earlier run: pass a new --run-dir")
     run_dir.mkdir(parents=True, exist_ok=True)
     database = STUB_DATABASE if args.arm == "stub" else PAID_DATABASE
     since = datetime.now(UTC)
@@ -198,8 +205,12 @@ async def run(args: argparse.Namespace) -> int:
             "--max-turns", str(MAX_TURNS),
             "--severity", str(args.severity),
             env=driver_env(args.arm, os.environ),
+            cwd=run_dir,
         )  # fmt: skip
         code = await driver.wait()
+        if code == 0:
+            # The last questions' extraction and summaries land after the driver exits.
+            await wait_for_gateway_idle(stack.deps.es)
         remaining_usd = args.cap_usd - await stack.deps.guard.spent()
     finally:
         server.should_exit = True
@@ -242,6 +253,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.run_dir is None:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         args.run_dir = HOME / "runs" / f"{args.arm}-{stamp}"
+    # The children start in the run directory, so a relative path must not reach them.
+    args.severity = args.severity.resolve()
+    args.memaudit_dir = args.memaudit_dir.resolve()
     refuse_paid_run_without_go(args.arm, args.owner_go)
     refuse_a_second_real_gateway(args.arm)
     return asyncio.run(run(args))

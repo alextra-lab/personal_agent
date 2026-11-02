@@ -175,11 +175,9 @@ The owner's Mac must stay awake, and a pilot turn competes with the owner's own 
 | The owner's display name is `Sam` | Avoids a conflict with the persona |
 | `channel=EVAL` | Blocks side-effecting tools, and suppresses Captain's Log promotion, so transcripts come from the runner |
 | Session summary idle 60 s and sweep 30 s; production 900 s and 300 s | A digest arrives sooner than in production. Chosen by the ticket, to avoid a run of 8 hours or more |
+| **Primitive tools off**; production has them on | The primary has no `bash`, `read`, `write` or `edit`. A task that needs them gets a different answer than in production. They stay off because `read` can expose this gateway's keys to a model (security review, FRE-1729) |
 | Captain's Log reflection interval 86400000 s; production 1800 s | Reflection effectively off. Saves about $0.05 per reflection |
 | `AGENT_CLOUD_WEEKLY_BUDGET_USD` 50; production 30 | Eval's own budget |
-| Approval UI off, eval allow rules | A tool call that asks for approval is denied |
-| Eval bash runs as `nobody`, with an allowlisted environment | A skill script that needs a credential fails |
-| No Docker socket | `run_python` cannot sandbox |
 | R2 values point nowhere | R2 tools register, and a call fails. An `artifact_draft` call can still pay for its builder |
 | No Linear, Perplexity, Scaleway or abuse.ch key | Those tools fail. A Scaleway primary cannot be selected |
 | Auth off, one identity for all simulated users | The wipe separates users |

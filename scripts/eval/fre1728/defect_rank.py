@@ -111,5 +111,17 @@ def render_report(defects: Sequence[Mapping[str, object]], manifest: Mapping[str
         )
     if not defects:
         lines.append("| - | No failure class appeared in every run. | | | | | | |")
+    invalid = manifest.get("invalid_facts") or []
+    if invalid:
+        lines += [
+            "",
+            f"**{len(invalid)} facts are invalid and are not ranked**, so this list can undercount:",  # type: ignore[arg-type]
+        ]
+        lines += [
+            f"- {i['run']} {i['user_id']} {i['dimension']}: {'; '.join(i['reasons'])}"  # type: ignore[index]
+            for i in invalid  # type: ignore[attr-defined]
+        ]
+    if manifest.get("detail"):
+        lines += ["", f"Detail: {manifest['detail']}"]
     lines += ["", STOP_RULE, "", LIMITS, ""]
     return "\n".join(lines)

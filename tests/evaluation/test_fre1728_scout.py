@@ -74,6 +74,31 @@ def test_scan_over_the_budget_is_refused_before_it_starts(
     assert not (tmp_path / "scout").exists()
 
 
+def test_a_second_scan_starts_from_an_empty_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scout's insert appends, so an old database would count each finding twice."""
+    _write_run(tmp_path)
+    stale = tmp_path / "scout" / "db" / "old.parquet"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("old")
+
+    async def no_insert(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(scout_scan, "_insert_transcripts", no_insert)
+
+    def keep_dir(*_args: object) -> list[dict[str, object]]:
+        (tmp_path / "scout").mkdir(exist_ok=True)
+        return []
+
+    monkeypatch.setattr(scout_scan, "run_scan", keep_dir)
+    code = scout_scan.main(["--run-dir", str(tmp_path), "--runs", "A", "B", "--remaining-usd", "9"])
+
+    assert code == scout_scan.EXIT_OK
+    assert not stale.exists()
+
+
 def test_only_a_positive_answer_becomes_a_fact(tmp_path: Path) -> None:
     _write_run(tmp_path)
     episodes = scout_scan.load_episodes(tmp_path, ["A"])

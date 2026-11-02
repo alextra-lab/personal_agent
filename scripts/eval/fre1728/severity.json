@@ -1,7 +1,7 @@
 {
   "memory_failure": 1,
   "agent_elicitation_failure": 1,
-  "unclassified": 1,
+  "unclassified": 0,
   "simulator_too_strict": 0,
   "task_design_failure": 0,
   "no_targeted_task": 0,

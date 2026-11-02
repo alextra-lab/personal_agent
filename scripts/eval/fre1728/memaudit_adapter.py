@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, List, Optional
 
 import httpx
 from base_agent import MemoryAgent
@@ -26,7 +25,7 @@ class HarnessFailure(Exception):
 class BridgeClient:
     """The driver's only way to reach Seshat."""
 
-    def __init__(self, base_url: str, transport: Optional[httpx.BaseTransport] = None) -> None:
+    def __init__(self, base_url: str, transport: httpx.BaseTransport | None = None) -> None:
         """Connect to the bridge.
 
         Args:
@@ -42,7 +41,7 @@ class BridgeClient:
             raise HarnessFailure(f"bridge answered {response.status_code}: {response.text[:300]}")
         return response.json()
 
-    def turn(self, message: str, session_id: Optional[str]) -> Dict[str, str]:
+    def turn(self, message: str, session_id: str | None) -> dict[str, str]:
         """Send one user message.
 
         Args:
@@ -56,7 +55,7 @@ class BridgeClient:
             self._client.post("/turn", json={"message": message, "session_id": session_id})
         )
 
-    def wipe(self) -> Dict[str, object]:
+    def wipe(self) -> dict[str, object]:
         """Clear the eval graph and captures for the next user or run.
 
         Returns:
@@ -64,7 +63,7 @@ class BridgeClient:
         """
         return self._json(self._client.post("/wipe"))  # type: ignore[return-value]
 
-    def settle(self, trace_ids: List[str]) -> Dict[str, object]:
+    def settle(self, trace_ids: list[str]) -> dict[str, object]:
         """Wait until the gateway is quiet and check that the turns reached the graph.
 
         Args:
@@ -77,7 +76,7 @@ class BridgeClient:
             self._client.post("/settle", json={"trace_ids": trace_ids})
         )
 
-    def memories(self) -> List[Dict[str, str]]:
+    def memories(self) -> list[dict[str, str]]:
         """Read the structured facts of the eval graph.
 
         Returns:
@@ -85,7 +84,7 @@ class BridgeClient:
         """
         return self._json(self._client.get("/memories"))  # type: ignore[return-value]
 
-    def spend(self) -> Dict[str, object]:
+    def spend(self) -> dict[str, object]:
         """Read the spend.
 
         Returns:
@@ -136,10 +135,10 @@ class SeshatAgent(MemoryAgent):
             bridge: The bridge client.
         """
         self._bridge = bridge
-        self._session_id: Optional[str] = None
-        self.trace_ids: List[str] = []
+        self._session_id: str | None = None
+        self.trace_ids: list[str] = []
 
-    def __call__(self, task: str, history: List[Dict]) -> str:
+    def __call__(self, task: str, history: list[dict]) -> str:
         """Drive one turn.
 
         Args:
@@ -176,7 +175,7 @@ class SeshatAgent(MemoryAgent):
         reply = self._bridge.turn(question, None)
         return reply["response"]
 
-    def get_all_memories(self) -> List[Dict]:
+    def get_all_memories(self) -> list[dict]:
         """Read the eval graph.
 
         Returns:

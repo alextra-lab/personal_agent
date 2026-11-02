@@ -198,3 +198,31 @@ def test_stub_driver_env_reaches_only_the_stub_and_holds_no_secret() -> None:
     assert env["OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
     assert env["OPENAI_API_KEY"] != "real"
     assert set(env) == {"PATH", "HOME", "OPENAI_API_KEY", "OPENAI_BASE_URL"}
+
+
+@pytest.mark.asyncio
+async def test_ac4_a_failed_gateway_stop_is_tried_again() -> None:
+    """A stop that failed once must not count as done: the gateway keeps spending."""
+    client, state = _client(gateway_spend=45.0, cap=45.0)
+    deps_ops = _FlakyOps(state.events)
+    client._transport.app.state.deps.ops = deps_ops  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError):
+        await client.get("/spend")
+    await client.get("/spend")
+
+    assert deps_ops.attempts == 2
+
+
+class _FlakyOps:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.attempts = 0
+
+    async def clear_captures(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise RuntimeError("docker stop failed")

@@ -333,6 +333,94 @@ def test_judge_reply_that_does_not_parse_is_not_a_defect(tmp_path: Path) -> None
     assert json.loads((tmp_path / "defects.json").read_text()) == []
 
 
+def test_slot_fill_reply_that_does_not_parse_is_not_a_defect(tmp_path: Path) -> None:
+    class _NoFillReason(_FakeMemAudit):
+        def slot_fill(self, _memories: str, _category: str, _dimension: str) -> tuple[str, str]:
+            return "unknown", ""
+
+    fake = _FakeBridge()
+    agent = memaudit_adapter.SeshatAgent(_bridge(fake))
+
+    memaudit_driver.run_pilot(_config(tmp_path), _NoFillReason(), _bridge(fake), agent)
+
+    assert json.loads((tmp_path / "defects.json").read_text()) == []
+    assert "slot fill" in (tmp_path / "report.md").read_text()
+
+
+def test_fact_that_survives_the_wipe_marks_the_user_invalid(tmp_path: Path) -> None:
+    class _Leaky(_FakeBridge):
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/wipe":
+                return httpx.Response(
+                    200,
+                    json={
+                        "waited_s": 0.0,
+                        "residual_memories": [
+                            {"kind": "entity", "name": "Sam", "content": "", "type": ""},
+                            {"kind": "claim", "name": "", "content": "old fact", "type": ""},
+                        ],
+                    },
+                )
+            return super().__call__(request)
+
+    fake = _Leaky()
+    agent = memaudit_adapter.SeshatAgent(_bridge(fake))
+
+    memaudit_driver.run_pilot(_config(tmp_path), _FakeMemAudit(), _bridge(fake), agent)
+
+    facts = json.loads((tmp_path / "results" / "A" / "user_x.json").read_text())
+    assert facts[0]["invalid_reasons"] == ["facts survived the wipe: 1"]
+
+
+def test_owner_entity_with_no_content_after_a_wipe_is_not_a_leak(tmp_path: Path) -> None:
+    class _Bootstrap(_FakeBridge):
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/wipe":
+                rows = [{"kind": "entity", "name": "Sam", "content": "", "type": ""}]
+                return httpx.Response(200, json={"waited_s": 0.0, "residual_memories": rows})
+            return super().__call__(request)
+
+    fake = _Bootstrap()
+    agent = memaudit_adapter.SeshatAgent(_bridge(fake))
+
+    memaudit_driver.run_pilot(_config(tmp_path), _FakeMemAudit(), _bridge(fake), agent)
+
+    facts = json.loads((tmp_path / "results" / "A" / "user_x.json").read_text())
+    assert facts[0]["invalid_reasons"] == []
+
+
+def test_any_other_failure_still_leaves_the_manifest_and_the_report(tmp_path: Path) -> None:
+    class _Crashes(_FakeMemAudit):
+        def run_episode(self, *_args: Any) -> dict[str, Any]:
+            raise AttributeError("'list' object has no attribute 'get'")
+
+    fake = _FakeBridge()
+    agent = memaudit_adapter.SeshatAgent(_bridge(fake))
+
+    code = memaudit_driver.run_pilot(_config(tmp_path), _Crashes(), _bridge(fake), agent)
+
+    assert code == memaudit_driver.EXIT_HARNESS_FAILURE
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["status"] == "stopped: harness_failure"
+    assert "AttributeError" in manifest["detail"]
+    assert "AttributeError" in (tmp_path / "report.md").read_text()
+
+
+def test_failed_spend_read_still_leaves_the_report(tmp_path: Path) -> None:
+    class _NoSpend(_FakeBridge):
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/spend":
+                return httpx.Response(500, text="postgres down")
+            return super().__call__(request)
+
+    fake = _NoSpend()
+    agent = memaudit_adapter.SeshatAgent(_bridge(fake))
+
+    memaudit_driver.run_pilot(_config(tmp_path), _FakeMemAudit(), _bridge(fake), agent)
+
+    assert json.loads((tmp_path / "manifest.json").read_text())["spent_usd"] is None
+
+
 # ── AC-4: the spend stop ──────────────────────────────────────────────────────────────────────
 
 

@@ -20,9 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Protocol
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -55,12 +56,12 @@ class PilotConfig:
         severity: Severity per MemAudit label, set by the owner.
     """
 
-    runs: Tuple[str, ...]
-    users: Tuple[str, ...]
+    runs: tuple[str, ...]
+    users: tuple[str, ...]
     tasks_per_user: int
     max_turns: int
     run_dir: Path
-    severity: Dict[str, float]
+    severity: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,7 @@ class Target:
 
     user_id: str
     episode: int
-    task: Dict[str, str]
+    task: dict[str, str]
     category: str
     dimension: str
     short: str
@@ -89,36 +90,36 @@ class Target:
 class MemAudit(Protocol):
     """The parts of MemAudit that the pilot uses."""
 
-    def load_user(self, user_id: str) -> Dict[str, Dict]:
+    def load_user(self, user_id: str) -> dict[str, dict]:
         """Return a user's record."""
         ...
 
-    def load_tasks(self, user_id: str) -> List[Dict[str, str]]:
+    def load_tasks(self, user_id: str) -> list[dict[str, str]]:
         """Return a user's tasks."""
         ...
 
-    def run_episode(self, user_id: str, task: str, agent: object, max_turns: int) -> Dict:
+    def run_episode(self, user_id: str, task: str, agent: object, max_turns: int) -> dict:
         """Run one task and return the transcript record."""
         ...
 
-    def slot_fill(self, memories_json: str, category: str, dimension: str) -> Tuple[str, str]:
+    def slot_fill(self, memories_json: str, category: str, dimension: str) -> tuple[str, str]:
         """Return a label and a reason."""
         ...
 
     def judge(
         self, dimension: str, explanation: str, predicted: str, ground_truth: str
-    ) -> Tuple[float, str]:
+    ) -> tuple[float, str]:
         """Return a score and a reason. An empty reason means that the reply did not parse."""
         ...
 
     def attribute(
-        self, record: Dict, run: str, user_id: str, tasks: List[Dict[str, str]], oracle: Dict
-    ) -> Dict:
+        self, record: dict, run: str, user_id: str, tasks: list[dict[str, str]], oracle: dict
+    ) -> dict:
         """Return the attribution of one low score."""
         ...
 
 
-def select_tasks(tasks: Sequence[Dict[str, str]], count: int, used: set) -> List[Dict[str, str]]:
+def select_tasks(tasks: Sequence[dict[str, str]], count: int, used: set) -> list[dict[str, str]]:
     """Take tasks round robin over the bank's categories.
 
     A dimension that an earlier user took is skipped, so no question repeats in a run.
@@ -132,7 +133,7 @@ def select_tasks(tasks: Sequence[Dict[str, str]], count: int, used: set) -> List
         The selected tasks.
     """
     queues = {c: [t for t in tasks if t["target_category"] == c] for c in _CATEGORIES}
-    selected: List[Dict[str, str]] = []
+    selected: list[dict[str, str]] = []
     while len(selected) < count and any(queues.values()):
         for category in _CATEGORIES:
             queue = queues[category]
@@ -178,7 +179,7 @@ def classify(graph_score: float, answer_score: float) -> str:
     return "retrieval_failure" if in_graph else "write_failure"
 
 
-def attribution_copy(transcript: Dict) -> Dict:
+def attribution_copy(transcript: dict) -> dict:
     """Copy a transcript without the last simulator message.
 
     The episode ends there, so the agent never received that message. A fact disclosed only in it is not a
@@ -211,7 +212,7 @@ def make_guarded_completion(complete: Callable, check_spend: Callable[[], None])
     """
     from memaudit_adapter import HarnessFailure
 
-    def guarded(messages: List[Dict[str, str]], **kwargs: object) -> str:
+    def guarded(messages: list[dict[str, str]], **kwargs: object) -> str:
         kwargs["max_retries"] = 1
         for _ in range(_ATTEMPTS):
             check_spend()
@@ -257,7 +258,7 @@ class RealMemAudit:
         failure_attribution.get_completion = guarded
         failure_attribution._HERE = str(run_dir)
 
-    def load_user(self, user_id: str) -> Dict[str, Dict]:
+    def load_user(self, user_id: str) -> dict[str, dict]:
         """Return a user's record.
 
         Args:
@@ -268,7 +269,7 @@ class RealMemAudit:
         """
         return self._simulation.load_user(user_id)
 
-    def load_tasks(self, user_id: str) -> List[Dict[str, str]]:
+    def load_tasks(self, user_id: str) -> list[dict[str, str]]:
         """Return a user's tasks.
 
         Args:
@@ -280,7 +281,7 @@ class RealMemAudit:
         path = self._repo / "benchmark_data" / "CustomTasksPooledFinal" / f"{user_id}.json"
         return json.loads(path.read_text(encoding="utf-8"))["tasks"]
 
-    def run_episode(self, user_id: str, task: str, agent: object, max_turns: int) -> Dict:
+    def run_episode(self, user_id: str, task: str, agent: object, max_turns: int) -> dict:
         """Run one task. The preference judge is off, which saves one paid call per turn.
 
         Args:
@@ -305,7 +306,7 @@ class RealMemAudit:
         result.save_history(str(path))
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def slot_fill(self, memories_json: str, category: str, dimension: str) -> Tuple[str, str]:
+    def slot_fill(self, memories_json: str, category: str, dimension: str) -> tuple[str, str]:
         """Fill one slot from the memories.
 
         Args:
@@ -320,7 +321,7 @@ class RealMemAudit:
 
     def judge(
         self, dimension: str, explanation: str, predicted: str, ground_truth: str
-    ) -> Tuple[float, str]:
+    ) -> tuple[float, str]:
         """Score a prediction.
 
         Args:
@@ -335,8 +336,8 @@ class RealMemAudit:
         return self._evaluator._judge(dimension, explanation, predicted, ground_truth)
 
     def attribute(
-        self, record: Dict, run: str, user_id: str, tasks: List[Dict[str, str]], oracle: Dict
-    ) -> Dict:
+        self, record: dict, run: str, user_id: str, tasks: list[dict[str, str]], oracle: dict
+    ) -> dict:
         """Attribute one low score.
 
         Args:
@@ -354,7 +355,7 @@ class RealMemAudit:
 
 def build_targets(
     memaudit: MemAudit, users: Sequence[str], tasks_per_user: int
-) -> Dict[str, List[Target]]:
+) -> dict[str, list[Target]]:
     """Fix each user's tasks and target facts. Every run uses the same ones.
 
     Args:
@@ -366,11 +367,11 @@ def build_targets(
         The targets per user.
     """
     used: set = set()
-    targets: Dict[str, List[Target]] = {}
+    targets: dict[str, list[Target]] = {}
     for user_id in users:
         bank = memaudit.load_user(user_id)["memory_bank"]
         selected = select_tasks(memaudit.load_tasks(user_id), tasks_per_user, used)
-        entries: List[Target] = []
+        entries: list[Target] = []
         for episode, task in enumerate(selected, 1):
             category = task["target_category"]
             entry = next(e for e in bank[category] if e["dimension"] == task["target_dimension"])
@@ -396,15 +397,17 @@ def _write_json(path: Path, value: object) -> None:
 
 def _run_user(
     run: str,
-    targets: List[Target],
+    targets: list[Target],
     config: PilotConfig,
     memaudit: MemAudit,
     agent: object,
     bridge: object,
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     user_id = targets[0].user_id
     wiped = bridge.wipe()
     _write_json(config.run_dir / "results" / run / f"{user_id}.wipe.json", wiped)
+    # Startup creates an owner entity with no content, so only a fact with content is a leak.
+    residual = [m for m in wiped["residual_memories"] if m.get("content")]
     agent.trace_ids = []
     tasks = [t.task for t in targets]
     for target in targets:
@@ -414,7 +417,9 @@ def _run_user(
         _write_json(config.run_dir / "history" / run / name, attribution_copy(transcript))
 
     settled = bridge.settle(list(agent.trace_ids))
-    user_invalid: List[str] = []
+    user_invalid: list[str] = []
+    if residual:
+        user_invalid.append(f"facts survived the wipe: {len(residual)}")
     if settled["missing_turns"]:
         user_invalid.append(f"turns missing from the graph: {len(settled['missing_turns'])}")
     if settled["budget_denied"]:
@@ -425,10 +430,12 @@ def _run_user(
     _write_json(config.run_dir / "memories" / run / f"{user_id}.json", memories)
     memories_json = json.dumps(memories, ensure_ascii=False, indent=2)
 
-    oracle: Dict = {}
-    facts: List[Dict[str, object]] = []
+    oracle: dict = {}
+    facts: list[dict[str, object]] = []
     for target in targets:
-        label_text, _ = memaudit.slot_fill(memories_json, target.category, target.dimension)
+        label_text, fill_reason = memaudit.slot_fill(
+            memories_json, target.category, target.dimension
+        )
         graph_score, graph_reason = memaudit.judge(
             target.dimension, target.explanation, label_text, target.short
         )
@@ -438,6 +445,8 @@ def _run_user(
             target.dimension, target.explanation, answer, target.short
         )
         invalid = list(user_invalid)
+        if not fill_reason:
+            invalid.append("the slot fill reply did not parse")
         if not graph_reason or not answer_reason:
             invalid.append("a judge reply did not parse")
         outcome = classify(graph_score, answer_score)
@@ -486,10 +495,10 @@ def run_pilot(config: PilotConfig, memaudit: MemAudit, bridge: object, agent: ob
         The exit code.
     """
     from defect_rank import rank_defects, render_report
-    from memaudit_adapter import HarnessFailure, SpendCapReached
+    from memaudit_adapter import SpendCapReached
 
     targets = build_targets(memaudit, config.users, config.tasks_per_user)
-    facts_by_run: Dict[str, List[Dict[str, object]]] = {}
+    facts_by_run: dict[str, list[dict[str, object]]] = {}
     status, code, detail = "complete", EXIT_OK, ""
     try:
         for run in config.runs:
@@ -500,15 +509,33 @@ def run_pilot(config: PilotConfig, memaudit: MemAudit, bridge: object, agent: ob
                 )
     except SpendCapReached as exc:
         status, code, detail = "stopped: spend_cap", EXIT_SPEND_CAP, str(exc)
-    except HarnessFailure as exc:
-        status, code, detail = "stopped: harness_failure", EXIT_HARNESS_FAILURE, str(exc)
+    except Exception as exc:  # noqa: BLE001 - any other failure must still leave the partial results and the reason
+        status, code, detail = (
+            "stopped: harness_failure",
+            EXIT_HARNESS_FAILURE,
+            f"{type(exc).__name__}: {exc}",
+        )
 
     # The stopped gateway no longer answers, and the spend comes from the bridge's Postgres read.
-    spent = bridge.spend()["spent_usd"]
+    try:
+        spent = bridge.spend()["spent_usd"]
+    except Exception as exc:  # noqa: BLE001 - this read must not cost the report
+        spent, detail = None, f"{detail} The spend read failed: {exc}".strip()
     manifest = {
         "status": status,
         "detail": detail,
         "spent_usd": spent,
+        "invalid_facts": [
+            {
+                "run": fact["run"],
+                "user_id": fact["user_id"],
+                "dimension": fact["dimension"],
+                "reasons": fact["invalid_reasons"],
+            }
+            for facts in facts_by_run.values()
+            for fact in facts
+            if fact["invalid_reasons"]
+        ],
         "runs": list(config.runs),
         "users": list(config.users),
         "targets": {u: [asdict(t) for t in ts] for u, ts in targets.items()},
@@ -522,7 +549,7 @@ def run_pilot(config: PilotConfig, memaudit: MemAudit, bridge: object, agent: ob
     return code
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Run the pilot with MemAudit itself.
 
     Args:

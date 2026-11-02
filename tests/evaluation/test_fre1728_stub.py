@@ -143,6 +143,8 @@ def test_pilot_overlay_passes_the_reranker_key_and_no_production_store() -> None
     for service in ("seshat-gateway-control", "seshat-gateway-treatment"):
         env = overlay["services"][service]["environment"]
         assert env["AGENT_VOYAGE_API_KEY"] == "${AGENT_VOYAGE_API_KEY}"
+        # `read` expands environment variables in a model's path, so it must not register beside these keys.
+        assert env["AGENT_PRIMITIVE_TOOLS_ENABLED"] == "false"
         assert "@postgres-eval:" in env["AGENT_SYSGRAPH_DATABASE_URL"]
         stub_stack.assert_stub_env_is_eval_only(
             {k: v for k, v in env.items() if k == "AGENT_SYSGRAPH_DATABASE_URL"}

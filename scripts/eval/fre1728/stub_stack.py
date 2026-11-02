@@ -270,7 +270,19 @@ def _create_database() -> None:
     )  # fmt: skip
     schema = (REPO_ROOT / "docker" / "postgres" / "init.sql").read_text()
     _docker(
-        ["exec", "-i", _EVAL_POSTGRES, "psql", "-U", "agent", "-d", STUB_DATABASE, "-q"],
+        [
+            "exec",
+            "-i",
+            _EVAL_POSTGRES,
+            "psql",
+            "-U",
+            "agent",
+            "-d",
+            STUB_DATABASE,
+            "-q",
+            "-v",
+            "ON_ERROR_STOP=1",
+        ],
         stdin=schema,
     )
 

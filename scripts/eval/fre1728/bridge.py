@@ -176,14 +176,15 @@ def create_app(deps: BridgeDeps) -> FastAPI:
         The FastAPI app.
     """
     app = FastAPI()
+    app.state.deps = deps
 
     async def cap_response() -> JSONResponse | None:
         try:
             await deps.guard.check()
         except SpendCapReached as exc:
-            if not deps._stopped:
-                deps._stopped = True
-                await deps.ops.stop()
+            if not app.state.deps._stopped:
+                await app.state.deps.ops.stop()
+                app.state.deps._stopped = True
             return JSONResponse({"stop": True, "detail": str(exc)}, status_code=402)
         return None
 

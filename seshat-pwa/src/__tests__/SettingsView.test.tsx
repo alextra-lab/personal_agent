@@ -1,15 +1,18 @@
 /**
- * Tests for SettingsView (FRE-1702, stage 1 of FRE-1698).
+ * Tests for SettingsView (FRE-1702, FRE-1722; FRE-1698).
  *
  * AC-1 (unit half): the nine groups render, and the System view renders the System group;
  *   every row shows its name, live value and winning source.
  * AC-2: a saved choice shows beside the default that it overrides.
- * AC-5: the only control is "Clear" on a saved choice. No input, select, textarea or toggle.
+ * AC-5: a row with no `edit` field has no control, except "Clear" on a clearable row.
  *
  * FRE-1710: each group is an accordion section, closed by default.
  * AC-1: every group is closed at first render, a click opens only that group, a second click closes it.
  * AC-2: a header shows the group name and its parameter count, and a marker for a saved choice.
  * AC-3: a header is a focusable button with `aria-expanded` false when closed and true when open.
+ *
+ * FRE-1722 AC-4: a role binding and a saved choice each show the edit control, the live value, the
+ *   file default and Clear.
  */
 
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -20,12 +23,18 @@ import type { SettingsMenu } from '@/lib/types';
 
 const mockGetSettingsMenu = vi.fn();
 const mockClear = vi.fn();
+const mockSetPreference = vi.fn();
+const mockSetOverride = vi.fn();
+const mockClearOverride = vi.fn();
 const mockResolveLastSessionId = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
 vi.mock('@/lib/agui-client', () => ({
   getSettingsMenu: (...args: unknown[]) => mockGetSettingsMenu(...args),
   clearConstraintPreference: (...args: unknown[]) => mockClear(...args),
+  setConstraintPreference: (...args: unknown[]) => mockSetPreference(...args),
+  setSettingOverride: (...args: unknown[]) => mockSetOverride(...args),
+  clearSettingOverride: (...args: unknown[]) => mockClearOverride(...args),
 }));
 
 vi.mock('@/lib/session', () => ({
@@ -76,6 +85,8 @@ function menu(overrides: Partial<SettingsMenu> = {}): SettingsMenu {
           overrides: null,
           clearable: false,
           note: null,
+          file_default: null,
+          edit: null,
         },
       ],
     })),
@@ -91,6 +102,8 @@ function menu(overrides: Partial<SettingsMenu> = {}): SettingsMenu {
           overrides: null,
           clearable: false,
           note: null,
+          file_default: null,
+          edit: null,
         },
       ],
     },
@@ -110,6 +123,8 @@ function withSavedChoice(): SettingsMenu {
         overrides: { value: 'gpt-6.1-sol', source: 'config file' },
         clearable: true,
         note: null,
+        file_default: null,
+        edit: null,
       },
       {
         name: 'saved_choice.tool_iteration_limit',
@@ -118,6 +133,8 @@ function withSavedChoice(): SettingsMenu {
         overrides: null,
         clearable: false,
         note: null,
+        file_default: null,
+        edit: null,
       },
     ],
   };
@@ -136,6 +153,9 @@ async function openGroup(title: string): Promise<void> {
 beforeEach(() => {
   mockGetSettingsMenu.mockReset();
   mockClear.mockReset();
+  mockSetPreference.mockReset();
+  mockSetOverride.mockReset();
+  mockClearOverride.mockReset();
   mockResolveLastSessionId.mockReset();
   mockResolveLastSessionId.mockResolvedValue(undefined);
   mockSearchParams = new URLSearchParams();
@@ -197,7 +217,7 @@ describe('saved choice beside its default (AC-2)', () => {
   });
 });
 
-describe('no control edits a parameter (AC-5)', () => {
+describe('a row with no edit field has no control (AC-5)', () => {
   it('has no input, select, textarea, switch or checkbox', async () => {
     mockGetSettingsMenu.mockResolvedValue(withSavedChoice());
     const { container } = render(<SettingsView view="menu" />);
@@ -352,6 +372,8 @@ describe('structured values', () => {
         overrides: null,
         clearable: false,
         note: null,
+        file_default: null,
+        edit: null,
       },
     ];
     mockGetSettingsMenu.mockResolvedValue(m);
@@ -513,5 +535,171 @@ describe('accordion groups (FRE-1710)', () => {
     expect(header('Budgets and cost')).toHaveAttribute('aria-expanded', 'true');
     await userEvent.keyboard(' ');
     expect(header('Budgets and cost')).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+describe('edit a role binding and a saved choice (FRE-1722)', () => {
+  function editableMenu(): SettingsMenu {
+    const m = menu();
+    m.groups[1] = {
+      ...m.groups[1],
+      rows: [
+        {
+          name: 'saved_choice.tool_iteration_limit',
+          value: 'continue_10',
+          source: 'database row',
+          overrides: { value: 'decision card (safe default: finish_now)', source: 'code default' },
+          clearable: true,
+          note: null,
+          file_default: { value: 'decision card (safe default: finish_now)', source: 'code default' },
+          edit: { kind: 'saved_choice', options: ['continue_10', 'finish_now', 'always_pause'], current: 'continue_10' },
+        },
+      ],
+    };
+    m.groups[2] = {
+      ...m.groups[2],
+      rows: [
+        {
+          name: 'role.compressor',
+          value: 'claude_sonnet',
+          source: 'override',
+          overrides: null,
+          clearable: true,
+          note: 'pinned',
+          file_default: { value: 'gpt-5.4-mini', source: 'config file' },
+          edit: { kind: 'role_binding', options: ['inherit', 'gpt-5.4-mini', 'claude_sonnet'], current: 'claude_sonnet' },
+        },
+      ],
+    };
+    return m;
+  }
+
+  async function openRow(group: string, name: string): Promise<HTMLElement> {
+    await screen.findByRole('heading', { name: new RegExp(`^${group}`) });
+    await openGroup(group);
+    return (await screen.findByText(name)).closest('[data-testid="setting-row"]') as HTMLElement;
+  }
+
+  it('AC-4: a role binding shows the control, the live value, the file default, the source and Clear', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Models per role', 'role.compressor');
+
+    const select = within(row).getByRole('combobox', { name: /role\.compressor/ });
+    expect(select).toHaveValue('claude_sonnet');
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'inherit',
+      'gpt-5.4-mini',
+      'claude_sonnet',
+    ]);
+    expect(within(row).getByTestId('setting-live-value')).toHaveTextContent('claude_sonnet');
+    expect(within(row).getByTestId('setting-file-default')).toHaveTextContent('file default gpt-5.4-mini (config file)');
+    expect(within(row).getByText('override')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('AC-4: a saved choice shows the control, the live value, the default and Clear', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Saved choices', 'saved_choice.tool_iteration_limit');
+
+    expect(within(row).getByRole('combobox', { name: /tool_iteration_limit/ })).toHaveValue('continue_10');
+    expect(within(row).getByTestId('setting-live-value')).toHaveTextContent('continue_10');
+    expect(within(row).getByTestId('setting-file-default')).toHaveTextContent(
+      'default decision card (safe default: finish_now) (code default)',
+    );
+    expect(within(row).getByText('database row')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+  });
+
+  it('does not repeat the default in an "overrides" line', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Saved choices', 'saved_choice.tool_iteration_limit');
+    expect(within(row).queryByText(/^overrides/)).not.toBeInTheDocument();
+  });
+
+  it('saves a role binding through the override API, then reloads', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockResolvedValue({ parameter: 'role.compressor', value: 'gpt-5.4-mini' });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Models per role', 'role.compressor');
+
+    await userEvent.selectOptions(within(row).getByRole('combobox'), 'gpt-5.4-mini');
+    await userEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    expect(mockSetOverride).toHaveBeenCalledWith('role.compressor', 'gpt-5.4-mini');
+    expect(mockSetPreference).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockGetSettingsMenu).toHaveBeenCalledTimes(2));
+  });
+
+  it('saves a saved choice through the preference API, then reloads', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetPreference.mockResolvedValue({ constraint_name: 'tool_iteration_limit', preferred_action: 'finish_now' });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Saved choices', 'saved_choice.tool_iteration_limit');
+
+    await userEvent.selectOptions(within(row).getByRole('combobox'), 'finish_now');
+    await userEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    expect(mockSetPreference).toHaveBeenCalledWith('tool_iteration_limit', 'finish_now');
+    expect(mockSetOverride).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockGetSettingsMenu).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows the reason when the API refuses an edit', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockSetOverride.mockRejectedValue(new Error('the provider of gpt-5.4-mini has no credential on this gateway'));
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Models per role', 'role.compressor');
+
+    await userEvent.selectOptions(within(row).getByRole('combobox'), 'gpt-5.4-mini');
+    await userEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    expect(await within(row).findByRole('alert')).toHaveTextContent(/no credential on this gateway/);
+    expect(within(row).getByRole('combobox')).toHaveValue('gpt-5.4-mini');
+    expect(within(row).getByTestId('setting-live-value')).toHaveTextContent('claude_sonnet');
+  });
+
+  it('clears a role binding through the override API, not the preference API', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    mockClearOverride.mockResolvedValue({ parameter: 'role.compressor', cleared: true });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Models per role', 'role.compressor');
+
+    await userEvent.click(within(row).getByRole('button', { name: 'Clear' }));
+
+    expect(mockClearOverride).toHaveBeenCalledWith('role.compressor');
+    expect(mockClear).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockGetSettingsMenu).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows the new value in the control after the menu reloads', async () => {
+    const after = editableMenu();
+    after.groups[2].rows[0] = {
+      ...after.groups[2].rows[0],
+      value: 'gpt-5.4-mini',
+      edit: { kind: 'role_binding', options: ['inherit', 'gpt-5.4-mini', 'claude_sonnet'], current: 'gpt-5.4-mini' },
+    };
+    mockGetSettingsMenu.mockResolvedValueOnce(editableMenu()).mockResolvedValueOnce(after);
+    mockClearOverride.mockResolvedValue({ parameter: 'role.compressor', cleared: true });
+    render(<SettingsView view="menu" />);
+    const row = await openRow('Models per role', 'role.compressor');
+
+    await userEvent.click(within(row).getByRole('button', { name: 'Clear' }));
+
+    await waitFor(() => expect(within(row).getByRole('combobox')).toHaveValue('gpt-5.4-mini'));
+    expect(within(row).getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('marks an override apart from a saved choice in the closed header', async () => {
+    mockGetSettingsMenu.mockResolvedValue(editableMenu());
+    render(<SettingsView view="menu" />);
+    await screen.findByRole('heading', { name: /^Models per role/ });
+
+    expect(header('Models per role')).toHaveTextContent('override');
+    expect(header('Models per role')).not.toHaveTextContent('saved choice');
+    expect(header('Saved choices')).toHaveTextContent('saved choice');
   });
 });

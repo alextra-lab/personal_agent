@@ -9,7 +9,7 @@ All configuration loaders live in the config/ module per ADR-0007.
 """
 
 import functools
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -17,11 +17,13 @@ import structlog
 from pydantic import ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
+from personal_agent.config.setting_overrides import role_overrides
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import (
     INHERIT_DEPLOYMENT,
     ModelConfig,
     ModelDefinition,
+    ModelKind,
     Placement,
     required_kind_for_role,
 )
@@ -142,20 +144,12 @@ class ModelRoleError(ModelConfigError):
     pass
 
 
-@functools.lru_cache(maxsize=8)
-def _load_model_config_at_path(config_path_str: str) -> ModelConfig:
-    """Load and validate model configuration for a resolved path."""
-    config_path = Path(config_path_str)
-
-    log.info("loading_model_config", config_path=str(config_path))
-
-    # Load YAML file using shared loader
+def _read_catalog_content(config_path: Path) -> dict[str, object]:
+    """Read a catalog file and merge the Layer 3 bindings into it (ADR-0121)."""
     try:
         content = load_yaml_file(config_path, error_class=ModelConfigError)
         if not content:
-            log.warning("model_config_empty", config_path=str(config_path))
-            # Return empty config with empty models dict
-            return ModelConfig(models={})
+            return {}
     except ConfigLoadError as e:
         raise ModelConfigError(f"Failed to load model config file: {e}") from None
 
@@ -163,8 +157,11 @@ def _load_model_config_at_path(config_path_str: str) -> ModelConfig:
     if "roles" not in content and config_path.resolve() in _REAL_CATALOGS:
         raw = load_yaml_file(ROLE_BINDINGS_PATH, error_class=ModelConfigError) or {}
         content = {**content, "roles": raw.get("bindings", {})}
+    return content
 
-    # Validate against Pydantic schema
+
+def _validate_catalog(content: Mapping[str, object]) -> ModelConfig:
+    """Validate catalog content against the Pydantic schema."""
     try:
         config = ModelConfig.model_validate(content)
         log.info(
@@ -187,6 +184,108 @@ def _load_model_config_at_path(config_path_str: str) -> ModelConfig:
         raise ModelConfigError(f"Unexpected error validating model config: {e}") from None
 
 
+@functools.lru_cache(maxsize=8)
+def _load_model_config_at_path(config_path_str: str) -> ModelConfig:
+    """Load and validate model configuration for a resolved path."""
+    config_path = Path(config_path_str)
+
+    log.info("loading_model_config", config_path=str(config_path))
+
+    content = _read_catalog_content(config_path)
+    if not content:
+        log.warning("model_config_empty", config_path=str(config_path))
+        # Return empty config with empty models dict
+        return ModelConfig(models={})
+
+    return _validate_catalog(content)
+
+
+def _with_role_deployment(
+    content: Mapping[str, object], role: str, deployment: str
+) -> dict[str, object]:
+    """Return catalog content with one role bound to another deployment."""
+    roles = content.get("roles")
+    if not isinstance(roles, dict) or not isinstance(roles.get(role), dict):
+        raise ModelConfigError(f"role {role!r} is not bound in config/model_roles.yaml bindings:")
+    return {**content, "roles": {**roles, role: {**roles[role], "deployment": deployment}}}
+
+
+@functools.lru_cache(maxsize=8)
+def _load_model_config_with_overrides(
+    config_path_str: str, overrides: tuple[tuple[str, str], ...]
+) -> ModelConfig:
+    """Return the catalog with the stored role bindings applied (FRE-1722).
+
+    Each override goes through the model that loads the file. One that fails, for example
+    after a deploy removed its deployment, is skipped. Every turn loads the catalog, so a stored
+    row must never make this raise. The settings menu shows a skipped override as not usable.
+
+    Args:
+        config_path_str: The resolved path of a real catalog.
+        overrides: ``(role, deployment)`` pairs from :func:`role_overrides`.
+
+    Returns:
+        The catalog with each usable override applied.
+    """
+    config = _load_model_config_at_path(config_path_str)
+    content: Mapping[str, object] = _read_catalog_content(Path(config_path_str))
+    for role, deployment in overrides:
+        try:
+            candidate = _with_role_deployment(content, role, deployment)
+            config = _validate_catalog(candidate)
+        except ModelConfigError as exc:
+            log.warning("role_override_skipped", role=role, deployment=deployment, error=str(exc))
+            continue
+        content = candidate
+    return config
+
+
+def validate_role_override(role: str, deployment: str) -> None:
+    """Check a proposed role binding with the model that loads the file (FRE-1722).
+
+    Args:
+        role: A role bound in ``config/model_roles.yaml``.
+        deployment: The proposed deployment key, or ``INHERIT_DEPLOYMENT``.
+
+    Raises:
+        ModelConfigError: If the role is not bound or the catalog refuses the binding. The
+            message states the reason.
+    """
+    content = _read_catalog_content(CATALOG_PATH)
+    _validate_catalog(_with_role_deployment(content, role, deployment))
+
+
+def file_role_deployments() -> Mapping[str, str]:
+    """Return the deployment that the config file binds to each role, with no override."""
+    config = _load_model_config_at_path(str(CATALOG_PATH))
+    return {role: binding.deployment for role, binding in config.roles.items()}
+
+
+def role_binding_options(
+    role: str, config: ModelConfig, *, is_provider_available: Callable[[str], bool]
+) -> list[str]:
+    """Return the values that the settings menu offers for a role binding (FRE-1722).
+
+    Args:
+        role: The role being edited.
+        config: The catalog to read.
+        is_provider_available: The predicate of ``build_provider_availability``.
+
+    Returns:
+        The kind-compatible deployment keys whose provider has its credential, in catalog
+        order. A non-primary llm role can also inherit the primary.
+    """
+    required = required_kind_for_role(role)
+    options = [
+        key
+        for key, model in config.models.items()
+        if model.kind is required and model.provider and is_provider_available(model.provider)
+    ]
+    if required is ModelKind.LLM and role != "primary":
+        return [INHERIT_DEPLOYMENT, *options]
+    return options
+
+
 def load_model_config(
     config_path: Path | str | None = None,
     *,
@@ -205,7 +304,8 @@ def load_model_config(
             to resolve deterministically against *that* config instead.
 
     Returns:
-        Validated ModelConfig object (not a raw dict).
+        Validated ModelConfig object (not a raw dict). For the real catalog, a role binding that
+        the owner stored in the settings menu wins over the file (FRE-1722).
 
     Raises:
         ModelConfigError: If configuration cannot be loaded, parsed, or validated.
@@ -235,7 +335,12 @@ def load_model_config(
     if not config_path.is_file():
         raise ModelConfigError(f"Model config path is not a file: {config_path}")
 
-    return _resolve_slm_endpoints(_load_model_config_at_path(str(config_path)), settings)
+    overrides = role_overrides()
+    if overrides and config_path in _REAL_CATALOGS:
+        config = _load_model_config_with_overrides(str(config_path), overrides)
+    else:
+        config = _load_model_config_at_path(str(config_path))
+    return _resolve_slm_endpoints(config, settings)
 
 
 @functools.lru_cache(maxsize=8)
@@ -268,7 +373,8 @@ def resolve_role_model_key(
     no ``deployment`` key, or a resolved key absent from the catalog's
     ``models:`` mapping all raise. A ``deployment`` of ``inherit`` resolves via
     :func:`resolve_inherited_deployment` rather than being returned literally
-    (ADR-0145 D1).
+    (ADR-0145 D1). A role binding that the owner stored in the settings menu wins over the
+    table (FRE-1722).
 
     Args:
         role: The binding's role name (e.g. ``"entity_extraction"``).
@@ -323,6 +429,15 @@ def resolve_role_model_key(
     model_key = raw_model_key
 
     resolved_config = load_model_config(resolved_config_path)
+    # FRE-1722: a stored override wins over the matrix. Read it from the loaded catalog, which
+    # has already skipped an override that no longer validates.
+    if (
+        resolved_root.resolve() == repo_root().resolve()
+        and resolved_config_path in _REAL_CATALOGS
+        and role in dict(role_overrides())
+        and role in resolved_config.roles
+    ):
+        model_key = resolved_config.roles[role].deployment
     if model_key == INHERIT_DEPLOYMENT:
         model_key = resolve_inherited_deployment(resolved_config)
     if model_key not in resolved_config.models:

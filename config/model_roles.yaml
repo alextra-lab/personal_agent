@@ -1,6 +1,9 @@
 # config/model_roles.yaml — role→model assignment (ADR-0099 D1 stage 2, FRE-650;
 # ADR-0121 Layer 3; ADR-0145 D4)
 #
+# A binding here is the default. A value that the owner stores in the PWA settings menu
+# wins over it with no rebuild, and Clear restores this value (FRE-1722).
+#
 # The ONE hand-edited home for role→model assignment. There is a single role
 # table — `bindings:` below. It used to be split across two top-level keys:
 # `roles:` (the original ADR-0099 matrix, `{all: <key>}` shape, read by

@@ -624,6 +624,21 @@ def valid_preference_actions(constraint: str) -> set[str]:
     return {"always_pause", *option_ids(constraint)}
 
 
+def preference_options(constraint: str, config: "ModelConfig | None") -> list[str]:
+    """Return the values of :func:`valid_preference_actions` in display order (FRE-1722).
+
+    Args:
+        constraint: The constraint name.
+        config: The catalog, which a computed constraint reads. A static one ignores it.
+
+    Returns:
+        The option list, then the reserved ``always_pause``.
+    """
+    if constraint in COMPUTED_OPTION_CONSTRAINTS:
+        return [*(_catalog_llm_keys(config) if config is not None else []), "always_pause"]
+    return [*option_ids(constraint), "always_pause"]
+
+
 def _catalog_llm_keys(config: "ModelConfig") -> list[str]:
     """Return the catalog deployment keys of ``kind: llm``, in catalog order."""
     from personal_agent.llm_client.models import ModelKind

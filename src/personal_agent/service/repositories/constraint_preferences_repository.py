@@ -11,6 +11,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.service.models import UserConstraintPreferenceModel
+from personal_agent.service.repositories.settings_overrides_repository import (
+    record_settings_edit,
+)
+
+#: The settings menu row name of a saved choice is this prefix and the constraint name.
+SAVED_CHOICE_PARAMETER_PREFIX = "saved_choice."
 
 
 class ConstraintPreferencesRepository:
@@ -85,12 +91,21 @@ class ConstraintPreferencesRepository:
                 UserConstraintPreferenceModel.user_id == user_id,
                 UserConstraintPreferenceModel.constraint_name == constraint_name,
             )
-            .returning(UserConstraintPreferenceModel.constraint_name)
+            .returning(UserConstraintPreferenceModel.preferred_action)
         )
         result = await self.db.execute(stmt)
-        deleted = result.first() is not None
+        row = result.first()
+        if row is not None:
+            await record_settings_edit(
+                self.db,
+                parameter=f"{SAVED_CHOICE_PARAMETER_PREFIX}{constraint_name}",
+                action="clear",
+                changed_by=user_id,
+                old_value=str(row[0]),
+                new_value=None,
+            )
         await self.db.commit()
-        return deleted
+        return row is not None
 
     async def upsert(
         self,
@@ -108,6 +123,7 @@ class ConstraintPreferencesRepository:
             preferred_action: Stable ``action_id`` or the literal ``always_pause``.
             source_session_id: Session where the preference was set (audit trail).
         """
+        old_value = await self.get_preferred_action(user_id, constraint_name)
         now = datetime.now(UTC)
         stmt = (
             pg_insert(UserConstraintPreferenceModel)
@@ -129,4 +145,12 @@ class ConstraintPreferencesRepository:
             )
         )
         await self.db.execute(stmt)
+        await record_settings_edit(
+            self.db,
+            parameter=f"{SAVED_CHOICE_PARAMETER_PREFIX}{constraint_name}",
+            action="set",
+            changed_by=user_id,
+            old_value=old_value,
+            new_value=preferred_action,
+        )
         await self.db.commit()

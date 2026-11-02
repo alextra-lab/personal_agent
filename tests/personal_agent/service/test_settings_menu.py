@@ -1,4 +1,4 @@
-"""Tests for the read-only settings menu payload (FRE-1702, stage 1 of FRE-1698).
+"""Tests for the settings menu payload (FRE-1702, FRE-1722; FRE-1698).
 
 Proves AC-2 (a saved choice shows beside the default it overrides), AC-4 (no response
 carries a secret or infrastructure value) and the backend half of AC-5 (only a saved
@@ -17,11 +17,13 @@ from personal_agent.config import (
     load_model_config,
     settings,
 )
+from personal_agent.config.model_loader import file_role_deployments
 from personal_agent.config.seshat_effort import load_seshat_effort
 from personal_agent.config.settings import AppConfig
 from personal_agent.cost_gate import load_budget_config
 from personal_agent.orchestrator.constraint_options import (
     CONSTRAINT_OPTIONS,
+    PREFERENCE_NEVER_APPLIED,
     artifact_builder_default_key,
     default_action_id,
 )
@@ -479,3 +481,209 @@ def test_scrub_keeps_plain_values(leaf: str) -> None:
     assert scrub(leaf) == leaf
     assert scrub(7) == 7
     assert scrub(None) is None
+
+
+# ---------------------------------------------------------------------------
+# FRE-1722: edit fields on role binding and saved choice rows
+# ---------------------------------------------------------------------------
+
+
+def _overridden_inputs(role: str, deployment: str, **overrides: object) -> MenuInputs:
+    """Inputs with one stored override applied, as the gateway holds them after an edit."""
+    from personal_agent.config.setting_overrides import replace_overrides
+
+    file_bindings = file_role_deployments()
+    replace_overrides({f"role.{role}": deployment})
+    try:
+        models = load_model_config()
+    finally:
+        replace_overrides({})
+    return _inputs(
+        models=models,
+        file_bindings=file_bindings,
+        overrides={f"role.{role}": deployment},
+        **overrides,
+    )
+
+
+def _other_llm(role: str) -> str:
+    config = load_model_config()
+    bound = config.roles[role].deployment
+    return next(
+        key for key, model in config.models.items() if model.kind.value == "llm" and key != bound
+    )
+
+
+def test_owner_sees_a_control_and_the_file_default_on_a_role_row() -> None:
+    bound = load_model_config().roles["compressor"].deployment
+    row = _row(build_menu(_inputs(is_owner=True)), "models_per_role", "role.compressor")
+    assert row.source == "config file"
+    assert row.file_default is not None
+    assert row.file_default.value == bound
+    assert row.file_default.source == "config file"
+    assert row.edit is not None
+    assert row.edit.kind == "role_binding"
+    assert row.edit.current == bound
+    assert bound in row.edit.options
+    assert "embedding" not in row.edit.options
+    assert row.clearable is False
+
+
+def test_a_non_owner_sees_the_file_default_but_no_role_control() -> None:
+    row = _row(build_menu(_inputs(is_owner=False)), "models_per_role", "role.compressor")
+    assert row.file_default is not None
+    assert row.edit is None
+    assert row.clearable is False
+
+
+def test_an_applied_override_shows_as_the_winning_source_with_clear() -> None:
+    target = _other_llm("compressor")
+    file_key = load_model_config().roles["compressor"].deployment
+    menu = build_menu(_overridden_inputs("compressor", target, is_owner=True))
+    row = _row(menu, "models_per_role", "role.compressor")
+    assert row.value == target
+    assert row.source == "override"
+    assert row.file_default is not None
+    assert row.file_default.value == file_key
+    assert row.clearable is True
+    assert row.edit is not None
+    assert row.edit.current == target
+
+
+def test_a_non_owner_gets_no_clear_on_an_override() -> None:
+    target = _other_llm("compressor")
+    menu = build_menu(_overridden_inputs("compressor", target, is_owner=False))
+    row = _row(menu, "models_per_role", "role.compressor")
+    assert row.source == "override"
+    assert row.clearable is False
+    assert row.edit is None
+
+
+def test_a_stale_override_says_so_and_can_be_cleared() -> None:
+    stale = "no_such_deployment"
+    menu = build_menu(
+        _inputs(
+            is_owner=True,
+            overrides={"role.compressor": stale},
+            file_bindings=file_role_deployments(),
+        )
+    )
+    row = _row(menu, "models_per_role", "role.compressor")
+    assert row.source == "config file"
+    assert row.note is not None
+    assert stale in row.note
+    assert row.clearable is True
+
+
+def test_a_session_selection_still_beats_an_edited_primary_and_says_so() -> None:
+    """An open conversation stores its own primary. The edit reaches new conversations."""
+    target = _other_llm("primary")
+    session_key = next(
+        key
+        for key, model in load_model_config().models.items()
+        if model.kind.value == "llm" and key not in (target, load_model_config().roles["primary"].deployment)
+    )
+    menu = build_menu(
+        _overridden_inputs(
+            "primary",
+            target,
+            is_owner=True,
+            session=SessionInputs(selections={"primary": session_key}, effort_level=None),
+        )
+    )
+    row = _row(menu, "models_per_role", "role.primary")
+    assert row.value == session_key
+    assert row.source == "session"
+    assert row.overrides is not None
+    assert row.overrides.value == target
+    assert row.overrides.source == "override"
+    assert row.note is not None
+    assert "new conversations" in row.note
+    session_row = _row(menu, "conversation", "session.primary_model")
+    assert session_row.overrides is not None
+    assert session_row.overrides.source == "override"
+
+
+def test_a_saved_choice_still_shows_beside_an_edited_artifact_builder_binding() -> None:
+    """A saved choice beats the binding. The row must show both (FRE-1698)."""
+    target = _other_llm("artifact_builder")
+    saved = next(
+        key
+        for key, model in load_model_config().models.items()
+        if model.kind.value == "llm" and key not in (target, load_model_config().roles["artifact_builder"].deployment)
+    )
+    menu = build_menu(
+        _overridden_inputs(
+            "artifact_builder",
+            target,
+            is_owner=True,
+            saved_choices={"artifact_builder": saved},
+        )
+    )
+    row = _row(menu, "models_per_role", "role.artifact_builder")
+    assert row.value == saved
+    assert row.source == "database row"
+    assert row.overrides is not None
+    assert row.overrides.value == target
+    assert row.overrides.source == "override"
+
+
+def test_inherit_role_can_be_edited_and_shows_its_literal_binding() -> None:
+    row = _row(build_menu(_inputs(is_owner=True)), "models_per_role", "role.sub_agent")
+    assert row.edit is not None
+    assert row.edit.current == "inherit"
+    assert row.file_default is not None
+    assert row.file_default.value == "inherit"
+
+
+def test_an_inherit_row_reads_its_own_override_not_the_primary_override() -> None:
+    own = build_menu(_overridden_inputs("compressor", "inherit", is_owner=True))
+    row = _row(own, "models_per_role", "role.compressor")
+    assert row.source == "override"
+    assert row.clearable is True
+
+    primary = build_menu(_overridden_inputs("primary", _other_llm("primary"), is_owner=True))
+    row = _row(primary, "models_per_role", "role.sub_agent")
+    assert row.source == "config file"
+    assert row.clearable is False
+
+
+def test_a_saved_choice_row_shows_a_control_and_its_default_to_every_user() -> None:
+    row = _row(build_menu(_inputs(is_owner=False)), "saved_choices", "saved_choice.tool_iteration_limit")
+    assert row.value == "not set"
+    assert row.file_default is not None
+    assert "finish_now" in str(row.file_default.value)
+    assert row.edit is not None
+    assert row.edit.kind == "saved_choice"
+    assert row.edit.options == ["continue_10", "finish_now", "always_pause"]
+    assert row.edit.current is None
+
+
+def test_a_saved_artifact_builder_row_shows_the_file_binding_as_its_default() -> None:
+    target = _other_llm("artifact_builder")
+    file_key = load_model_config().roles["artifact_builder"].deployment
+    menu = build_menu(
+        _overridden_inputs("artifact_builder", target, saved_choices={"artifact_builder": target})
+    )
+    row = _row(menu, "saved_choices", "saved_choice.artifact_builder")
+    assert row.file_default is not None
+    assert row.file_default.value == file_key
+    assert row.edit is not None
+    assert row.edit.current == target
+    assert "always_pause" in row.edit.options
+    assert row.overrides is not None
+    assert row.overrides.source == "override"
+
+
+@pytest.mark.parametrize("constraint", sorted(PREFERENCE_NEVER_APPLIED))
+def test_a_choice_that_the_turn_never_applies_has_no_control(constraint: str) -> None:
+    row = _row(build_menu(_inputs()), "saved_choices", f"saved_choice.{constraint}")
+    assert row.edit is None
+    assert row.file_default is not None
+
+
+def test_a_group_builder_keeps_working_with_no_catalog_for_saved_choices() -> None:
+    menu = build_menu(_inputs(models=None))
+    group = next(g for g in menu.groups if g.id == "saved_choices")
+    assert group.error is None
+    assert _row(menu, "saved_choices", "saved_choice.artifact_builder").edit is None

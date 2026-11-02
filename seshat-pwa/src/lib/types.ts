@@ -509,11 +509,11 @@ export interface ClassifiedErrorData {
 }
 
 // --------------------------------------------------------------------------
-// FRE-1702 — read-only settings menu (GET /api/v1/settings)
+// FRE-1702, FRE-1722 — settings menu (GET /api/v1/settings)
 // --------------------------------------------------------------------------
 
 /** The source that wins for a parameter's next-turn value. */
-export type SettingSource = 'code default' | '.env' | 'config file' | 'database row' | 'session';
+export type SettingSource = 'code default' | '.env' | 'config file' | 'database row' | 'session' | 'override';
 
 /** A JSON-compatible parameter value. A secret or infrastructure value is "set" or "not set". */
 export type SettingValue =
@@ -524,6 +524,14 @@ export type SettingValue =
   | SettingValue[]
   | { [key: string]: SettingValue };
 
+/** The edit control of a row. `kind` names the write that the control calls. */
+export interface SettingEdit {
+  kind: 'role_binding' | 'saved_choice';
+  options: string[];
+  /** The stored or bound value. Null when nothing is stored. */
+  current: string | null;
+}
+
 /** One parameter in the settings menu. */
 export interface SettingRow {
   name: string;
@@ -531,9 +539,13 @@ export interface SettingRow {
   source: SettingSource;
   /** The value this row overrides, when it overrides one. */
   overrides: { value: SettingValue; source: SettingSource } | null;
-  /** True only for a saved choice that exists: the Clear button reads it. */
+  /** True for a saved choice or an override that exists: the Clear button reads it. */
   clearable: boolean;
   note: string | null;
+  /** The value that applies with no edit, and where it lives. */
+  file_default: { value: SettingValue; source: SettingSource } | null;
+  /** The edit control, for a row that this user can edit. */
+  edit: SettingEdit | null;
 }
 
 /** A menu group. `error` is the fixed code "unavailable" when the group failed to load. */

@@ -509,6 +509,28 @@ CREATE TABLE IF NOT EXISTS user_constraint_preferences (
     PRIMARY KEY (user_id, constraint_name)
 );
 
+-- The settings override store and its audit record (FRE-1722). Mirrors
+-- docker/postgres/migrations/0037_settings_overrides.sql.
+CREATE TABLE IF NOT EXISTS settings_overrides (
+    parameter  TEXT PRIMARY KEY,
+    value      JSONB NOT NULL,
+    updated_by UUID NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS settings_edit_audit (
+    audit_id   BIGSERIAL PRIMARY KEY,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changed_by UUID NOT NULL,
+    parameter  TEXT NOT NULL,
+    action     TEXT NOT NULL CHECK (action IN ('set', 'clear')),
+    old_value  JSONB,
+    new_value  JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_settings_edit_audit_parameter
+    ON settings_edit_audit (parameter, changed_at DESC);
+
 -- Session-scoped model selections (ADR-0121 §4 / FRE-917).
 -- Server-authoritative store for which model a role runs in a session — the
 -- replacement for execution-profile "Path" as the source of truth (ADR-0079's

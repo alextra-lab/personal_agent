@@ -1,9 +1,10 @@
-"""Read-only settings menu payload (FRE-1702, stage 1 of FRE-1698).
+"""Settings menu payload (FRE-1702, FRE-1722; FRE-1698).
 
 Builds the one response that the PWA settings menu renders: nine groups and a System
 group. Each row carries the parameter name, its live value, the source that wins, and
-(for an override) the value it overrides. The menu edits nothing. The only write is the
-``DELETE /api/v1/preferences/constraint`` that clears a saved choice.
+(for an override) the value it overrides. A role binding and a saved choice also carry the
+default that applies with no edit, and their edit control. The writes live in
+``settings_edit`` and in ``/api/v1/preferences/constraint``. This module writes nothing.
 
 Values come from the running gateway: the loaded ``AppConfig``, the loaded catalogs, the
 live ``CostGate`` config, and the database rows. They do not come from repo files.
@@ -24,7 +25,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
@@ -32,6 +33,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_core import to_jsonable_python
 
+from personal_agent.config.setting_overrides import ROLE_PARAMETER_PREFIX
 from personal_agent.config.settings import AppConfig
 from personal_agent.orchestrator.constraint_options import (
     ARTIFACT_BUILDER_CONSTRAINT,
@@ -39,6 +41,7 @@ from personal_agent.orchestrator.constraint_options import (
     PREFERENCE_NEVER_APPLIED,
     artifact_builder_default_key,
     default_action_id,
+    preference_options,
     resolve_artifact_builder_key,
 )
 from personal_agent.service.settings_menu_groups import HIDDEN_VALUE_GROUPS, SETTING_GROUPS
@@ -53,7 +56,7 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-Source = Literal["code default", ".env", "config file", "database row", "session"]
+Source = Literal["code default", ".env", "config file", "database row", "session", "override"]
 
 #: Fields whose default factory reads the process environment. ``model_fields_set`` does
 #: not list them, so the ``.env`` check treats them as env-driven.
@@ -113,6 +116,22 @@ class Overridden(BaseModel):
     source: Source
 
 
+class SettingEdit(BaseModel):
+    """The edit control of a row.
+
+    Attributes:
+        kind: Which write the control calls.
+        options: The values that the control offers.
+        current: The stored or bound value, or ``None`` when nothing is stored.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["role_binding", "saved_choice"]
+    options: list[str]
+    current: str | None
+
+
 class SettingRow(BaseModel):
     """One parameter in the menu.
 
@@ -121,8 +140,11 @@ class SettingRow(BaseModel):
         value: The live value. ``"set"`` or ``"not set"`` for a hidden value.
         source: The source that wins for the next turn.
         overrides: The value that this row overrides, when it overrides one.
-        clearable: ``True`` only for a saved choice that exists. The Clear button reads it.
+        clearable: ``True`` for a saved choice or an override that exists. The Clear button
+            reads it.
         note: A short plain-language remark about the row.
+        file_default: The value that applies with no edit, and where it lives.
+        edit: The edit control, for a row that this user can edit.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -133,6 +155,8 @@ class SettingRow(BaseModel):
     overrides: Overridden | None = None
     clearable: bool = False
     note: str | None = None
+    file_default: Overridden | None = None
+    edit: SettingEdit | None = None
 
 
 class SettingsGroup(BaseModel):
@@ -184,6 +208,10 @@ class MenuInputs:
         location_consent: The user's stored consent, or ``None`` when it could not be read.
         grounding: ``(model_key, level)`` rows of ``grounding_enforcement_state``.
         provider_available: The turn's provider-availability predicate.
+        file_bindings: Role to deployment as the config file states it, with no override.
+            ``None`` means ``models`` holds the file values.
+        overrides: The stored overrides that this process holds.
+        is_owner: Whether the request user can edit a global setting.
     """
 
     app_settings: AppConfig
@@ -196,6 +224,9 @@ class MenuInputs:
     location_consent: bool | None
     grounding: Sequence[tuple[str, str]] | None
     provider_available: Callable[[str], bool]
+    file_bindings: Mapping[str, str] | None = None
+    overrides: Mapping[str, JsonValue] = field(default_factory=dict)
+    is_owner: bool = False
 
 
 class SessionNotFoundError(LookupError):
@@ -239,7 +270,30 @@ def _scrub_row(row: SettingRow) -> SettingRow:
         else None
     )
     note = scrub(row.note) if row.note is not None else None
-    return row.model_copy(update={"value": scrub(row.value), "overrides": overrides, "note": note})
+    file_default = (
+        Overridden(value=scrub(row.file_default.value), source=row.file_default.source)
+        if row.file_default is not None
+        else None
+    )
+    edit = (
+        row.edit.model_copy(
+            update={
+                "options": [str(scrub(option)) for option in row.edit.options],
+                "current": str(scrub(row.edit.current)) if row.edit.current is not None else None,
+            }
+        )
+        if row.edit is not None
+        else None
+    )
+    return row.model_copy(
+        update={
+            "value": scrub(row.value),
+            "overrides": overrides,
+            "note": note,
+            "file_default": file_default,
+            "edit": edit,
+        }
+    )
 
 
 def _json(value: object) -> JsonValue:
@@ -332,15 +386,28 @@ def _effective_primary(inp: MenuInputs) -> tuple[str, str | None]:
     return default, None
 
 
+def _override_applies(inp: MenuInputs, role: str) -> bool:
+    """Return whether a stored override binds this role. A stale one does not."""
+    stored = inp.overrides.get(f"{ROLE_PARAMETER_PREFIX}{role}")
+    binding = inp.models.roles.get(role) if inp.models is not None else None
+    return stored is not None and binding is not None and binding.deployment == stored
+
+
+def _binding_source(inp: MenuInputs, role: str) -> Source:
+    """Return where a role's binding comes from."""
+    return "override" if _override_applies(inp, role) else "config file"
+
+
 def _group_conversation(inp: MenuInputs) -> list[SettingRow]:
     effort = _need(inp.effort)
     primary, primary_default = _effective_primary(inp)
+    binding_source = _binding_source(inp, "primary")
     primary_row = SettingRow(
         name="session.primary_model",
         value=primary,
-        source="session" if primary_default is not None else "config file",
+        source="session" if primary_default is not None else binding_source,
         overrides=(
-            Overridden(value=primary_default, source="config file")
+            Overridden(value=primary_default, source=binding_source)
             if primary_default is not None
             else None
         ),
@@ -363,12 +430,32 @@ def _group_conversation(inp: MenuInputs) -> list[SettingRow]:
 def _saved_choice_default(constraint: str, inp: MenuInputs) -> Overridden:
     if constraint == ARTIFACT_BUILDER_CONSTRAINT:
         return Overridden(
-            value=artifact_builder_default_key(_need(inp.models)), source="config file"
+            value=artifact_builder_default_key(_need(inp.models)),
+            source=_binding_source(inp, ARTIFACT_BUILDER_CONSTRAINT),
         )
     return Overridden(
         value=f"decision card (safe default: {default_action_id(constraint)})",
         source="code default",
     )
+
+
+def _saved_choice_edit(
+    constraint: str, saved: str | None, inp: MenuInputs
+) -> tuple[Overridden | None, SettingEdit | None]:
+    """Return the default with no saved choice, and the control. A saved choice is per user."""
+    if constraint == ARTIFACT_BUILDER_CONSTRAINT and inp.models is None:
+        return None, None
+    file_default = _saved_choice_default(constraint, inp)
+    if constraint == ARTIFACT_BUILDER_CONSTRAINT and inp.file_bindings is not None:
+        file_default = Overridden(
+            value=inp.file_bindings.get(constraint, file_default.value), source="config file"
+        )
+    if constraint in PREFERENCE_NEVER_APPLIED:
+        return file_default, None
+    edit = SettingEdit(
+        kind="saved_choice", options=preference_options(constraint, inp.models), current=saved
+    )
+    return file_default, edit
 
 
 def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
@@ -381,6 +468,7 @@ def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
             if constraint in PREFERENCE_NEVER_APPLIED
             else None
         )
+        file_default, edit = _saved_choice_edit(constraint, saved, inp)
         if saved is None:
             rows.append(
                 SettingRow(
@@ -388,6 +476,8 @@ def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
                     value="not set",
                     source="code default",
                     note=note,
+                    file_default=file_default,
+                    edit=edit,
                 )
             )
             continue
@@ -399,6 +489,8 @@ def _group_saved_choices(inp: MenuInputs) -> list[SettingRow]:
                 overrides=_saved_choice_default(constraint, inp),
                 clearable=True,
                 note=note,
+                file_default=file_default,
+                edit=edit,
             )
         )
     if inp.app_settings.location_enabled:
@@ -421,6 +513,7 @@ def _group_models_per_role(inp: MenuInputs) -> list[SettingRow]:
 
     models = _need(inp.models)
     primary, primary_default = _effective_primary(inp)
+    primary_source = _binding_source(inp, "primary")
     rows: list[SettingRow] = []
     for role, binding in models.roles.items():
         default = resolve_selected_deployment(role, None, models)
@@ -430,9 +523,9 @@ def _group_models_per_role(inp: MenuInputs) -> list[SettingRow]:
                 SettingRow(
                     name=f"role.{role}",
                     value=primary,
-                    source="session" if primary_default is not None else "config file",
+                    source="session" if primary_default is not None else primary_source,
                     overrides=(
-                        Overridden(value=primary_default, source="config file")
+                        Overridden(value=primary_default, source=primary_source)
                         if primary_default is not None
                         else None
                     ),
@@ -444,7 +537,7 @@ def _group_models_per_role(inp: MenuInputs) -> list[SettingRow]:
                 SettingRow(
                     name=f"role.{role}",
                     value=primary,
-                    source="session" if primary_default is not None else "config file",
+                    source="session" if primary_default is not None else _binding_source(inp, role),
                     note=f"{note}; inherits the primary model",
                 )
             )
@@ -452,20 +545,54 @@ def _group_models_per_role(inp: MenuInputs) -> list[SettingRow]:
             rows.append(_artifact_builder_role_row(inp, models, default, note))
         else:
             rows.append(
-                SettingRow(name=f"role.{role}", value=default, source="config file", note=note)
+                SettingRow(
+                    name=f"role.{role}",
+                    value=default,
+                    source=_binding_source(inp, role),
+                    note=note,
+                )
             )
-    return rows
+    return [_with_role_edit(row, inp, models) for row in rows]
+
+
+def _with_role_edit(row: SettingRow, inp: MenuInputs, models: ModelConfig) -> SettingRow:
+    """Add the file default, the stale-override note and the owner's control to a role row."""
+    from personal_agent.config.model_loader import role_binding_options
+
+    role = row.name.removeprefix(ROLE_PARAMETER_PREFIX)
+    binding = models.roles[role].deployment
+    file_binding = (inp.file_bindings or {}).get(role, binding)
+    stored = inp.overrides.get(row.name)
+    notes = [row.note] if row.note else []
+    if stored is not None and not _override_applies(inp, role):
+        notes.append(f"the override {stored} is not usable now, so the file value applies")
+    if role == "primary" and row.source == "session" and inp.is_owner:
+        notes.append("this conversation keeps its own model, so an edit reaches new conversations")
+    update: dict[str, object] = {
+        "file_default": Overridden(value=file_binding, source="config file"),
+        "note": "; ".join(notes) if notes else None,
+    }
+    if inp.is_owner:
+        options = role_binding_options(role, models, is_provider_available=inp.provider_available)
+        update["edit"] = SettingEdit(
+            kind="role_binding",
+            options=options if binding in options else [binding, *options],
+            current=binding,
+        )
+        update["clearable"] = stored is not None
+    return row.model_copy(update=update)
 
 
 def _artifact_builder_role_row(
     inp: MenuInputs, models: ModelConfig, default: str, note: str
 ) -> SettingRow:
     """Show the deployment that the next build uses, by the turn's own resolver."""
+    binding_source = _binding_source(inp, ARTIFACT_BUILDER_CONSTRAINT)
     if inp.saved_choices is None:
         return SettingRow(
             name=f"role.{ARTIFACT_BUILDER_CONSTRAINT}",
             value=default,
-            source="config file",
+            source=binding_source,
             note=f"{note}; saved choices could not be read, so a saved choice may override this",
         )
     saved = inp.saved_choices.get(ARTIFACT_BUILDER_CONSTRAINT)
@@ -473,7 +600,7 @@ def _artifact_builder_role_row(
         return SettingRow(
             name=f"role.{ARTIFACT_BUILDER_CONSTRAINT}",
             value=default,
-            source="config file",
+            source=binding_source,
             note=note,
         )
     effective = resolve_artifact_builder_key(
@@ -484,13 +611,13 @@ def _artifact_builder_role_row(
             name=f"role.{ARTIFACT_BUILDER_CONSTRAINT}",
             value=effective,
             source="database row",
-            overrides=Overridden(value=default, source="config file"),
+            overrides=Overridden(value=default, source=binding_source),
             note=note,
         )
     return SettingRow(
         name=f"role.{ARTIFACT_BUILDER_CONSTRAINT}",
         value=default,
-        source="config file",
+        source=binding_source,
         note=f"{note}; the saved choice {saved} is not usable now, so the default applies",
     )
 
@@ -665,6 +792,7 @@ async def collect_inputs(
     session_id: UUID | None,
     location_consent: bool | None,
     trace_id: str,
+    is_owner: bool = False,
 ) -> MenuInputs:
     """Read every source that the menu shows.
 
@@ -674,6 +802,7 @@ async def collect_inputs(
         session_id: The open conversation, or ``None``.
         location_consent: The user's consent as the route read it, or ``None`` when unread.
         trace_id: Trace identifier for failure logs.
+        is_owner: Whether the request user can edit a global setting.
 
     Returns:
         The inputs for :func:`build_menu`. A source that fails to load is ``None``.
@@ -688,7 +817,9 @@ async def collect_inputs(
         load_model_config,
         settings,
     )
+    from personal_agent.config.model_loader import file_role_deployments
     from personal_agent.config.seshat_effort import load_seshat_effort
+    from personal_agent.config.setting_overrides import current_overrides
     from personal_agent.cost_gate import get_default_gate_or_none
     from personal_agent.orchestrator.constraint_options import build_provider_availability
     from personal_agent.service.models import GroundingEnforcementStateModel
@@ -748,4 +879,7 @@ async def collect_inputs(
             if models is not None
             else (lambda _provider: False)
         ),
+        file_bindings=_load_or_none("file_bindings", file_role_deployments, trace_id),
+        overrides=current_overrides(),
+        is_owner=is_owner,
     )

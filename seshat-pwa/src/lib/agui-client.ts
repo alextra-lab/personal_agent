@@ -20,6 +20,7 @@ import type {
   SeshatEffort,
   SessionConfig,
   SettingsMenu,
+  SettingValue,
 } from './types';
 
 /**
@@ -869,7 +870,79 @@ export async function getSettingsMenu(sessionId?: string): Promise<SettingsMenu>
 }
 
 /**
- * Clear one saved constraint choice (FRE-1702). The only write in the settings menu.
+ * Read the reason from a refused settings write. FastAPI puts it in `detail`.
+ *
+ * @param resp - The non-2xx response.
+ * @param name - The function name, for the fallback message.
+ * @returns The Error to throw.
+ */
+async function settingsWriteError(resp: Response, name: string): Promise<Error> {
+  const body = (await resp.json().catch(() => null)) as { detail?: unknown } | null;
+  return new Error(typeof body?.detail === 'string' ? body.detail : `${name} failed: ${resp.status}`);
+}
+
+/**
+ * Save one constraint choice from the settings menu (FRE-1722).
+ *
+ * @param constraintName - The constraint.
+ * @param preferredAction - The action id, or `always_pause`.
+ * @returns The stored constraint name and action.
+ * @throws Error with the API's reason when the backend refuses the write.
+ */
+export async function setConstraintPreference(
+  constraintName: string,
+  preferredAction: string,
+): Promise<{ constraint_name: string; preferred_action: string }> {
+  const resp = await fetch(`${SESHAT_API}/api/v1/preferences/constraint`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ constraint_name: constraintName, preferred_action: preferredAction }),
+  });
+  if (!resp.ok) throw await settingsWriteError(resp, 'setConstraintPreference');
+  return resp.json() as Promise<{ constraint_name: string; preferred_action: string }>;
+}
+
+/**
+ * Store one settings override (FRE-1722). It wins over the config file with no rebuild.
+ *
+ * @param parameter - The menu row name, for example `role.compressor`.
+ * @param value - The new value.
+ * @returns The stored parameter and value.
+ * @throws Error with the API's reason when the backend refuses the write.
+ */
+export async function setSettingOverride(
+  parameter: string,
+  value: SettingValue,
+): Promise<{ parameter: string; value: SettingValue }> {
+  const resp = await fetch(`${SESHAT_API}/api/v1/settings/overrides`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ parameter, value }),
+  });
+  if (!resp.ok) throw await settingsWriteError(resp, 'setSettingOverride');
+  return resp.json() as Promise<{ parameter: string; value: SettingValue }>;
+}
+
+/**
+ * Clear one settings override (FRE-1722). The config file value applies again.
+ *
+ * @param parameter - The menu row name.
+ * @returns The parameter and whether a row existed and was deleted.
+ * @throws Error with the API's reason when the backend refuses the write.
+ */
+export async function clearSettingOverride(
+  parameter: string,
+): Promise<{ parameter: string; cleared: boolean }> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/settings/overrides?parameter=${encodeURIComponent(parameter)}`,
+    { method: 'DELETE', headers: authHeaders() },
+  );
+  if (!resp.ok) throw await settingsWriteError(resp, 'clearSettingOverride');
+  return resp.json() as Promise<{ parameter: string; cleared: boolean }>;
+}
+
+/**
+ * Clear one saved constraint choice (FRE-1702).
  *
  * @param constraintName - The constraint whose saved choice is cleared.
  * @returns The constraint name and whether a row existed and was deleted.

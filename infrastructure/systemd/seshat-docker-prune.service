@@ -1,0 +1,16 @@
+[Unit]
+Description=Weekly removal of Docker build cache older than one week
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=debian
+Group=debian
+
+# Removes only build cache older than 168 hours, so the next rebuild stays fast.
+# Images and volumes stay: the eval and test stacks may need stopped images.
+ExecStart=/usr/bin/docker builder prune -a -f --filter until=168h
+
+StandardOutput=journal
+StandardError=journal

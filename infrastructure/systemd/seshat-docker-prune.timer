@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly trigger for seshat-docker-prune.service
+
+[Timer]
+# Fire at 03:00 UTC every Sunday.
+OnCalendar=Sun *-*-* 03:00:00
+# If the VPS was down at that time, run as soon as it comes back up.
+Persistent=true
+RandomizedDelaySec=60
+Unit=seshat-docker-prune.service
+
+[Install]
+WantedBy=timers.target

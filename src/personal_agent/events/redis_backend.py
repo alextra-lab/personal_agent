@@ -15,6 +15,8 @@ from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
+_SOCKET_TIMEOUT_MARGIN_S = 5.0
+
 
 class Subscription:
     """Metadata for a single consumer-group subscription.
@@ -84,10 +86,19 @@ class RedisStreamBus:
         Raises:
             redis.ConnectionError: If Redis is unreachable.
         """
-        url = redis_url or get_settings().event_bus_redis_url
-        client: aioredis.Redis = aioredis.from_url(url, decode_responses=True)
+        settings = get_settings()
+        url = redis_url or settings.event_bus_redis_url
+        # FRE-1715: redis-py 8 defaults socket_timeout to 5 s, and the socket read
+        # also covers the consumer's blocking XREADGROUP, so the timeout must outlast
+        # the block. A stalled server still fails within the margin.
+        socket_timeout = (
+            settings.event_bus_consumer_poll_interval_ms / 1000 + _SOCKET_TIMEOUT_MARGIN_S
+        )
+        client: aioredis.Redis = aioredis.from_url(
+            url, decode_responses=True, socket_timeout=socket_timeout
+        )
         # Verify connectivity
-        await client.ping()  # type: ignore[misc]
+        await client.ping()
         log.info("redis_stream_bus_connected", redis_url=url)
         return cls(client)
 

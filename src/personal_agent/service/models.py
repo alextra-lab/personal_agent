@@ -1,6 +1,7 @@
 """Data models for service layer."""
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -8,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    Column,
     DateTime,
     Float,
     ForeignKey,
@@ -21,7 +21,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from personal_agent.config.seshat_effort import EffortLevel
 from personal_agent.llm_client.message_content import MessageContent
@@ -46,10 +46,10 @@ class UserModel(Base):
 
     __tablename__ = "users"
 
-    user_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    email = Column(Text, unique=True, nullable=False)
-    display_name = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 # ============================================================================
@@ -230,43 +230,49 @@ class SessionModel(Base):
 
     __tablename__ = "sessions"
 
-    session_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(
+    session_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=False,
         index=True,
     )
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    last_active_at = Column(DateTime(timezone=True), nullable=False)
-    mode = Column(String(20), nullable=False, default="NORMAL")
-    channel = Column(String(50), nullable=True)
-    metadata_ = Column("metadata", JSONB, default=dict)
-    messages = Column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="NORMAL")
+    channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, default=dict)
+    messages: Mapped[list[Any] | None] = mapped_column(JSONB, default=list)
     # ADR-0074 (FRE-376) — row-level model attribution. NULL on historical
     # rows; populated for every new session by SessionRepository.create.
-    primary_model_at_creation = Column(String(120), nullable=True)
-    model_config_path = Column(String(255), nullable=True)
+    primary_model_at_creation: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    model_config_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # ADR-0079 (FRE-416) — server-authoritative execution profile. Explicit
     # stored value ('local' | 'cloud'); never a silent request-time fallback.
-    execution_profile = Column(String(50), nullable=False, default="local", server_default="local")
+    execution_profile: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="local", server_default="local"
+    )
     # ADR-0098 D4/D6 (FRE-860) — retention soft-prune tombstone. NULL = not yet
     # purged; set by the scheduled retention sweep, cleared on resume (any
     # write to messages via append_message/update).
-    purged_at = Column(DateTime(timezone=True), nullable=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # FRE-1040 / ADR-0075 — per-session allocator for session_events.seq. The
     # transport client dispatches only a contiguous run per session, so the
     # numbers cannot come from a sequence shared across sessions.
-    last_event_seq = Column(Integer, nullable=False, default=0, server_default="0")
+    last_event_seq: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # ADR-0156 A5.4 (FRE-1595) — skill-provided tools revealed in this session. Written only
     # by SessionRepository.add_revealed_tools; SessionUpdate has no field for it.
-    revealed_tools: Column[list[str]] = Column(
+    revealed_tools: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
     # ADR-0157 D2 (FRE-1622) — the session's Seshat effort level. Every creation path
     # writes it explicitly; the server default only backfills pre-migration rows. The
     # database checks the three values (ck_sessions_seshat_effort).
-    seshat_effort = Column(String(16), nullable=False, server_default="standard")
+    seshat_effort: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="standard"
+    )
 
 
 class MetricModel(Base):
@@ -274,13 +280,13 @@ class MetricModel(Base):
 
     __tablename__ = "metrics"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime(timezone=True), nullable=False)
-    trace_id = Column(PG_UUID(as_uuid=True), nullable=True)
-    metric_name = Column(String(100), nullable=False)
-    metric_value = Column(Float, nullable=False)
-    unit = Column(String(20), nullable=True)
-    tags = Column(JSONB, default=dict)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    trace_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    metric_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    metric_value: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    tags: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=dict)
 
 
 # ============================================================================
@@ -305,14 +311,14 @@ class BudgetPolicyModel(Base):
 
     __tablename__ = "budget_policies"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(PG_UUID(as_uuid=True), nullable=True)
-    time_window = Column(String(16), nullable=False)
-    provider = Column(String(32), nullable=True)
-    role = Column(String(64), nullable=False)
-    cap_usd = Column(Numeric(10, 6), nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    updated_at = Column(DateTime(timezone=True), nullable=False)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    time_window: Mapped[str] = mapped_column(String(16), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    cap_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         UniqueConstraint(
@@ -335,14 +341,14 @@ class BudgetCounterModel(Base):
 
     __tablename__ = "budget_counters"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(PG_UUID(as_uuid=True), nullable=True)
-    time_window = Column(String(16), nullable=False)
-    provider = Column(String(32), nullable=True)
-    role = Column(String(64), nullable=False)
-    window_start = Column(DateTime(timezone=True), nullable=False)
-    running_total = Column(Numeric(10, 6), nullable=False, default=0)
-    updated_at = Column(DateTime(timezone=True), nullable=False)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    time_window: Mapped[str] = mapped_column(String(16), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    running_total: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         UniqueConstraint(
@@ -366,21 +372,25 @@ class BudgetReservationModel(Base):
 
     __tablename__ = "budget_reservations"
 
-    reservation_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    counter_id = Column(BigInteger, ForeignKey("budget_counters.id"), nullable=False)
-    role = Column(String(64), nullable=False)
-    amount_usd = Column(Numeric(10, 6), nullable=False)
-    actual_cost_usd = Column(Numeric(10, 6), nullable=True)
-    status = Column(String(16), nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
-    settled_at = Column(DateTime(timezone=True), nullable=True)
-    trace_id = Column(PG_UUID(as_uuid=True), nullable=True)
-    session_id = Column(PG_UUID(as_uuid=True), nullable=True)
-    task_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    reservation_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    counter_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("budget_counters.id"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
+    actual_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trace_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    session_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    task_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     # Every budget_counters id that reserve() incremented (migration 0036, FRE-1690).
     # NULL on rows written before the migration.
-    counter_ids: Column[list[int] | None] = Column(ARRAY(BigInteger), nullable=True)
+    counter_ids: Mapped[list[int] | None] = mapped_column(ARRAY(BigInteger), nullable=True)
 
 
 # ============================================================================
@@ -405,29 +415,29 @@ class ArtifactModel(Base):
 
     __tablename__ = "artifacts"
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=False,
     )
-    session_id = Column(
+    session_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id"),
         nullable=True,
     )
-    type = Column(Text, nullable=False)
-    slug = Column(Text, nullable=True)
-    title = Column(Text, nullable=True)
-    summary = Column(Text, nullable=True)
-    content_type = Column(Text, nullable=False)
-    size_bytes = Column(BigInteger, nullable=False)
-    r2_key = Column(Text, nullable=False, unique=True)
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    r2_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     # tags TEXT[] and embedding vector(1024) are managed at the SQL layer.
-    created_by = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # FRE-369: TRUE while the browser upload is in-flight; FALSE once /complete fires.
-    upload_pending = Column(Boolean, nullable=False, default=False)
+    upload_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 # ============================================================================
@@ -443,16 +453,16 @@ class SessionEventModel(Base):
 
     __tablename__ = "session_events"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    session_id = Column(
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    session_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id"),
         nullable=False,
     )
-    seq = Column(Integer, nullable=False)
-    event_type = Column(Text, nullable=False)
-    payload = Column(JSONB, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         UniqueConstraint("session_id", "seq", name="session_events_session_id_seq_key"),
@@ -470,16 +480,20 @@ class UserConstraintPreferenceModel(Base):
 
     __tablename__ = "user_constraint_preferences"
 
-    user_id = Column(
+    user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="CASCADE"),
         primary_key=True,
     )
-    constraint_name = Column(Text, primary_key=True)
-    preferred_action = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
-    source_session_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    constraint_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    preferred_action: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now
+    )
+    source_session_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
 
 class SettingsOverrideModel(Base):
@@ -491,10 +505,12 @@ class SettingsOverrideModel(Base):
 
     __tablename__ = "settings_overrides"
 
-    parameter = Column(Text, primary_key=True)
-    value: Column[Any] = Column(JSONB, nullable=False)
-    updated_by = Column(PG_UUID(as_uuid=True), nullable=False)
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    parameter: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    updated_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class SettingsEditAuditModel(Base):
@@ -506,13 +522,15 @@ class SettingsEditAuditModel(Base):
 
     __tablename__ = "settings_edit_audit"
 
-    audit_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    changed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    changed_by = Column(PG_UUID(as_uuid=True), nullable=False)
-    parameter = Column(Text, nullable=False)
-    action = Column(Text, nullable=False)
-    old_value: Column[Any] = Column(JSONB(none_as_null=True), nullable=True)
-    new_value: Column[Any] = Column(JSONB(none_as_null=True), nullable=True)
+    audit_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    changed_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    parameter: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    old_value: Mapped[Any] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    new_value: Mapped[Any] = mapped_column(JSONB(none_as_null=True), nullable=True)
 
 
 class SessionModelSelectionModel(Base):
@@ -537,23 +555,23 @@ class SessionModelSelectionModel(Base):
 
     __tablename__ = "session_model_selections"
 
-    session_id = Column(
+    session_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
         primary_key=True,
     )
-    role = Column(Text, primary_key=True)
-    deployment_key = Column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, primary_key=True)
+    deployment_key: Mapped[str] = mapped_column(Text, nullable=False)
     # server_default mirrors init.sql / migration 0020's ``DEFAULT NOW()`` so a
     # table created by ``Base.metadata.create_all`` (init_db on startup) carries
     # the same DDL default. Without it, if the app boots before the migration
     # runs, ``create_all`` makes the columns NOT NULL with no server default and
     # the migration's ``CREATE TABLE IF NOT EXISTS`` no-ops — then its backfill
     # INSERT (which omits these columns) would raise a NOT NULL violation.
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
     )
 
@@ -570,14 +588,14 @@ class ConsolidationAttemptModel(Base):
 
     __tablename__ = "consolidation_attempts"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    trace_id = Column(PG_UUID(as_uuid=True), nullable=False)
-    attempt_number = Column(Integer, nullable=False)
-    role = Column(String(64), nullable=False)
-    started_at = Column(DateTime(timezone=True), nullable=False)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    outcome = Column(String(32), nullable=False)
-    denial_reason = Column(String(64), nullable=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trace_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    denial_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
@@ -600,17 +618,17 @@ class KgStatModel(Base):
 
     __tablename__ = "kg_stats"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     # server_default mirrors init.sql / migration 0026's ``DEFAULT NOW()`` --
     # see SessionModelSelectionModel's created_at/updated_at comment above for
     # why this matters if the app boots and calls create_all before the
     # migration has run.
-    observed_at = Column(
+    observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
     )
-    metric_name = Column(String(64), nullable=False)
-    dimension = Column(String(255), nullable=True)
-    metric_value = Column(Float, nullable=False)
+    metric_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    dimension: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    metric_value: Mapped[float] = mapped_column(Float, nullable=False)
 
     __table_args__ = (
         UniqueConstraint(
@@ -639,26 +657,26 @@ class GroundingComplianceObservationModel(Base):
 
     __tablename__ = "grounding_compliance_observations"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     # server_default mirrors init.sql / migration 0029's ``DEFAULT NOW()`` -- see
     # SessionModelSelectionModel's created_at comment for why this matters if the app
     # boots and calls create_all before the migration has run. The writer always passes
     # an explicit value: this is the *verification* instant, and the write is
     # backgrounded, so letting the default stand would record insertion lag as turn age
     # and weaken exactly the staleness guarantee the column feeds.
-    observed_at = Column(
+    observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
     )
     # The catalog deployment key that actually answered, never the role name: an
     # attachment-routed turn resolves to a different model than its role, and crediting
     # one model's turns to another buys a promotion with someone else's compliance.
-    model_key = Column(String(255), nullable=False)
-    compliant = Column(Boolean, nullable=False)
+    model_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    compliant: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # UNIQUE: one observation per turn. `_record_grounding` has a single call site and
     # only attempt 1 is ever eligible, so a second row for a trace is a defect rather
     # than a legitimate second observation -- and the writer's ON CONFLICT DO NOTHING
     # makes a replay idempotent instead of inflating the numerator.
-    trace_id = Column(String(64), nullable=False, unique=True)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
 
 
 class GroundingEnforcementStateModel(Base):
@@ -681,14 +699,14 @@ class GroundingEnforcementStateModel(Base):
     # The catalog deployment key, matching grounding_compliance_observations.model_key.
     # Primary key rather than a surrogate id: there is exactly one standing state per
     # model, and a table that could hold two is a table where a reader has to guess.
-    model_key = Column(String(255), primary_key=True)
-    level = Column(String(16), nullable=False)
+    model_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
     # NULL means NEVER demoted -- not "demoted long ago". D5 gives the cooldown to a
     # demoted model, so a model that has never been light serves none.
-    demoted_at = Column(DateTime(timezone=True), nullable=True)
+    demoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # The optimistic guard's comparison column: a write whose updated_at is not newer
     # than the stored one is discarded, so a slow turn holding a stale reading cannot
     # reset a cooldown a faster turn just stamped.
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now, server_default=func.now()
     )

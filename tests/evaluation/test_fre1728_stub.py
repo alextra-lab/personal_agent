@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,24 @@ def test_extraction_reply_writes_each_token_in_the_user_message() -> None:
 
     assert [e["name"] for e in reply["entities"]] == ["FACT-AB12"]
     assert reply["claims"][0]["content"] == "The user said: my badge is FACT-AB12"
+
+
+def test_extraction_finds_nothing_without_the_user_and_assistant_markers() -> None:
+    prompt = 'Return ONLY valid JSON "claims": [ ]\nUser: FACT-AB12 has no assistant marker'
+
+    reply = json.loads(stub_model.reply_for({"messages": [{"role": "user", "content": prompt}]}))
+
+    assert reply["entities"] == []
+
+
+def test_extraction_stays_fast_on_a_hostile_prompt() -> None:
+    """CodeQL py/polynomial-redos: a lazy regex was slow on repeated markers."""
+    prompt = 'Return ONLY valid JSON "claims": [ ]\n' + "User: a" * 200_000
+
+    started = time.monotonic()
+    stub_model.reply_for({"messages": [{"role": "user", "content": prompt}]})
+
+    assert time.monotonic() - started < 2.0
 
 
 def test_primary_echoes_only_a_token_outside_its_own_message() -> None:

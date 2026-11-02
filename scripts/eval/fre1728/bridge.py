@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from scripts.eval.eval_isolation import IsolatedArmRunner, wait_for_gateway_idle
 from scripts.eval.fre1337_intent_probe.substrate import EVAL_ARMS
-from scripts.eval.fre1728.spend import SpendCapReached, SpendGuard
+from scripts.eval.fre1728.spend import SpendGuard
 
 GATEWAY_CONTAINERS: dict[str, str] = {
     "control": "cloud-sim-seshat-gateway-control",
@@ -179,14 +179,15 @@ def create_app(deps: BridgeDeps) -> FastAPI:
     app.state.deps = deps
 
     async def cap_response() -> JSONResponse | None:
-        try:
-            await deps.guard.check()
-        except SpendCapReached as exc:
-            if not app.state.deps._stopped:
-                await app.state.deps.ops.stop()
-                app.state.deps._stopped = True
-            return JSONResponse({"stop": True, "detail": str(exc)}, status_code=402)
-        return None
+        spent = await deps.guard.spent()
+        if spent < deps.guard.cap_usd:
+            return None
+        if not app.state.deps._stopped:
+            await app.state.deps.ops.stop()
+            app.state.deps._stopped = True
+        return JSONResponse(
+            {"stop": True, "spent_usd": spent, "cap_usd": deps.guard.cap_usd}, status_code=402
+        )
 
     @app.post("/turn", response_model=None)
     async def turn(request: TurnRequest) -> JSONResponse | dict[str, str]:

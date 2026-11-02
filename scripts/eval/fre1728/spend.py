@@ -24,10 +24,6 @@ _EVAL_POSTGRES_HOST = "localhost"
 _EVAL_POSTGRES_PORT = 5434
 
 
-class SpendCapReached(RuntimeError):
-    """Raised when the pilot's spend reaches the cap."""
-
-
 def assert_eval_postgres_dsn(dsn: str) -> None:
     """Refuse every Postgres but the host port of ``postgres-eval``.
 
@@ -98,7 +94,7 @@ def postgres_budget_denied_reader(dsn: str, since: datetime) -> Callable[[], Awa
 
 @dataclass
 class SpendGuard:
-    """Adds up the pilot's spend and refuses work at the cap.
+    """Adds up the pilot's spend.
 
     Attributes:
         read_gateway_spend: Reads the eval gateway's booked spend.
@@ -129,13 +125,3 @@ class SpendGuard:
             Gateway spend plus MemAudit spend.
         """
         return await self.read_gateway_spend() + self.memaudit_usd
-
-    async def check(self) -> None:
-        """Refuse at or above the cap.
-
-        Raises:
-            SpendCapReached: If the spend is at or above the cap.
-        """
-        spent = await self.spent()
-        if spent >= self.cap_usd:
-            raise SpendCapReached(f"spent {spent:.2f} USD, cap {self.cap_usd:.2f} USD")

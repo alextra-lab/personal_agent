@@ -46,8 +46,9 @@ def _text_of(message: dict[str, object]) -> str:
 
 
 def _extraction_reply(prompt: str) -> str:
-    match = re.search(r"User: (.*?)\nAssistant: ", prompt, re.DOTALL)
-    user_message = match.group(1) if match else ""
+    start = prompt.find("User: ")
+    end = prompt.find("\nAssistant: ", start)
+    user_message = prompt[start + len("User: ") : end] if start >= 0 and end >= 0 else ""
     tokens = sorted(set(_TOKEN.findall(user_message)))
     return json.dumps(
         {

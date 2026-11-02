@@ -435,7 +435,7 @@ async def _cleanup_container(
         try:
             proc.kill()
             await asyncio.wait_for(proc.wait(), timeout=10.0)
-        except (OSError, asyncio.TimeoutError):
+        except OSError, asyncio.TimeoutError:
             pass
     await _force_remove_container(name, trace_id=trace_id)
 

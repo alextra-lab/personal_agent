@@ -284,7 +284,7 @@ def adapt_responses_response(response_data: dict[str, Any]) -> LLMResponse:
                             import json as json_module
 
                             json_module.loads(function_arguments)
-                        except (json_module.JSONDecodeError, ValueError):
+                        except json_module.JSONDecodeError, ValueError:
                             function_arguments = "{}"
 
                     tool_calls.append(

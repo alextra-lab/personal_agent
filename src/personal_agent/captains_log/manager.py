@@ -603,7 +603,7 @@ class CaptainLogManager:
                 check=True,
                 timeout=5,
             )
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        except subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired:
             log.warning(
                 "captains_log_git_not_available",
                 entry_id=entry_id,

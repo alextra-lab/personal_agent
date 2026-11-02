@@ -213,7 +213,7 @@ def _read_log_entries(
                             entry_time = datetime.fromtimestamp(
                                 float(timestamp_str), tz=timezone.utc
                             )
-                    except (ValueError, TypeError):
+                    except ValueError, TypeError:
                         log.warning(
                             "invalid_timestamp",
                             file=str(log_file_path),
@@ -281,7 +281,7 @@ def get_recent_cpu_load(window_seconds: int) -> list[float]:
         if cpu_load is not None:
             try:
                 cpu_loads.append(float(cpu_load))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
 
     return cpu_loads
@@ -300,7 +300,7 @@ def _parse_ts(entry: dict[str, Any]) -> datetime | None:
             if ts.endswith("Z"):
                 ts = ts[:-1] + "+00:00"
             return datetime.fromisoformat(ts)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         pass
     return None
 

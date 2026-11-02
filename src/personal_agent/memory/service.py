@@ -6849,7 +6849,7 @@ class MemoryService:
                         if raw_ts is not None:
                             try:
                                 last_accessed_at = datetime.fromisoformat(str(raw_ts))
-                            except (ValueError, TypeError):
+                            except ValueError, TypeError:
                                 last_accessed_at = None
                         fs = compute_freshness(
                             last_accessed_at=last_accessed_at,

@@ -217,7 +217,7 @@ async def _validate_attachments(
         return []
     try:
         items: list[dict[str, str]] = _json.loads(attachments_json)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         log.warning("chat_stream.invalid_attachments_json", trace_id=trace_id)
         return []
     if not items:

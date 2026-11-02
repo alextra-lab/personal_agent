@@ -166,7 +166,7 @@ class ParamPattern:
         # Typed equality: True must not equal 1, so compare JSON forms.
         try:
             return json.dumps(actual) == json.dumps(self.value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
 
@@ -222,7 +222,7 @@ class PermissionRule:
         if self.session_arguments is not None:
             try:
                 return canonical_arguments(arguments) == self.session_arguments
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return False
         if self.params is None:
             return self.bash_words is None
@@ -750,7 +750,7 @@ def _call_summary(tool: str, arguments: Mapping[str, object]) -> str:
         return str(arguments["command"])
     try:
         return canonical_arguments(arguments)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return repr(dict(arguments))
 
 

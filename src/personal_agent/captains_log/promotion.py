@@ -328,7 +328,7 @@ class PromotionPipeline:
                     age_days = (now - first_seen).days
                     if age_days < self.criteria.min_age_days:
                         continue
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     continue
 
             category_raw = pc.get("category")

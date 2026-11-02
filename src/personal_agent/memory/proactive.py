@@ -70,7 +70,7 @@ def _recency_subscore(timestamp_iso: str | None, half_life_days: float) -> float
         now = datetime.now(timezone.utc)
         age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
         return float(math.exp(-math.log(2) * age_days / half_life_days))
-    except (ValueError, TypeError, OSError):
+    except ValueError, TypeError, OSError:
         return 0.0
 
 

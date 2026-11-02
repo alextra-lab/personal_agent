@@ -99,7 +99,7 @@ def _get_memory_service() -> Any:
     """
     try:
         from personal_agent.service.app import memory_service as global_memory_service
-    except (ImportError, AttributeError):
+    except ImportError, AttributeError:
         return None
     return global_memory_service
 

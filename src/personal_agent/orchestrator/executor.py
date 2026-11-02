@@ -483,7 +483,7 @@ async def _save_constraint_preference(
     source: UUID | None = None
     try:
         source = UUID(session_id)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         source = None
     try:
         async with AsyncSessionLocal() as db:
@@ -559,7 +559,7 @@ async def _save_pending_state(
     """
     try:
         sid = UUID(session_id)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         log.warning(f"{log_prefix}_save_bad_session", trace_id=trace_id, session_id=session_id)
         return
 
@@ -600,7 +600,7 @@ async def _load_pending_state(
     """
     try:
         sid = UUID(session_id)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
 
     from personal_agent.service.database import AsyncSessionLocal
@@ -639,7 +639,7 @@ async def _clear_pending_state(
     """
     try:
         sid = UUID(session_id)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return
 
     from personal_agent.service.database import AsyncSessionLocal
@@ -672,7 +672,7 @@ def _session_owner(ctx: ExecutionContext) -> tuple[UUID, UUID] | None:
         return None
     try:
         return UUID(ctx.session_id), ctx.user_id
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
 
 
@@ -1916,7 +1916,7 @@ def _with_citation_marker(content: str, identifier: str) -> str:
     marker = f"[{identifier}]"
     try:
         parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         parsed = None
     if isinstance(parsed, dict):
         parsed["_citation"] = marker
@@ -1961,7 +1961,7 @@ def _with_entry_sources(
     call_keys = ENTRY_SOURCE_TOOLS.get(tool_name)
     try:
         parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         parsed = None
     if registry is None or call_keys is None or not isinstance(parsed, dict):
         return _with_citation_marker(content, call_identifier)
@@ -6412,7 +6412,7 @@ async def step_init(
 
                 if global_memory_service and global_memory_service.connected:
                     memory_service = global_memory_service
-            except (ImportError, AttributeError):
+            except ImportError, AttributeError:
                 memory_service = MemoryService()
                 await memory_service.connect()
 
@@ -8726,7 +8726,7 @@ async def step_tool_execution(
                             "Consider whether the result is stable or use prior output."
                         )
                     content = json.dumps(parsed)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 pass
 
         # Persist in ctx.tool_results and ctx.steps (sequential — shared state)

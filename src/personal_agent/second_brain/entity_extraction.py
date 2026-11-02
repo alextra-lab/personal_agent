@@ -817,7 +817,7 @@ def _coerce_mastery(value: Any) -> float | None:
         return None
     try:
         mastery = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return max(0.0, min(1.0, mastery))
 

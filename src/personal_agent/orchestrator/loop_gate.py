@@ -101,7 +101,7 @@ def stable_hash(value: Any) -> str:
     """
     try:
         serialized = json.dumps(value, sort_keys=True, default=str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         serialized = repr(value)
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 

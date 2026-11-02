@@ -68,7 +68,7 @@ def _to_uuid(value: object) -> UUID | None:
         return None
     try:
         return UUID(str(value))
-    except (ValueError, AttributeError, TypeError):
+    except ValueError, AttributeError, TypeError:
         return None
 
 

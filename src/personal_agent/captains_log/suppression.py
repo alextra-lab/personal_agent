@@ -73,7 +73,7 @@ def is_fingerprint_suppressed(fingerprint: str, *, trace_id: str | None = None) 
         return False
     try:
         until = datetime.fromisoformat(str(until_raw).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
     now = datetime.now(timezone.utc)
     if until.tzinfo is None:

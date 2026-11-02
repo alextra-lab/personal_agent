@@ -509,7 +509,7 @@ def strip_argument_echo(content: str, arguments: Mapping[str, object]) -> str:
 
     try:
         parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         return content
     if not isinstance(parsed, dict):
         return content
@@ -625,7 +625,7 @@ def _search_memory_entitlement(content: str) -> Entitlement:
     """
     try:
         parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         return Entitlement.AGENT_DERIVED
     if not isinstance(parsed, dict):
         return Entitlement.AGENT_DERIVED
@@ -748,7 +748,7 @@ def _recall_personal_history_entitlement(content: str) -> Entitlement:
     """
     try:
         parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         return Entitlement.AGENT_DERIVED
     if not isinstance(parsed, dict):
         return Entitlement.AGENT_DERIVED
@@ -793,7 +793,7 @@ def _get_location_entitlement(content: str) -> Entitlement:
     """
     try:
         parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         return Entitlement.AGENT_DERIVED
     if not isinstance(parsed, dict):
         return Entitlement.AGENT_DERIVED
@@ -1511,7 +1511,7 @@ class SourceRegistry:
             return result.content if _normalised_url(referent) == target else None
         try:
             parsed = json.loads(result.content)
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except json.JSONDecodeError, TypeError, ValueError:
             return None
         found = _object_with_url(parsed, target)
         return json.dumps(found) if found is not None else None

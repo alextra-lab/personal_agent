@@ -220,7 +220,7 @@ def memory_sessions(
                                 started = datetime.fromisoformat(started).strftime("%Y-%m-%d %H:%M")
                             else:
                                 started = str(started)[:16]
-                        except (ValueError, TypeError):
+                        except ValueError, TypeError:
                             started = str(started)[:16]
                     table.add_row(
                         str(s.get("session_id", ""))[:12],

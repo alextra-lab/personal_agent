@@ -284,7 +284,7 @@ class MCPClientWrapper:
             )
             return parsed_result
 
-        except (RuntimeError, ToolError):
+        except RuntimeError, ToolError:
             # Re-raise tool errors as-is
             raise
         except Exception as e:
@@ -340,7 +340,7 @@ class MCPClientWrapper:
                 # Try to parse as JSON
                 try:
                     parsed_items.append(json.loads(text))
-                except (json.JSONDecodeError, TypeError):
+                except json.JSONDecodeError, TypeError:
                     parsed_items.append(text)
 
             # ImageContent or AudioContent (has data attribute)

@@ -54,7 +54,7 @@ def poll_base_metrics() -> dict[str, Any]:
         try:
             disk = psutil.disk_usage("/")
             metrics["perf_system_disk_used"] = (disk.used / disk.total) * 100.0
-        except (OSError, PermissionError):
+        except OSError, PermissionError:
             # May not have permission on some systems
             log.debug("disk_usage_unavailable", message="Could not read disk usage")
 
@@ -108,7 +108,7 @@ def get_base_metrics_detailed() -> dict[str, Any]:
             metrics["perf_system_disk_used"] = (disk.used / disk.total) * 100.0
             metrics["perf_system_disk_total_gb"] = disk.total / (1024**3)
             metrics["perf_system_disk_free_gb"] = disk.free / (1024**3)
-        except (OSError, PermissionError):
+        except OSError, PermissionError:
             log.debug("disk_usage_unavailable")
 
         return metrics

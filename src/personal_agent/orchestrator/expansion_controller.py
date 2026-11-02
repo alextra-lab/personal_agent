@@ -2583,7 +2583,7 @@ def _validate_plan_json(
     """
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return None
 
     if not isinstance(data, dict):
@@ -2700,7 +2700,7 @@ def _classify_planner_answer(
     """
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return None
     if not isinstance(data, dict):
         return None

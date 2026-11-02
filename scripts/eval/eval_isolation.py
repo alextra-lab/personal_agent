@@ -284,12 +284,15 @@ class ArmTurnResult:
             full wait every time, deliberately: safety over speed for a gate in
             front of a graph wipe. ``None`` means the caller passed ``wait_settle=False``
             and nothing was waited for (FRE-1517).
+        response: The reply text. ``channel=EVAL`` suppresses the Captain's Log capture, so a
+            transcript must come from here (FRE-1728).
     """
 
     session_id: str
     trace_id: str
     arm: str
     extraction_settled: bool | None
+    response: str = ""
 
 
 @dataclass
@@ -302,17 +305,35 @@ class IsolatedArmRunner:
     wipe/restore logic of its own; see the module docstring for why a full wipe is
     the only delete shape used, and why "reseed" replaces "preserve".
 
+    FRE-1728: a study of memory across sessions sets ``wipe_on_new_session=False`` and calls
+    :meth:`wipe` itself, once per simulated user and run. A wipe per session would destroy what
+    the study measures.
+
     Attributes:
         driver: A connected ``neo4j.AsyncDriver`` for ``EVAL_NEO4J_URI`` — every wipe
             this class issues goes through ``wipe_eval_graph()``'s URI-equality guard.
         reseed: Optional coroutine invoked after every wipe, before the turn's HTTP
             call — the caller's own way of recreating any fixture state (AC-2). Left
             ``None`` when a script needs no fixture.
+        wipe_on_new_session: Wipe when a turn starts a session. ``False`` makes the caller
+            responsible for calling :meth:`wipe`.
     """
 
     driver: Any
     reseed: Callable[[], Awaitable[None]] | None = None
+    wipe_on_new_session: bool = True
     _turn_count: int = field(default=0, init=False, repr=False)
+
+    async def wipe(self, es: httpx.AsyncClient) -> None:
+        """Wait for full gateway quiet, wipe ``neo4j-eval``, then replay ``reseed``.
+
+        Args:
+            es: Async client for polling ``elasticsearch-eval``.
+        """
+        await wait_for_gateway_idle(es)
+        await wipe_eval_graph(self.driver, uri=EVAL_NEO4J_URI)
+        if self.reseed is not None:
+            await self.reseed()
 
     async def run_turn(
         self,
@@ -358,11 +379,8 @@ class IsolatedArmRunner:
         base_url = EVAL_ARMS[arm]
         assert_eval_chat_url(base_url)
 
-        if session_id is None:
-            await wait_for_gateway_idle(es)
-            await wipe_eval_graph(self.driver, uri=EVAL_NEO4J_URI)
-            if self.reseed is not None:
-                await self.reseed()
+        if session_id is None and self.wipe_on_new_session:
+            await self.wipe(es)
         else:
             await wait_for_local_model_calls(es)
         self._turn_count += 1
@@ -377,13 +395,18 @@ class IsolatedArmRunner:
         resp.raise_for_status()
         data = resp.json()
         session_id, trace_id = str(data["session_id"]), str(data["trace_id"])
+        response = str(data.get("response", ""))
 
         await wait_for_event_settle(
             es, trace_id, "model_call_completed", timeout_s=SIGNAL_SETTLE_TIMEOUT_S
         )
         if not wait_settle:
             return ArmTurnResult(
-                session_id=session_id, trace_id=trace_id, arm=arm, extraction_settled=None
+                session_id=session_id,
+                trace_id=trace_id,
+                arm=arm,
+                extraction_settled=None,
+                response=response,
             )
         extraction_settled = await wait_for_event_settle(
             es,
@@ -432,6 +455,7 @@ class IsolatedArmRunner:
             trace_id=trace_id,
             arm=arm,
             extraction_settled=settled,
+            response=response,
         )
 
 

@@ -30,6 +30,10 @@ os.environ["AGENT_PROMPT_DEBUG_CAPTURE_ENABLED"] = "false"
 # fetches the remote map (a failed fetch plus a background retry offline, a map that changes
 # under the tests online). The bundled map of the pinned release is the deterministic one.
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+# Forced, not setdefault. In its default DEV mode, litellm's import runs load_dotenv(), which
+# searches upward from litellm's own file. A venv under /opt/seshat finds the live .env, so a
+# later AppConfig() reads values that the settings singleton does not hold (FRE-1318 skips .env).
+os.environ["LITELLM_MODE"] = "PRODUCTION"
 # FRE-808: the app-under-test connects as the restricted, non-superuser
 # `seshat_app` role; admin/DDL fixtures (migration tests, full-init.sql parity)
 # use AGENT_DATABASE_ADMIN_URL (the `agent` superuser). Both point at the test

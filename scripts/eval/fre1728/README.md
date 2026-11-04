@@ -175,7 +175,7 @@ The owner's Mac must stay awake, and a pilot turn competes with the owner's own 
 | The owner's display name is `Sam` | Avoids a conflict with the persona |
 | `channel=EVAL` | Blocks side-effecting tools, and suppresses Captain's Log promotion, so transcripts come from the runner |
 | Session summary idle 60 s and sweep 30 s; production 900 s and 300 s | A digest arrives sooner than in production. Chosen by the ticket, to avoid a run of 8 hours or more |
-| **Primitive tools off**; production has them on | The primary has no `bash`, `read`, `write` or `edit`. A task that needs them gets a different answer than in production. They stay off because this pilot tests memory and conversation. FRE-1729 fixed the `read` defect that first kept them off, so a later run can turn them on. A run with them on needs its own preflight |
+| **Primitive tools off**; production has them on | The primary has no `bash`, `read`, `write` or `edit`. A task that needs them gets a different answer than in production. They stay off because this pilot tests memory and conversation. FRE-1729 fixed one defect in `read`, and that does not show that these tools are safe here. A run with them on needs its own security check and preflight |
 | Captain's Log reflection interval 86400000 s; production 1800 s | Reflection effectively off. Saves about $0.05 per reflection |
 | `AGENT_CLOUD_WEEKLY_BUDGET_USD` 50; production 30 | Eval's own budget |
 | R2 values point nowhere | R2 tools register, and a call fails. An `artifact_draft` call can still pay for its builder |

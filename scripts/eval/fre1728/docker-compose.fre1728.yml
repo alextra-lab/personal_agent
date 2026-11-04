@@ -11,7 +11,8 @@ x-fre1728-env: &fre1728-env
   AGENT_OWNER_NAME: "Sam"
   # Production values that the eval compose leaves out. Each one shapes memory or the primary's tools.
   # Off on purpose, though production has them on. This pilot tests memory and conversation, not tool use. FRE-1729
-  # removed the original reason, so a later pilot run can turn them on. A run with this value on needs its own preflight.
+  # fixed one defect in `read`, and that does not show that these tools are safe here. A run with this value on needs
+  # its own security check and preflight.
   AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
   AGENT_EXPANSION_ENABLED: "true"
   AGENT_DELEGATION_ENABLED: "false"

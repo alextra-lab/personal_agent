@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Iterator, MutableMapping
+from collections.abc import AsyncIterator, Callable, Iterator, MutableMapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,9 +30,14 @@ from personal_agent.tools.executor import (
     ToolExecutionLayer,
     _validate_path_against_patterns,
 )
-from personal_agent.tools.primitives._governance import PathRefusalError, _matches_any
+from personal_agent.tools.executor import _expand_path as _executor_expand_path
+from personal_agent.tools.primitives._governance import (
+    PathRefusalError,
+    _expand_path,
+    _matches_any,
+)
 from personal_agent.tools.primitives.edit import edit_executor, edit_tool
-from personal_agent.tools.primitives.read import read_executor, read_tool
+from personal_agent.tools.primitives.read import _build_read_marker, read_executor, read_tool
 from personal_agent.tools.primitives.write import _is_unattended_path, write_executor, write_tool
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolResult
@@ -211,13 +216,34 @@ async def test_a_variable_cannot_supply_an_allowed_root(
 
 
 @pytest.mark.asyncio
-async def test_a_variable_after_a_home_mark_holds_no_value(workdir: Path) -> None:
-    """``~$NAME`` is a user name lookup for literal text, never for the value."""
+async def test_a_variable_after_a_home_mark_is_refused_with_no_value(workdir: Path) -> None:
+    """``~$NAME`` matches no allowed pattern, so the gate refuses it."""
     result, logs = await _run("read", f"~${_NAME}/{workdir.name}")
 
     assert not result.success
+    assert result.error_detail is not None
+    assert result.error_detail.code == "path_refused"
     assert not _value_in_result(result)
     assert not _value_in_logs(logs)
+
+
+@pytest.mark.parametrize("expand", [_expand_path, _executor_expand_path])
+def test_a_home_mark_does_not_expand_a_variable(expand: Callable[[str], str]) -> None:
+    """Both copies leave ``~$NAME`` as literal text. The old expansion put the value in it."""
+    path = f"~${_NAME}/file"
+
+    assert expand(path) == path
+    assert _VALUE in _old_expand_path(path)
+
+
+@pytest.mark.parametrize("line_clipped", [False, True])
+def test_the_grep_hint_quotes_a_path_with_a_variable(line_clipped: bool, workdir: Path) -> None:
+    """The hint is a shell command, and ``bash`` must not expand the variable in the file name."""
+    path = f"{workdir}/${_NAME}"
+
+    marker = _build_read_marker(1, 1, 2, line_clipped, path)
+
+    assert f"grep -n \"<keyword>\" '{path}'" in marker
 
 
 def test_the_gate_copy_compares_the_literal_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,7 +317,7 @@ def _governance(tool: str, **policy: list[str]) -> GovernanceConfig:
 
 @pytest.mark.parametrize("match", [_matches_any, _validate_path_against_patterns])
 def test_a_pattern_with_a_variable_matches_only_when_the_variable_is_set(
-    match: Any, monkeypatch: pytest.MonkeyPatch
+    match: Callable[[str, list[str]], bool], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both gates expand the pattern. Unset, the pattern stays literal and does not match."""
     monkeypatch.setenv("FRE1729_ROOT", "/operator")
@@ -362,13 +388,30 @@ def test_an_operator_unattended_pattern_expands(
 
 @pytest.mark.asyncio
 async def test_a_home_path_still_reads(workdir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``~`` expands in a model's path, and the real ``$HOME`` pattern allows the result."""
+    """``~`` expands in a model's path, and the real ``$HOME`` pattern allows the result.
+
+    ``workdir`` is under ``/tmp``, so this keeps only the real ``$HOME`` rules. Otherwise the
+    ``/tmp/**`` rule allows the path, and the ``$HOME`` rules can stop working unseen.
+    """
     monkeypatch.setenv("HOME", str(workdir))
     target = workdir / "project" / "personal_agent" / "file.txt"
     target.parent.mkdir(parents=True)
     target.write_text(_LITERAL)
+    home_rules = [
+        pattern
+        for pattern in load_governance_config().tools["read"].allowed_paths
+        if pattern.startswith("$HOME")
+    ]
+    assert home_rules
+    governance = _governance("read", allowed_paths=home_rules)
 
-    result, _ = await _run("read", "~/project/personal_agent/file.txt")
+    with patch(
+        "personal_agent.tools.primitives._governance.load_governance_config",
+        return_value=governance,
+    ):
+        result, _ = await _run(
+            "read", "~/project/personal_agent/file.txt", layer=_layer(governance)
+        )
 
     assert result.success, result.error
     assert isinstance(result.output, dict)

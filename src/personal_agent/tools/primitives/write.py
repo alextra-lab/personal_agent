@@ -7,6 +7,7 @@ checks (allowed_paths / forbidden_paths / unattended_paths from
 FRE-261 Step 3. FRE-1575: one tool contract — a failure raises :class:`WriteError`.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,12 +16,14 @@ import structlog
 from personal_agent.config import load_governance_config
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
+from personal_agent.tools.primitives._child_workspace import give_to_child, missing_parts
 from personal_agent.tools.primitives._governance import (
     PathCode,
     _check_durability,
     _check_path_governance,
     _expand_path,
     _matches_any,
+    open_file_no_symlinks,
 )
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
@@ -201,12 +204,18 @@ async def write_executor(
 
     # 5. Create parent directories, then write
     try:
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        if mode == "overwrite":
-            resolved.write_text(content, encoding="utf-8")
-        else:  # append
-            with open(resolved, "a", encoding="utf-8") as fh:
-                fh.write(content)
+        # The path can change to a link after the checks above, and this process is root.
+        # An existing file opens with no O_CREAT: the kernel's fs.protected_regular refuses
+        # O_CREAT, even for root, on a file that another user owns in a sticky directory (/tmp).
+        created = missing_parts(resolved)
+        flags = os.O_WRONLY | (os.O_TRUNC if mode == "overwrite" else os.O_APPEND)
+        try:
+            fd = open_file_no_symlinks(resolved, flags)
+        except FileNotFoundError:
+            fd = open_file_no_symlinks(resolved, flags | os.O_CREAT | os.O_EXCL, make_parents=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        give_to_child(created, trace_id=trace_id)
     except PermissionError as exc:
         log.warning(
             "write_permission_denied", path=str(resolved), error=str(exc), trace_id=trace_id

@@ -9,9 +9,11 @@ FRE-1576.
 
 from __future__ import annotations
 
+import errno
 import os
-import shutil
-import tempfile
+import secrets
+import stat
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal
 
@@ -20,10 +22,13 @@ import structlog
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._governance import (
+    DIRECTORY_FLAGS,
     PathCode,
     _check_durability,
     _check_path_governance,
     _expand_path,
+    open_file_no_symlinks,
+    open_no_symlinks,
 )
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
@@ -140,24 +145,44 @@ def _count_matches(text: str, old: str) -> int:
 
 
 def _replace_file(target: Path, data: bytes) -> None:
-    """Replace ``target``'s content in one step, keeping its permission bits.
+    """Replace ``target``'s content in one step, keeping its owner and permission bits.
 
     The new content goes to a temporary file in the same directory, which then replaces the
-    target, so a failed write never leaves the file half written.
+    target, so a failed write never leaves the file half written. This process is root, and the
+    ``bash`` child can own the directory (FRE-1732). So each step acts through one descriptor of
+    the directory, which opens with no symbolic link, and the mode loses any setuid bit.
 
     Args:
         target: The file to replace.
         data: Its new content.
+
+    Raises:
+        OSError: A part of the path is a symbolic link, the target is not a regular file, or the
+            write fails.
     """
-    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".edit")
+    parent = open_no_symlinks(target.parent, DIRECTORY_FLAGS)
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        shutil.copymode(target, tmp_name)
-        os.replace(tmp_name, target)
-    except BaseException:
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
+        status = os.stat(target.name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISREG(status.st_mode):
+            raise OSError(errno.EINVAL, "the target is not a regular file", str(target))
+        temp = f".{target.name}.{secrets.token_hex(8)}.edit"
+        fd = os.open(
+            temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent
+        )
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                # A process that is not root cannot give a file away, and it keeps its own.
+                with suppress(PermissionError):
+                    os.fchown(fh.fileno(), status.st_uid, status.st_gid)
+                os.fchmod(fh.fileno(), stat.S_IMODE(status.st_mode) & 0o777)
+            os.replace(temp, target.name, src_dir_fd=parent, dst_dir_fd=parent)
+        except BaseException:
+            with suppress(FileNotFoundError):
+                os.unlink(temp, dir_fd=parent)
+            raise
+    finally:
+        os.close(parent)
 
 
 # ---------------------------------------------------------------------------
@@ -224,13 +249,23 @@ async def edit_executor(
         )
 
     try:
-        raw = resolved.read_bytes()
+        # The path can change to a link after the checks above, and this process is root.
+        with os.fdopen(open_file_no_symlinks(resolved, os.O_RDONLY), "rb") as fh:
+            raw = fh.read()
     except PermissionError as exc:
         raise EditError(
             "permission_denied",
             f"Cannot read {str(resolved)!r}: {exc}",
             retryable=False,
             next_action="Do not retry this path. Edit a file under /app/agent_workspace/ or /tmp/.",
+        ) from exc
+    except OSError as exc:
+        log.warning("edit_read_error", path=str(resolved), error=str(exc), trace_id=trace_id)
+        raise EditError(
+            "io_error",
+            f"Reading {str(resolved)!r} failed: {exc}",
+            retryable=True,
+            next_action="Call edit once more; if it fails again, tell the user.",
         ) from exc
     try:
         # Bytes, not read_text: read_text would turn \r\n into \n and change every line.

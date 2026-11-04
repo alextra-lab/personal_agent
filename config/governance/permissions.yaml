@@ -112,6 +112,7 @@ allow:
   - {rule: "bash(date *)", modes: [NORMAL, ALERT]}
   - {rule: "bash(find *)", modes: [NORMAL]}
   - {rule: "bash(jq *)", modes: [NORMAL]}
+  # On a deployed gateway these two fail: the bash child has no access to the Docker socket (FRE-1732).
   - {rule: "bash(docker ps *)", modes: [NORMAL]}
   - {rule: "bash(docker logs *)", modes: [NORMAL]}
   - {rule: "bash(git log *)", modes: [NORMAL]}

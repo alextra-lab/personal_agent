@@ -294,7 +294,7 @@ async def test_an_unreadable_file_is_permission_denied(tmp_path: Path) -> None:
     """A file the process cannot read is ``permission_denied``."""
     target = _file(tmp_path)
 
-    with patch.object(Path, "read_bytes", side_effect=PermissionError(13, "Permission denied")):
+    with patch("personal_agent.tools.primitives.edit.open_file_no_symlinks", side_effect=PermissionError(13, "Permission denied")):
         with pytest.raises(EditError) as exc_info:
             await _edit(target, "beta", "BETA")
 

@@ -517,14 +517,8 @@ async def test_read_open_failure_maps_to_code(raised: OSError, code: str, retrya
         test_file = Path(tmpdir) / "locked.txt"
         test_file.write_text("secret", encoding="utf-8")
         target = test_file.resolve()
-        real_open = Path.open
 
-        def _open(self: Path, *args: object, **kwargs: object):
-            if self == target:
-                raise raised
-            return real_open(self, *args, **kwargs)
-
-        with patch.object(Path, "open", _open):
+        with patch("personal_agent.tools.primitives.read.open_file_no_symlinks", side_effect=raised):
             with pytest.raises(ReadError) as exc_info:
                 await read_executor(str(test_file), ctx=_CTX)
 

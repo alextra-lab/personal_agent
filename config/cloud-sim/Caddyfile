@@ -10,7 +10,8 @@
 
 {
 	local_certs
-	admin 0.0.0.0:2019
+	# Loopback only: the admin API can show this config, and every container shares the network (FRE-1732).
+	admin localhost:2019
 }
 
 # Shared routing — gateway handles API paths, PWA handles everything else

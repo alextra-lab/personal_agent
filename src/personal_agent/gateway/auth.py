@@ -74,8 +74,8 @@ def _expand_env_var(value: str) -> str:
         value: Raw value string, potentially containing ``${VAR}`` references.
 
     Returns:
-        Expanded string.  Unexpanded references are returned as-is so that
-        local dev YAML with literal secrets still works.
+        Expanded string. An unset variable stays as its literal reference, and
+        :func:`load_token_config` refuses that entry.
     """
     import re
 
@@ -120,6 +120,10 @@ def load_token_config(path: Path) -> dict[str, TokenInfo]:
             continue
 
         secret = _expand_env_var(str(secret_raw))
+        # The file is public, so its literal text must never work as a token (FRE-1732).
+        if not secret.strip() or "${" in secret:
+            log.warning("gateway_access_token_unset", name=name)
+            continue
 
         # Parse "1000/hour" or plain int
         if isinstance(rate_limit_raw, str) and "/" in rate_limit_raw:

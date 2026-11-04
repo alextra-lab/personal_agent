@@ -52,6 +52,8 @@ from pathlib import Path
 
 from personal_agent.config import settings
 from personal_agent.telemetry import get_logger
+from personal_agent.tools.primitives._child_workspace import give_to_child, missing_parts
+from personal_agent.tools.primitives._governance import make_directory_no_symlinks
 
 log = get_logger(__name__)
 
@@ -158,7 +160,10 @@ async def run_in_sandbox(
 
     # Ensure scratch directory exists on the host before Docker tries to mount it.
     try:
-        scratch_host_path.mkdir(parents=True, exist_ok=True)
+        # This process is root, and the child owns the parent directory (FRE-1732).
+        created = missing_parts(scratch_host_path)
+        make_directory_no_symlinks(scratch_host_path)
+        give_to_child(created, trace_id=trace_id)
     except OSError as exc:
         log.error(
             "sandbox_scratch_mkdir_failed",
@@ -350,7 +355,7 @@ def _list_scratch_files(path: Path) -> list[str]:
         or cannot be listed.
     """
     try:
-        if not path.exists():
+        if path.is_symlink() or not path.exists():
             return []
         return sorted(str(f) for f in path.iterdir() if f.is_file())
     except OSError:

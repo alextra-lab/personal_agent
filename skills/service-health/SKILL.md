@@ -73,6 +73,7 @@ Check the result before you answer:
 | Failure | Cause | Next step |
 |---|---|---|
 | `postgres: FAIL AGENT_DATABASE_URL is not set in this environment` | The script runs where the variable is not set | Say that Postgres cannot be probed from here. Do not guess |
+| The same line, in the gateway | A pipe, `&&` or anything else ran with the script. Only one plain call of the script gets the database URL (FRE-1732) | Run the script as the whole command |
 | `postgres: FAIL psql is not installed in this environment` | The host shell has no client | Run the probe through the `bash` tool in the gateway container |
 | `FAIL cannot connect to ...` | The service is down, or the name does not resolve from here | Check where the command runs (the Rules above). If it runs in the gateway, the service is down: say so |
 | `redis: ok ... asks for a password` | Redis needs authentication | The server is up. Say that PING was not tried with a password |

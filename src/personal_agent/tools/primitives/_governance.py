@@ -7,7 +7,11 @@ codes are part of each caller's own code set (ADR-0156 D6.1).
 FRE-261. FRE-1575 (one tool contract).
 """
 
+import errno
 import os
+import stat
+from collections.abc import Sequence
+from contextlib import suppress
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Literal
@@ -30,6 +34,107 @@ class PathRefusalError(ToolError[PathCode]):
 
 
 _PATH_NEXT = "Do not retry this path. Use a path that the path rules allow."
+# O_PATH walks a directory that the caller cannot list. macOS has no O_PATH.
+DIRECTORY_FLAGS = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY
+
+
+def _open_directory_no_symlinks(parts: Sequence[str], *, make_parents: bool) -> int:
+    """Open a directory from ``/``, one part at a time, and refuse a symbolic link in any part.
+
+    Args:
+        parts: The path parts below ``/``.
+        make_parents: Whether to create a missing part. A part that exists as a link still
+            refuses, so nothing is created through a link.
+
+    Returns:
+        The open directory descriptor.
+
+    Raises:
+        OSError: A part is a symbolic link (``ENOTDIR``), or the open fails.
+    """
+    current = os.open("/", DIRECTORY_FLAGS)
+    try:
+        for part in parts:
+            if make_parents:
+                with suppress(FileExistsError):
+                    os.mkdir(part, dir_fd=current)
+            child = os.open(part, DIRECTORY_FLAGS | os.O_NOFOLLOW, dir_fd=current)
+            os.close(current)
+            current = child
+    except BaseException:
+        os.close(current)
+        raise
+    return current
+
+
+def open_no_symlinks(
+    path: Path, flags: int, mode: int = 0o666, *, make_parents: bool = False
+) -> int:
+    """Open an absolute path, and refuse a symbolic link in any part of it (FRE-1732).
+
+    The gateway runs as root, and the ``bash`` child owns directories that root tools act in. A
+    path that the rules checked can change to a link before the open, so each part opens from
+    its parent with ``O_NOFOLLOW``. The caller passes a resolved path, which holds no link.
+
+    Args:
+        path: The resolved absolute path.
+        flags: The ``os.open`` flags for the last part.
+        mode: The permission bits for a new file.
+        make_parents: Whether to create a missing directory part. A part that exists as a link
+            still refuses, so nothing is created through a link.
+
+    Returns:
+        The open file descriptor.
+
+    Raises:
+        OSError: A part of the path is a symbolic link (``ELOOP``, or ``ENOTDIR`` for a directory
+            part), or the open fails.
+    """
+    parent = _open_directory_no_symlinks(path.parts[1:-1], make_parents=make_parents)
+    try:
+        return os.open(path.name, flags | os.O_NOFOLLOW, mode, dir_fd=parent)
+    finally:
+        os.close(parent)
+
+
+def open_file_no_symlinks(
+    path: Path, flags: int, mode: int = 0o666, *, make_parents: bool = False
+) -> int:
+    """Open a regular file with :func:`open_no_symlinks`, for ``os.fdopen``.
+
+    ``O_NONBLOCK`` has no effect on a regular file, and it stops a FIFO that the child planted
+    from blocking the event loop.
+
+    Args:
+        path: The resolved absolute path.
+        flags: The ``os.open`` flags.
+        mode: The permission bits for a new file.
+        make_parents: Whether to create a missing directory part.
+
+    Returns:
+        The open file descriptor.
+
+    Raises:
+        OSError: A part of the path is a symbolic link, the path is not a regular file
+            (``EINVAL``), or the open fails.
+    """
+    fd = open_no_symlinks(path, flags | os.O_NONBLOCK, mode, make_parents=make_parents)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(errno.EINVAL, "not a regular file", str(path))
+    return fd
+
+
+def make_directory_no_symlinks(path: Path) -> None:
+    """Create an absolute directory path, and refuse a symbolic link in any part of it.
+
+    Args:
+        path: The absolute directory path.
+
+    Raises:
+        OSError: A part of the path is a symbolic link, or the creation fails.
+    """
+    os.close(_open_directory_no_symlinks(path.parts[1:], make_parents=True))
 
 
 def _expand_path(path: str) -> str:

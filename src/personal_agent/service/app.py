@@ -873,6 +873,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     log.info("service_starting")
 
+    # FRE-1732: the bash child runs as nobody, and it keeps its workspace.
+    from personal_agent.tools.primitives._child_workspace import prepare_workspace
+
+    await asyncio.to_thread(prepare_workspace)
+
     # OTel tracer provider bootstrap (ADR-0129 D4/D5): registers the process-wide
     # tracer provider and attaches the Collector exporter (FRE-1070). Must run
     # before the first request, so the root-span middleware below has a real

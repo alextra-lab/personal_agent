@@ -17,6 +17,7 @@ FRE-410: per-read head cap + line-based offset/limit to stop whole-file context 
 FRE-1575: one tool contract — a failure raises :class:`ReadError`.
 """
 
+import errno
 import os
 import shlex
 from pathlib import Path
@@ -31,6 +32,7 @@ from personal_agent.tools.primitives._governance import (
     PathCode,
     _check_path_governance,
     _expand_path,
+    open_file_no_symlinks,
 )
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
@@ -448,7 +450,8 @@ async def read_executor(
     byte_cap = max_bytes if max_bytes is not None else DEFAULT_HEAD_BYTES
 
     try:
-        with resolved.open("rb") as fh:
+        # The path can change to a link after the checks above, and this process is root.
+        with os.fdopen(open_file_no_symlinks(resolved, os.O_RDONLY), "rb") as fh:
             # ADR-0156 D9.4, second check, before any byte is read: the opened file is
             # the file recorded at grant time. This refuses a rename-over and a symlink
             # swapped in after the grant, including between the first check and the open.
@@ -480,6 +483,19 @@ async def read_executor(
             next_action="Do not retry this file. Read another file or tell the user.",
         ) from exc
     except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EINVAL):
+            log.warning(
+                "read_path_changed",
+                path=str(resolved),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            raise ReadError(
+                "file_replaced",
+                f"{str(resolved)!r} changed after the path checks, and it is not the same file.",
+                retryable=False,
+                next_action="Do not retry this path. Tell the user that the path changed.",
+            ) from exc
         log.error(
             "read_io_error",
             path=str(resolved),

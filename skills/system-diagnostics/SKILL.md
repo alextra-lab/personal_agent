@@ -89,6 +89,7 @@ Check the result before you answer:
 | `command not found` | The binary is not in the image | Say which binary is missing. Use another command in this file for the same fact |
 | A piped command prints an error | A pipe or an option failed | Run the same command without the pipe |
 | `vmstat` or `iostat` runs until the timeout | No count was given | Add `1 3` |
+| An empty result, or no process column, from `lsof` or `ss -p` in the gateway | `bash` runs as `nobody` there (FRE-1732), so these commands omit each root process, with no error | Do not report that nothing holds the file or the port. Say that root processes are not visible from `bash` |
 | `Operation not permitted` from `lsof` or `ss -p` | The process runs as another user | Report the part that is visible. Do not try `sudo` |
 | The output is very long | A verbose command | Pipe it into `head -c 30000` (the tool cap is 50 KiB) |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |

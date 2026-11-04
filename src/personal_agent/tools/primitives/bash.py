@@ -81,12 +81,16 @@ _SIGPIPE_EXIT_CODE = 141
 
 # FRE-1505, FRE-1732: the environment of the bash child on a deployed gateway.
 # An allowlist, not a denylist: AGENT_DATABASE_URL carries a password under a name no
-# suffix pattern matches. HOME and TMPDIR are set to /tmp, which ``nobody`` can write.
+# suffix pattern matches. TMPDIR is /tmp, which ``nobody`` can write. HOME must be out of reach of
+# the ``write`` tool: curl, jq, git and psql read start-up files from it, and ``write`` runs with no
+# approval card, so a planted ~/.curlrc would change what an allowed curl sends. The image creates
+# this directory for ``nobody``, because mmdc's browser needs a writable one (FRE-1732).
 # PUPPETEER_EXECUTABLE_PATH names the browser in the image, and mmdc cannot start without it.
 CHILD_ENV_NAMES: frozenset[str] = frozenset(
     {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "VIRTUAL_ENV", "PUPPETEER_EXECUTABLE_PATH"}
 )
-_CHILD_HOME = "/tmp"
+_CHILD_HOME = "/var/lib/seshat-bash-home"
+_CHILD_TMPDIR = "/tmp"
 # setpriv (util-linux) changes identity and then execs bash, so the spawned PID is bash.
 # All capability sets are cleared, and no_new_privs stops a setuid binary regaining root.
 CHILD_SETPRIV_ARGV: tuple[str, ...] = (
@@ -107,6 +111,7 @@ CHILD_SETPRIV_ARGV: tuple[str, ...] = (
 # start-up files from those places. A new entry needs a review of the script's arguments.
 _APP_DIR = "/app"
 _OVERFLOW_ROOT = Path("/tmp/agent_scratch")
+_SPACES = re.compile(r"\s+")
 _OVERFLOW_NAME = re.compile(r"bash_output_([0-9]{1,9})\.txt")
 _SCRIPT_CHILD_PATH = "/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _SCRIPT_CHILD_ENV_NAMES = frozenset({"LANG", "LC_ALL", "LC_CTYPE", "TZ"})
@@ -266,12 +271,12 @@ def child_env() -> dict[str, str]:
     """Build the bash child's environment for a deployed gateway.
 
     Returns:
-        Only the allowlisted variables from this process's environment, plus
-        ``HOME`` and ``TMPDIR`` set to a directory the unprivileged child can write.
+        Only the allowlisted variables from this process's environment, plus a ``HOME`` that the
+        ``write`` tool cannot reach, and ``TMPDIR`` set to ``/tmp``.
     """
     env = {name: value for name, value in os.environ.items() if name in CHILD_ENV_NAMES}
     env["HOME"] = _CHILD_HOME
-    env["TMPDIR"] = _CHILD_HOME
+    env["TMPDIR"] = _CHILD_TMPDIR
     return env
 
 
@@ -296,7 +301,7 @@ def _credential_script_call(command: str) -> tuple[list[str], dict[str, str]] | 
     words = subcommand.words
     if subcommand.refusal is not None or words is None or len(words) < 2 or words[0] != "python3":
         return None
-    if subcommand.text != command.strip():
+    if _SPACES.sub(" ", subcommand.text) != _SPACES.sub(" ", command.strip()):
         return None  # a trailing ``&`` or ``;``, or a comment: not one plain call
     script = words[1].removeprefix(f"{_APP_DIR}/")
     names = _SCRIPT_CREDENTIAL_NAMES.get(script)

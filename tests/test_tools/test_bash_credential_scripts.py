@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.primitives import bash as bash_module
+from personal_agent.tools.primitives._governance import (
+    PathRefusalError,
+    _check_path_governance,
+)
 from personal_agent.tools.primitives.bash import CHILD_SETPRIV_ARGV, bash_executor
 
 _CTX = TraceContext.new_trace()
@@ -108,7 +113,7 @@ async def test_a_plain_script_call_gets_its_credential_and_no_other(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("suffix", ["2>&1", "2>/dev/null", ">/dev/null"])
+@pytest.mark.parametrize("suffix", ["2>&1", " 2>&1", "2>/dev/null", ">/dev/null"])
 async def test_a_redirection_that_stays_plain_has_no_effect_on_the_script_call(
     suffix: str,
 ) -> None:
@@ -116,6 +121,31 @@ async def test_a_redirection_that_stays_plain_has_no_effect_on_the_script_call(
     argv, _ = await _spawn(f"python3 {_CYPHER} q {suffix}")
 
     assert argv == (sys.executable, "-I", f"/app/{_CYPHER}", "q")
+
+
+@pytest.mark.parametrize("tool", ["write", "edit"])
+def test_the_real_path_rules_keep_root_tools_out_of_the_child_home(tool: str) -> None:
+    """curl, jq, git and psql read start-up files from HOME, and ``write`` needs no card."""
+    home = Path(bash_module.child_env()["HOME"])
+
+    with pytest.raises(PathRefusalError):
+        _check_path_governance(home / ".curlrc", tool_name=tool)
+
+
+def test_seeded_the_real_path_rules_allow_tmp() -> None:
+    """Seeded negative: ``/tmp`` passes the same rules, so HOME must not be there."""
+    _check_path_governance(Path("/tmp/.curlrc"), tool_name="write")
+
+
+def test_the_image_creates_the_child_home_for_the_child_under_a_root_parent() -> None:
+    """The child owns HOME, and it cannot replace it with a link, because root owns the parent."""
+    env = bash_module.child_env()
+    dockerfile = (Path(__file__).parents[2] / "Dockerfile.gateway").read_text()
+
+    assert f"install -d -o nobody -g nogroup -m 700 {env['HOME']}" in dockerfile
+    assert env["HOME"].startswith("/var/lib/")
+    assert env["TMPDIR"] == "/tmp"
+    assert not {"CURL_HOME", "XDG_CONFIG_HOME"} & set(env)
 
 
 @pytest.mark.asyncio

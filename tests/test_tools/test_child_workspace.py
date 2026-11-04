@@ -799,12 +799,36 @@ async def test_the_sandbox_scratch_directory_goes_to_the_child(tmp_path: Path) -
 
 def test_the_sandbox_lists_no_files_behind_a_link(tmp_path: Path) -> None:
     """A planted scratch link shows no file name from another directory."""
-    from personal_agent.tools.primitives.sandbox import _list_scratch_files
+    from personal_agent.tools.primitives import sandbox
 
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "private.txt").write_text("x")
+    (outside / "subdir").mkdir()
+    (outside / "file_link").symlink_to(outside / "private.txt")
     (tmp_path / "link").symlink_to(outside)
 
-    assert _list_scratch_files(tmp_path / "link") == []
-    assert _list_scratch_files(outside) == [str(outside / "private.txt")]
+    with patch.object(workspace, "settings") as settings:
+        settings.deployment_profile = "cloud"
+        assert sandbox._list_scratch_files(tmp_path / "link") == []
+        assert sandbox._list_scratch_files(outside) == [str(outside / "private.txt")]
+        assert sandbox._list_scratch_files(tmp_path / "missing") == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_scratch_directory_still_gives_what_it_created(tmp_path: Path) -> None:
+    """The next call finds the parents in place, so it cannot give them."""
+    from personal_agent.tools.primitives import sandbox
+
+    scratch = tmp_path / "sandbox" / "trace"
+
+    with (
+        patch.object(sandbox, "give_to_child") as gave,
+        patch.object(sandbox, "make_directory_no_symlinks", side_effect=OSError(28, "no space")),
+    ):
+        result = await sandbox.run_in_sandbox(
+            image="x", script="1", timeout_seconds=1, network=False, scratch_host_path=scratch
+        )
+
+    assert result.exit_code == 1
+    assert gave.call_args.args[0] == [tmp_path / "sandbox", scratch]

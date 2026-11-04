@@ -98,6 +98,18 @@ async def test_a_set_variable_still_authenticates(
 
 
 @pytest.mark.asyncio
+async def test_a_real_value_that_holds_the_reference_text_still_authenticates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A set variable is a real token, whatever characters it holds."""
+    monkeypatch.setenv("FRE1732_UNSET_TOKEN", "ab${cd")
+
+    name = await _authenticate(_config(tmp_path, _PLACEHOLDER), "ab${cd")
+
+    assert name == "entry"
+
+
+@pytest.mark.asyncio
 async def test_the_removed_dev_token_does_not_authenticate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -11,6 +11,7 @@ The repository is public. Measured results stay on the ticket.
 - Rename `EVAL_CHILD_*` to `CHILD_*` and `eval_child_env` to `child_env`, because the names no longer describe only eval.
 - Isolate on every profile except `local`: the child runs as `nobody` through `setpriv`, with the allowlisted environment. A non-root gateway on a profile with isolation refuses and spawns nothing (`credential_isolation_unavailable`).
 - Keep `local` as it is. A developer's machine has no root and no `setpriv`.
+- The child's `HOME` is `/var/lib/seshat-bash-home`, which the image creates for `nobody` under a root-owned parent. `write` runs with no approval card and can reach `/tmp`, so `HOME` must not be there: curl, jq, git and psql read start-up files from it. mmdc's browser needs a writable config directory, so `HOME` must exist. `TMPDIR` stays `/tmp`.
 
 ### Two reviewed scripts need a secret
 

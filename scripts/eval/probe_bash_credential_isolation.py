@@ -55,6 +55,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
@@ -157,7 +159,12 @@ async def _script_calls(credentials: dict[str, str], ctx: TraceContext) -> dict[
             f"python3 skills/mermaid-diagrams/scripts/validate_mermaid.py {diagram}",
             "VALID",
         ),
-        ("mmdc_as_nobody", f"mmdc -i {diagram} -o /tmp/fre1732-diagram.svg", "Generating"),
+        (
+            "mmdc_as_nobody",
+            f"mmdc -i {diagram} -o /tmp/fre1732-diagram.svg && test -s /tmp/fre1732-diagram.svg "
+            "&& echo RENDERED",
+            "RENDERED",
+        ),
         (
             "index_names_as_nobody",
             "printf 'agent-logs-2026.11.04\\n' | "
@@ -270,19 +277,32 @@ async def _workspace_steps(ctx: TraceContext) -> dict[str, object]:
     report["existing_root_directory_stays_with_root"] = private.stat().st_uid == 0
     report["edit_keeps_a_root_file_with_root"] = existing.stat().st_uid == 0
 
-    # A FIFO that the child plants does not block the gateway.
+    # A FIFO that the child plants does not block the gateway. A blocking open would stop the
+    # event loop, so the call runs on its own thread, and a daemon thread cannot stop the exit.
     await run("mkdir /tmp/fre1732-fd && mkfifo /tmp/fre1732-fd/f")
-    fifo_blocked = False
-    for call in (
-        write_executor("/tmp/fre1732-fd/f", "x", ctx=ctx),
-    ):
-        try:
-            await asyncio.wait_for(asyncio.shield(call), timeout=5)
-        except TimeoutError:
-            fifo_blocked = True
-        except ToolError:
-            pass
-    report["a_planted_fifo_does_not_block_write"] = not fifo_blocked
+
+    def write_to_fifo() -> None:
+        with suppress(ToolError):
+            asyncio.run(write_executor("/tmp/fre1732-fd/f", "x", ctx=ctx))
+
+    fifo_call = threading.Thread(target=write_to_fifo, daemon=True)
+    fifo_call.start()
+    fifo_call.join(timeout=5)
+    report["a_planted_fifo_does_not_block_write"] = not fifo_call.is_alive()
+
+    # HOME: a start-up file that `write` plants must not change what an allowed command does.
+    await write_executor("/tmp/.curlrc", 'write-out = "PLANTED-CURLRC"\n', ctx=ctx)
+    curl = "curl -s -o /dev/null http://127.0.0.1:1/"
+    _, ignored = await run(curl)
+    _, seeded = await run(f"HOME=/tmp {curl}")
+    report["curlrc_in_tmp_is_ignored"] = "PLANTED-CURLRC" not in ignored
+    report["seeded_curl_reads_a_curlrc_from_home"] = "PLANTED-CURLRC" in seeded
+    refused = False
+    try:
+        await write_executor(f"{child_env()['HOME']}/.curlrc", "x\n", ctx=ctx)
+    except ToolError:
+        refused = True
+    report["write_refuses_the_child_home"] = refused
     return report
 
 

@@ -17,6 +17,7 @@ Usage::
 
 import hmac
 import os
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ from personal_agent.config.settings import get_settings
 log = structlog.get_logger(__name__)
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+_ENV_REFERENCE = re.compile(r"\$\{([^}]+)\}")
 
 
 @dataclass(frozen=True)
@@ -77,13 +79,12 @@ def _expand_env_var(value: str) -> str:
         Expanded string. An unset variable stays as its literal reference, and
         :func:`load_token_config` refuses that entry.
     """
-    import re
 
     def replace(match: re.Match[str]) -> str:
         var_name = match.group(1)
         return os.environ.get(var_name, match.group(0))
 
-    return re.sub(r"\$\{([^}]+)\}", replace, value)
+    return _ENV_REFERENCE.sub(replace, value)
 
 
 def load_token_config(path: Path) -> dict[str, TokenInfo]:
@@ -120,8 +121,10 @@ def load_token_config(path: Path) -> dict[str, TokenInfo]:
             continue
 
         secret = _expand_env_var(str(secret_raw))
-        # The file is public, so its literal text must never work as a token (FRE-1732).
-        if not secret.strip() or "${" in secret:
+        # The file is public, so an unset reference must never work as a token (FRE-1732). A literal
+        # stays possible for a private dev file. A test keeps the public file free of literals.
+        references = _ENV_REFERENCE.findall(str(secret_raw))
+        if not secret.strip() or any(not os.environ.get(ref, "").strip() for ref in references):
             log.warning("gateway_access_token_unset", name=name)
             continue
 

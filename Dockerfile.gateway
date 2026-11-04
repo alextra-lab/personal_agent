@@ -56,6 +56,12 @@ RUN npm install -g --no-audit --no-fund @mermaid-js/mermaid-cli@^11 && \
 
 WORKDIR /app
 
+# FRE-1732: HOME of the bash child, which runs as nobody. mmdc's browser needs a writable config
+# directory. The write tool's path rules do not reach this path, so a start-up file such as
+# ~/.curlrc cannot appear here with no approval card. The parent is root's, so the child cannot
+# replace this directory with a link.
+RUN install -d -o nobody -g nogroup -m 700 /var/lib/seshat-bash-home
+
 # Docker CLI — needed to launch docker/mcp-gateway via mounted Docker socket (cloud MCP)
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 

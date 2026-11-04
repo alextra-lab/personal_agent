@@ -43,7 +43,9 @@ FRE-261 Step 5. FRE-1462 (execution bound + cleanup).
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
+import stat
 import time
 import uuid
 from contextlib import suppress
@@ -57,7 +59,10 @@ from personal_agent.tools.primitives._child_workspace import (
     missing_parts,
     path_for_root_open,
 )
-from personal_agent.tools.primitives._governance import make_directory_no_symlinks
+from personal_agent.tools.primitives._governance import (
+    make_directory_no_symlinks,
+    open_no_symlinks,
+)
 
 log = get_logger(__name__)
 
@@ -167,8 +172,11 @@ async def run_in_sandbox(
         # This process is root, and the child owns the parent directory (FRE-1732).
         scratch_for_root = path_for_root_open(scratch_host_path)
         created = missing_parts(scratch_for_root)
-        make_directory_no_symlinks(scratch_for_root)
-        give_to_child(created, trace_id=trace_id)
+        try:
+            make_directory_no_symlinks(scratch_for_root)
+        finally:
+            # Also after a failure: the next call finds these parts in place, and does not give them.
+            give_to_child(created, trace_id=trace_id)
     except OSError as exc:
         log.error(
             "sandbox_scratch_mkdir_failed",
@@ -352,6 +360,10 @@ async def run_in_sandbox(
 def _list_scratch_files(path: Path) -> list[str]:
     """Return a list of absolute paths of files in *path* (non-recursive).
 
+    This process is root and the ``bash`` child can own this directory, so the listing goes
+    through a descriptor that opened with no symbolic link (FRE-1732). A link in the directory is
+    not listed.
+
     Args:
         path: Directory to list.
 
@@ -360,9 +372,15 @@ def _list_scratch_files(path: Path) -> list[str]:
         or cannot be listed.
     """
     try:
-        if path.is_symlink() or not path.exists():
-            return []
-        return sorted(str(f) for f in path.iterdir() if f.is_file())
+        fd = open_no_symlinks(path_for_root_open(path), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            return sorted(
+                str(path / name)
+                for name in os.listdir(fd)
+                if stat.S_ISREG(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode)
+            )
+        finally:
+            os.close(fd)
     except OSError:
         return []
 

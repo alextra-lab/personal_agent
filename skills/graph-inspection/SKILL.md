@@ -94,11 +94,11 @@ Check the result before you answer:
 | `error: authentication failed` | The user or password is wrong | Stop. Tell the user. Do not try other credentials |
 | `error: cannot connect to bolt://...` | Neo4j is down, or the name does not resolve from here | Run the `service-health` skill for `neo4j`. Do not use `localhost` inside the container |
 | `error: the server refused the query: ...` | A syntax error, or the server refused a write | Fix the query as the message states |
-| `error: the neo4j driver is not importable by this python3` | The command ran with another Python | Run it with `/app/.venv/bin/python` in place of `python3` |
-| The driver is not usable at all | — | The HTTP API is the last resort (below). It asks the user |
+| `error: the neo4j driver is not importable by this python3` | The command ran with another Python, outside the gateway | On the host, run it with `/app/.venv/bin/python` in place of `python3`. In the gateway, keep `python3`: another form gets no password |
+| The driver is not usable at all | — | From a host shell, the HTTP API is the last resort (below). In the gateway, stop and tell the user |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
-The HTTP Cypher API, only when the Python driver cannot be used:
+The HTTP Cypher API, only when the Python driver cannot be used, and only from a shell that holds these variables. In the gateway they are empty (FRE-1732), so this returns 401, and that is not a Neo4j fault:
 
 ```bash
 # ask: the shell expands ${AGENT_NEO4J_USER} and ${AGENT_NEO4J_PASSWORD} here, so this is not a plain command and asks for approval.

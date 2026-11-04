@@ -172,15 +172,27 @@ def _quote(text: str | None, limit: int = 600) -> str:
 
 
 def _expand_path(path: str) -> str:
-    """Expand path with environment variables.
+    """Expand the home directory in a model's path. ``$VAR`` stays literal text (FRE-1729).
 
     Args:
-        path: Path string that may contain environment variables.
+        path: Path string from a model.
 
     Returns:
         Expanded path string.
     """
-    return os.path.expanduser(os.path.expandvars(path))
+    return os.path.expanduser(path)
+
+
+def _expand_pattern(pattern: str) -> str:
+    """Expand an operator's pattern with environment variables and the home directory.
+
+    Args:
+        pattern: Glob pattern from the governance config.
+
+    Returns:
+        Expanded pattern string.
+    """
+    return os.path.expanduser(os.path.expandvars(pattern))
 
 
 def _validate_path_against_patterns(path: str, patterns: list[str]) -> bool:
@@ -194,7 +206,7 @@ def _validate_path_against_patterns(path: str, patterns: list[str]) -> bool:
         True if path matches any pattern, False otherwise.
     """
     expanded_path = _expand_path(path)
-    return any(fnmatch(expanded_path, _expand_path(pattern)) for pattern in patterns)
+    return any(fnmatch(expanded_path, _expand_pattern(pattern)) for pattern in patterns)
 
 
 def _governance_refusal(

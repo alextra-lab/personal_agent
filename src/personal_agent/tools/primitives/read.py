@@ -18,6 +18,7 @@ FRE-1575: one tool contract — a failure raises :class:`ReadError`.
 """
 
 import os
+import shlex
 from pathlib import Path
 from typing import IO, Any, Literal
 
@@ -280,6 +281,7 @@ def _build_read_marker(
     next_offset = start + (lines_returned if lines_returned else 1)
     last = next_offset - 1
     remaining = max(total - last, 0)
+    path = shlex.quote(path)  # A file name can hold ``$NAME``, which bash must not expand.
     if line_clipped:
         return (
             f"Line {start} of {total} is too long to show in one read (it was cut off). "

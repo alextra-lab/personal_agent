@@ -5,6 +5,7 @@ CI has no ``claude`` and no ``bwrap``, so these tests skip there. The evidence f
 
 from __future__ import annotations
 
+import fcntl
 import json
 import shutil
 import socket
@@ -14,8 +15,14 @@ from pathlib import Path
 
 import pytest
 from scripts.eval.fre1730.jail import Jail, main_repo_root, run_in_jail
-from scripts.eval.fre1730 import matrix
-from scripts.eval.fre1730.matrix import PlannedSession, RunConfig, plan_sessions, run_matrix
+from scripts.eval.fre1730 import matrix, run
+from scripts.eval.fre1730.matrix import (
+    PlannedSession,
+    RunConfig,
+    load_records,
+    plan_sessions,
+    run_matrix,
+)
 from scripts.eval.fre1730.run import FIXTURE_MARKER, FIXTURE_PLUGIN, MODEL, run_and_report
 from scripts.eval.fre1730.score import copy_pr_tests, ignored_paths, score_diff
 from scripts.eval.fre1730.session import (
@@ -26,7 +33,7 @@ from scripts.eval.fre1730.session import (
     run_session,
     stub_route,
 )
-from scripts.eval.fre1730.spend import RunStopped, SpendStop
+from scripts.eval.fre1730.spend import RunLocked, RunStopped, SpendStop
 from scripts.eval.fre1730.stub_model import StubModel, serve
 from scripts.eval.fre1730.tasks import Task
 from scripts.eval.fre1730.transcript import arm_problems, read_transcript
@@ -190,7 +197,7 @@ def test_ac3_the_stop_ends_the_run_and_no_more_sessions_start(
         run_matrix(sessions, config, stop)
     assert len(model.requests) == 2
     assert stop.spent_usd >= 3.0
-    assert len(config.ledger.read_text().splitlines()) == 2
+    assert len(load_records(config)) == 2
 
 
 def test_ac3_a_restart_keeps_the_spend_and_cannot_reset_the_stop(
@@ -247,7 +254,7 @@ def test_a_restart_runs_an_errored_session_again_and_keeps_its_spend(
     model.status = 200
     records = run_matrix(sessions, config, SpendStop(3.0, 3.0))
     assert [r["is_error"] for r in records] == [True, False]
-    assert len(config.ledger.read_text().splitlines()) == 2
+    assert len(load_records(config)) == 2
 
 
 def test_a_stopped_run_still_writes_its_report_from_the_ledger(
@@ -260,29 +267,121 @@ def test_a_stopped_run_still_writes_its_report_from_the_ledger(
     with pytest.raises(RunStopped, match="reached the cap"):
         run_and_report(sessions, config, SpendStop(3.0, 100.0), ["SessionStart"], "go")
     report = (config.results / "report.md").read_text()
-    assert "Valid sessions: 2." in report
+    assert "Valid sessions: 1. Sessions left out: 1." in report
     assert "$4.00" in report
 
 
-def test_a_session_with_unknown_spend_charges_its_budget_and_a_restart_keeps_it(
+def test_a_timed_out_session_keeps_its_evidence_and_its_charge(
     tmp_path: Path,
     source: Path,
     stub: tuple[StubModel, tuple[str, int]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model, address = stub
-    monkeypatch.setattr(matrix, "SESSION_TIMEOUT_S", 0.01)
+    model.tool_loop = True
+    model.tool_command = "sleep 300"
+    monkeypatch.setattr(matrix, "SESSION_TIMEOUT_S", 12)
     sessions = [PlannedSession(_task(source), "control", 0)]
     config = _config(tmp_path, source, address)
     with pytest.raises(RunStopped, match="spend is unknown"):
         run_matrix(sessions, config, SpendStop(hard_stop_usd=4.0, projected_usd=100.0))
-    assert json.loads(config.ledger.read_text())["cost_usd"] == 4.0
+    record = load_records(config)[0]
+    assert (record["cost_usd"], record["reported_cost_usd"], record["subtype"]) == (
+        4.0,
+        None,
+        "timeout",
+    )
+    assert record["session_id"]
+    assert (config.results / "transcripts" / f"{record['key']}.jsonl").exists()
 
     stop = SpendStop(hard_stop_usd=4.0, projected_usd=100.0)
+    before = len(model.requests)
     with pytest.raises(RunStopped, match="reached the cap"):
         run_matrix(sessions, config, stop)
     assert stop.spent_usd == 4.0
+    assert len(model.requests) == before
+
+
+def test_a_kill_of_the_harness_cannot_lose_the_charge(
+    tmp_path: Path,
+    source: Path,
+    stub: tuple[StubModel, tuple[str, int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, address = stub
+
+    def killed(**_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(matrix, "run_session", killed)
+        config = _config(tmp_path, source, address)
+        sessions = [PlannedSession(_task(source), "control", 0)]
+        with pytest.raises(KeyboardInterrupt):
+            run_matrix(sessions, config, SpendStop(hard_stop_usd=4.0, projected_usd=100.0))
+    assert [r["cost_usd"] for r in load_records(config)] == [4.0]
+
+    with pytest.raises(RunStopped, match="reached the cap"):
+        run_matrix(sessions, config, SpendStop(hard_stop_usd=4.0, projected_usd=100.0))
     assert model.requests == []
+
+    records = run_matrix(sessions, config, SpendStop(hard_stop_usd=9.0, projected_usd=100.0))
+    assert [r["subtype"] for r in records] == ["pending", "success"]
+    assert records[1]["budget_usd"] == 5.0
+
+
+def test_a_damaged_ledger_stops_the_run_and_does_not_read_as_zero_spend(
+    tmp_path: Path, source: Path, stub: tuple[StubModel, tuple[str, int]]
+) -> None:
+    _, address = stub
+    config = _config(tmp_path, source, address)
+    config.results.mkdir(parents=True)
+    config.ledger.write_text('{"attempt": "a", "cost_')
+    with pytest.raises(RunStopped, match="damaged"):
+        run_matrix([PlannedSession(_task(source), "control", 0)], config, SpendStop(4.0, 100.0))
+
+
+def test_a_report_failure_does_not_hide_why_the_run_stopped(
+    tmp_path: Path,
+    source: Path,
+    stub: tuple[StubModel, tuple[str, int]],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model, address = stub
+    model.status = 429
+
+    def bad_render(*_args: object) -> str:
+        raise ValueError("bad")
+
+    monkeypatch.setattr(run, "render_report", bad_render)
+    config = _config(tmp_path, source, address)
+    with pytest.raises(RunStopped, match="API status 429"):
+        run_and_report(
+            [PlannedSession(_task(source), "control", 0)], config, SpendStop(3.0, 3.0), [], "go"
+        )
+    assert "THE REPORT WAS NOT WRITTEN" in capsys.readouterr().err
+
+
+def test_a_second_run_refused_by_the_lock_does_not_touch_the_report(
+    tmp_path: Path, source: Path, stub: tuple[StubModel, tuple[str, int]]
+) -> None:
+    _, address = stub
+    config = _config(tmp_path, source, address)
+    config.results.mkdir(parents=True)
+    config.scratch.mkdir(parents=True)
+    (config.results / "report.md").write_text("the first run's report")
+    with open(config.scratch / "run.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(RunLocked):
+            run_and_report(
+                [PlannedSession(_task(source), "control", 0)],
+                config,
+                SpendStop(3.0, 3.0),
+                [],
+                "other",
+            )
+    assert (config.results / "report.md").read_text() == "the first run's report"
 
 
 def test_ac4_the_listing_names_each_file_that_only_the_plugin_wrote(

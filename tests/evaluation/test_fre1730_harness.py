@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -448,6 +449,12 @@ def test_an_added_blank_line_above_an_old_test_is_not_a_new_test() -> None:
     assert not score._ADDED_TEST.findall(" def test_context():\n-def test_gone():\n")
 
 
+def test_an_edited_or_moved_test_is_not_a_new_test() -> None:
+    edited = "-def test_x(a):\n+def test_x(a, b):\n+async def test_new():\n"
+    assert score.count_new_tests(edited) == 1
+    assert score.count_new_tests("+def test_only():\n") == 1
+
+
 def test_a_failed_git_call_raises_and_does_not_read_as_a_small_diff(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -465,6 +472,10 @@ def test_a_plugin_write_into_a_file_that_both_arms_create_is_named() -> None:
     plugin = [{".bashrc": "planted line", ".claude.json": "three"}, {".bashrc": "empty"}]
     assert plugin_changed_content(plugin, control) == (".bashrc",)
     assert plugin_changed_content(control, control) == ()
+
+
+def test_one_control_session_proves_nothing_about_stable_content() -> None:
+    assert plugin_changed_content([{".claude.json": "b"}], [{".claude.json": "a"}]) == ()
 
 
 def test_the_snapshot_lists_directory_links_empty_and_unreadable_directories(
@@ -489,12 +500,14 @@ def test_the_snapshot_lists_directory_links_empty_and_unreadable_directories(
     assert "full/" not in listing
 
 
-def test_paid_has_no_option_that_starts_a_new_ledger() -> None:
-    with pytest.raises(SystemExit):
+def test_paid_has_no_option_that_starts_a_new_ledger(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as stopped:
         run.main(
             ["paid", "--plugin-dir", "x", "--marker", "m", "--hard-stop-usd", "1"]
             + ["--projected-usd", "1", "--owner-go", "go", "--name", "retry"]
         )
+    assert stopped.value.code == 2
+    assert "unrecognized arguments: --name retry" in capsys.readouterr().err
 
 
 def test_a_paid_run_needs_a_passed_verification_of_this_task_set(tmp_path: Path) -> None:
@@ -507,8 +520,24 @@ def test_a_paid_run_needs_a_passed_verification_of_this_task_set(tmp_path: Path)
     run.require_verified(loaded, tmp_path)
     with pytest.raises(SystemExit, match="verify-tasks"):
         run.require_verified(loaded[:4], tmp_path)
-
+    other_tests = [dataclasses.replace(loaded[0], tests=("tests/other.py",)), *loaded[1:]]
+    with pytest.raises(SystemExit, match="verify-tasks"):
+        run.require_verified(other_tests, tmp_path)
     assert not run.record_verified(loaded, [*good[:4], "FRE-1: ... NOT USABLE"], tmp_path)
+
+
+def test_a_verification_that_raises_leaves_no_old_pass_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded = tasks.load_tasks()
+    assert run.record_verified(loaded, [f"{t.ticket}: ... usable" for t in loaded], tmp_path)
+
+    def raises(*_args: object) -> list[str]:
+        raise RunStopped("uv sync failed")
+
+    monkeypatch.setattr(run, "verify_tasks", raises)
+    with pytest.raises(RunStopped):
+        run.cmd_verify_tasks(loaded, tmp_path, tmp_path)
     with pytest.raises(SystemExit, match="verify-tasks"):
         run.require_verified(loaded, tmp_path)
 
@@ -536,7 +565,59 @@ def test_a_session_at_its_budget_counts_and_an_arm_cannot_hide_its_costly_runs()
         "exit_code": 1,
         "subtype": "error_max_budget_usd",
         "api_error_status": None,
+        "budget_usd": 10.0,
     }
     assert is_valid(record)
     assert _stop_reason(record) is None
     assert not is_valid({**record, "subtype": "error_during_execution"})
+
+
+def test_a_session_stopped_by_a_budget_the_nearby_cap_shrank_does_not_count() -> None:
+    record = {
+        "key": "k",
+        "problems": [],
+        "is_error": True,
+        "exit_code": 1,
+        "subtype": "error_max_budget_usd",
+        "budget_usd": 0.4,
+    }
+    assert not is_valid(record)
+
+
+def _left_out_record() -> dict[str, object]:
+    return {
+        "attempt": "a",
+        "key": "T-plugin-0",
+        "ticket": "T",
+        "arm": "plugin",
+        "risky": False,
+        "subtype": "error_during_execution",
+        "problems": [],
+        "is_error": True,
+        "exit_code": 1,
+        "cost_usd": 10.0,
+        "reported_cost_usd": None,
+        "refused": ["CONNECT evil.example:443"],
+        "footprint": [".config/planted"],
+        "ignored_paths": ["hidden.py"],
+    }
+
+
+def test_the_safety_sections_read_a_session_that_was_left_out() -> None:
+    text = report.render_report([_left_out_record()], [], "")
+    assert "CONNECT evil.example:443" in text
+    assert ".config/planted" in text
+    assert "hidden.py" in text
+
+
+def test_the_report_shows_the_charge_and_the_reported_spend_apart() -> None:
+    text = report.render_report(
+        [
+            _left_out_record(),
+            {**_left_out_record(), "attempt": "b", "cost_usd": 4.0, "reported_cost_usd": 4.0},
+        ],
+        [],
+        "",
+    )
+    assert "Charged to the stop, with the sessions left out: $14.00" in text
+    assert "Reported by the sessions: $4.00" in text

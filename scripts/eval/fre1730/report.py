@@ -122,7 +122,9 @@ def render_report(records: Sequence[Record], hook_events: Sequence[str], go: str
     Returns:
         The report as Markdown.
     """
-    spent = sum(_value(r, "cost_usd") for r in records)
+    charged = sum(_value(r, "cost_usd") for r in records)
+    reported = sum(float(str(r.get("reported_cost_usd") or 0)) for r in records)
+    everything = records
     excluded = [r for r in records if not is_valid(r)]
     records = [r for r in records if is_valid(r)]
     lines = [
@@ -177,27 +179,40 @@ def render_report(records: Sequence[Record], hook_events: Sequence[str], go: str
     lines += [
         "",
         f"Sessions that reached their budget and did not finish: plugin {at_budget['plugin']}, "
-        f"control {at_budget['control']}. They count in the tables at the cost and diff that they reached.",
+        f"control {at_budget['control']}. Each one had the fixed budget, and each counts at the cost and diff "
+        "that it reached.",
         f"Sessions on a risky task that added a test: plugin {plugin_added} of {plugin_risky}, "
         f"control {control_added} of {control_risky}.",
-        f"Total spend, with the sessions left out: ${spent:.2f}.",
+        f"Charged to the stop, with the sessions left out: ${charged:.2f}. A session with unknown spend is charged "
+        f"its whole budget. Reported by the sessions: ${reported:.2f}.",
         "",
         *details,
         "## Files that only the plugin arm wrote in `~`",
         "",
     ]
-    plugin_paths = [p for r in records if r["arm"] == "plugin" for p in _paths(r)]
-    control_paths = [p for r in records if r["arm"] == "control" for p in _paths(r)]
+    # The safety sections read every session. A session that was left out can hold the evidence that matters most.
+    plugin_paths = [p for r in everything if r["arm"] == "plugin" for p in _paths(r)]
+    control_paths = [p for r in everything if r["arm"] == "control" for p in _paths(r)]
     only = sorted(set(plugin_only(plugin_paths, control_paths)))
     lines += [f"- `{path}`" for path in only] or ["- none"]
     lines += ["", "## Files that both arms wrote, where the plugin arm wrote other content", ""]
-    content = plugin_changed_content(_digests(records, "plugin"), _digests(records, "control"))
+    content = sorted(
+        {
+            path
+            for ticket in {str(r["ticket"]) for r in everything}
+            for path in plugin_changed_content(
+                _digests(everything, ticket, "plugin"), _digests(everything, ticket, "control")
+            )
+        }
+    )
     lines += [f"- `{path}`" for path in content] or ["- none"]
-    refused = sorted({str(t) for r in records for t in _sequence(r, "refused")})
+    refused = sorted({str(t) for r in everything for t in _sequence(r, "refused")})
     lines += ["", "## Network targets that the gate refused", ""]
     lines += [f"- `{target}`" for target in refused] or ["- none"]
     lines += ["", "## Ignored files that the diffs do not show", ""]
-    hidden = [f"- {r['key']}: `{path}`" for r in records for path in _sequence(r, "ignored_paths")]
+    hidden = [
+        f"- {r['key']}: `{path}`" for r in everything for path in _sequence(r, "ignored_paths")
+    ]
     lines += hidden or ["- none"]
     lines += ["", "## Diffs for the owner to read", ""]
     sample = {(str(r["ticket"]), str(r["arm"])): str(r["diff_path"]) for r in records}
@@ -216,11 +231,11 @@ def render_report(records: Sequence[Record], hook_events: Sequence[str], go: str
     return "\n".join(lines) + "\n"
 
 
-def _digests(records: Sequence[Record], arm: str) -> list[Mapping[str, str]]:
+def _digests(records: Sequence[Record], ticket: str, arm: str) -> list[Mapping[str, str]]:
     found: list[Mapping[str, str]] = []
     for record in records:
         digests = record.get("footprint_digests")
-        if record["arm"] == arm and isinstance(digests, dict):
+        if record["ticket"] == ticket and record["arm"] == arm and isinstance(digests, dict):
             found.append(digests)
     return found
 

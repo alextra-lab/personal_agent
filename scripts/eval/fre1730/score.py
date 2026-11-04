@@ -23,7 +23,8 @@ _ENV = {
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _USUAL_IGNORED = (".venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache")
-_ADDED_TEST = re.compile(r"^\+[ \t]*(?:async[ \t]+)?def[ \t]+test_\w+", re.MULTILINE)
+_ADDED_TEST = re.compile(r"^\+[ \t]*(?:async[ \t]+)?def[ \t]+(test_\w+)", re.MULTILINE)
+_REMOVED_TEST = re.compile(r"^-[ \t]*(?:async[ \t]+)?def[ \t]+(test_\w+)", re.MULTILINE)
 _COUNT = re.compile(r"(\d+) (passed|failed|errors?)")
 #: A library can log after pytest's summary, so the summary is the last line of this form.
 _SUMMARY = re.compile(
@@ -99,6 +100,19 @@ def parse_numstat(numstat: str) -> tuple[int, int]:
     return code, test
 
 
+def count_new_tests(test_hunks: str) -> int:
+    """Count the new test functions. A test that was edited or moved has the same name on a removed line.
+
+    Args:
+        test_hunks: The diff of the test files.
+
+    Returns:
+        The count.
+    """
+    removed = set(_REMOVED_TEST.findall(test_hunks))
+    return sum(1 for name in _ADDED_TEST.findall(test_hunks) if name not in removed)
+
+
 def git(jail: Jail, *args: str) -> str:
     """Run git in the jail. A failure must not read as a small diff.
 
@@ -135,7 +149,7 @@ def score_diff(jail: Jail, base: str) -> DiffScore:
     test_hunks = "\n".join(
         part for part in diff.split("diff --git ") if _is_test_path(part.split(" ", 1)[0][2:])
     )
-    return DiffScore(code, test, len(_ADDED_TEST.findall(test_hunks)), diff)
+    return DiffScore(code, test, count_new_tests(test_hunks), diff)
 
 
 def ignored_paths(jail: Jail) -> list[str]:

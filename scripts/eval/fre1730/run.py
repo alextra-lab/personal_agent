@@ -30,7 +30,7 @@ from scripts.eval.fre1730.matrix import (
 from scripts.eval.fre1730.report import plugin_hook_events, render_report
 from scripts.eval.fre1730.score import copy_pr_tests, run_pr_tests
 from scripts.eval.fre1730.session import paid_route, prepare_repo, stub_route
-from scripts.eval.fre1730.spend import RunStopped, SpendStop
+from scripts.eval.fre1730.spend import RunLocked, RunStopped, SpendStop
 from scripts.eval.fre1730.stub_model import StubModel, serve
 from scripts.eval.fre1730.tasks import Task, base_commit, load_tasks
 
@@ -186,6 +186,10 @@ def verify_tasks(tasks: Sequence[Task], source: Path, scratch: Path) -> list[str
     return lines
 
 
+def _verified_key(tasks: Sequence[Task]) -> list[list[str]]:
+    return sorted([task.merge, *task.tests] for task in tasks)
+
+
 def record_verified(tasks: Sequence[Task], lines: Sequence[str], scratch: Path) -> bool:
     """Record a verification that passed. A paid run needs it.
 
@@ -197,11 +201,9 @@ def record_verified(tasks: Sequence[Task], lines: Sequence[str], scratch: Path) 
     Returns:
         Every task is usable.
     """
-    path = scratch / VERIFIED_FILE
-    path.unlink(missing_ok=True)
     if len(lines) != len(tasks) or not all(line.endswith(" usable") for line in lines):
         return False
-    path.write_text(json.dumps(sorted(task.merge for task in tasks)))
+    (scratch / VERIFIED_FILE).write_text(json.dumps(_verified_key(tasks)))
     return True
 
 
@@ -213,11 +215,44 @@ def require_verified(tasks: Sequence[Task], scratch: Path) -> None:
         scratch: The scratch directory.
 
     Raises:
-        SystemExit: If this task set has no passed verification.
+        SystemExit: If this task set, with its test files, has no passed verification.
     """
     path = scratch / VERIFIED_FILE
-    if not path.exists() or json.loads(path.read_text()) != sorted(t.merge for t in tasks):
+    if not path.exists() or json.loads(path.read_text()) != _verified_key(tasks):
         raise SystemExit("run verify-tasks first, and every task must be usable")
+
+
+def cmd_verify_tasks(tasks: Sequence[Task], source: Path, scratch: Path) -> int:
+    """Verify the tasks. The old record goes first, so a verification that fails or raises leaves no pass behind.
+
+    Args:
+        tasks: The tasks.
+        source: The source repo.
+        scratch: The scratch directory.
+
+    Returns:
+        The exit code.
+    """
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / VERIFIED_FILE).unlink(missing_ok=True)
+    lines = verify_tasks(tasks, source, scratch)
+    print("\n".join(lines))
+    return 0 if record_verified(tasks, lines, scratch) else EXIT_NOT_USABLE
+
+
+def _write_report(config: RunConfig, hook_events: Sequence[str], go: str) -> None:
+    """Write the report. A failure here must not hide why the run stopped, so it goes to stderr.
+
+    Args:
+        config: The run.
+        hook_events: The hook events that the plugin declares.
+        go: The owner's recorded go.
+    """
+    try:
+        report = render_report(load_records(config), hook_events, go)
+        (config.results / "report.md").write_text(report, errors="backslashreplace")
+    except (RunStopped, ValueError, KeyError, TypeError, OSError) as error:
+        print(f"THE REPORT WAS NOT WRITTEN: {error!r}", file=sys.stderr)
 
 
 def run_and_report(
@@ -240,10 +275,14 @@ def run_and_report(
         The records.
     """
     try:
-        return run_matrix(sessions, config, stop)
-    finally:
-        report = render_report(load_records(config), hook_events, go)
-        (config.results / "report.md").write_text(report)
+        records = run_matrix(sessions, config, stop)
+    except RunLocked:
+        raise
+    except BaseException:
+        _write_report(config, hook_events, go)
+        raise
+    _write_report(config, hook_events, go)
+    return records
 
 
 def _stub_run(
@@ -472,9 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             case "preflight":
                 return cmd_preflight(tasks)
             case "verify-tasks":
-                lines = verify_tasks(tasks, main_repo_root(), SCRATCH)
-                print("\n".join(lines))
-                return 0 if record_verified(tasks, lines, SCRATCH) else EXIT_NOT_USABLE
+                return cmd_verify_tasks(tasks, main_repo_root(), SCRATCH)
             case "dry-run":
                 return _cmd_stub_check(tasks, FIXTURE_PLUGIN, FIXTURE_MARKER, "dry-run")
             case "check-arms":

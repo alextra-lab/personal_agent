@@ -82,7 +82,11 @@ The run stops, and the ledger keeps each session that ended, on any of these:
 
 A session that ended on an error or failed its check is left out of the report's tables, and the report names it. It runs again after a restart. Its spend still counts.
 
-A session that reaches its own $10 budget counts, at the cost and diff that it reached, and the run goes on. Leaving it out would hide the costly runs of one arm. The report gives the count per arm.
+A session that reaches the fixed $10 budget counts, at the cost and diff that it reached, and the run goes on. Leaving it out would hide the costly runs of one arm. The report gives the count per arm. A session that the nearby cap gave a smaller budget, and that reached it, is left out, because its peers had more.
+
+The ledger charges a session's whole budget before the session starts, and the final record replaces that charge. So a kill of the harness cannot lose the spend. A charge with no reported cost is a worst case, and the report shows the charged and the reported totals apart.
+
+The report's safety sections read every session, also the sessions left out. The section on files that both arms wrote needs at least two control sessions on a task, so a trace names nothing there.
 
 The run writes `report.md` from the ledger even if it stops. There is one ledger, in `results/paid`, so no option can start a paid run at zero spend. `paid` refuses to start until `verify-tasks` passes for this task set. `verify-tasks` exits 6 if a task is not usable.
 
@@ -92,7 +96,7 @@ The run writes `report.md` from the ledger even if it stops. There is one ledger
 
 - **Diff size:** lines changed outside tests and in tests, against the base. A session that adds an ignore rule can hide a file from the diff, so the report lists each ignored file other than the usual caches.
 - **The PR's own tests:** the share that pass after the merged test files replace the session's copies.
-- **Tests added:** new test functions on added lines in the diff. The report gives the rate on tasks marked `risky`.
+- **Tests added:** new test functions on added lines in the diff. A name that is also on a removed line was edited or moved, so it does not count. The report gives the rate on tasks marked `risky`.
 - **Cost, time, turns:** from the session's result.
 - **Noise gap:** per task, the larger range between repeat runs of one arm. A difference counts only if it is larger. One run per arm measures no noise, so it never counts.
 

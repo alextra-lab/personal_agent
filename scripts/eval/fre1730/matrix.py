@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,18 +25,18 @@ from scripts.eval.fre1730.score import (
 )
 from scripts.eval.fre1730.session import (
     Route,
-    SessionResult,
     find_transcript,
     prepare_home,
     prepare_repo,
     run_session,
 )
-from scripts.eval.fre1730.spend import RunStopped, SpendStop
+from scripts.eval.fre1730.spend import SESSION_CAP_USD, RunLocked, RunStopped, SpendStop
 from scripts.eval.fre1730.tasks import Task, base_commit
 from scripts.eval.fre1730.transcript import ARMS, Arm, arm_problems, read_transcript
 
 SESSION_TIMEOUT_S = 1800
 BUDGET_SUBTYPE = "error_max_budget_usd"
+PENDING_SUBTYPE = "pending"
 
 
 @dataclass(frozen=True)
@@ -123,17 +124,33 @@ class RunConfig:
 
 
 def load_records(config: RunConfig) -> list[dict[str, object]]:
-    """Read the finished sessions.
+    """Read the sessions. The last line of an attempt wins, so an attempt with only its first line stays charged.
 
     Args:
         config: The run.
 
     Returns:
         The records.
+
+    Raises:
+        RunStopped: If a line cannot be read, because the spend is then unknown.
     """
     if not config.ledger.exists():
         return []
-    return [json.loads(line) for line in config.ledger.read_text().splitlines()]
+    latest: dict[str, dict[str, object]] = {}
+    for number, line in enumerate(config.ledger.read_text().splitlines(), start=1):
+        try:
+            record = json.loads(line)
+        except ValueError as error:
+            raise RunStopped(f"line {number} of {config.ledger} is damaged: {error}") from error
+        latest[str(record["attempt"])] = record
+    return list(latest.values())
+
+
+def _append(config: RunConfig, record: Mapping[str, object]) -> None:
+    config.results.mkdir(parents=True, exist_ok=True)
+    with config.ledger.open("a") as ledger:
+        ledger.write(json.dumps(record) + "\n")
 
 
 @contextmanager
@@ -154,7 +171,7 @@ def one_run_at_a_time(scratch: Path) -> Iterator[None]:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
-            raise RunStopped("another FRE-1730 run holds the lock") from error
+            raise RunLocked("another FRE-1730 run holds the lock") from error
         yield
 
 
@@ -169,21 +186,41 @@ def _run_one(planned: PlannedSession, config: RunConfig, stop: SpendStop) -> dic
     plugin = config.plugin if arm == "plugin" else None
     before = snapshot(run_root / "home")
     budget_usd = stop.session_budget_usd
-    try:
-        result = run_session(
-            run_root=run_root,
-            prompt=task.prompt(),
-            model=config.model,
-            route=config.route,
-            budget_usd=budget_usd,
-            timeout_s=SESSION_TIMEOUT_S,
-            plugin=plugin,
-            venv=venv,
-            stub_address=config.stub_address,
-            extra_env=config.extra_env,
-        )
-    except subprocess.TimeoutExpired:
-        result = SessionResult("", None, True, "timeout", None, 0, SESSION_TIMEOUT_S, exit_code=-1)
+    attempt = uuid.uuid4().hex
+    identity = {
+        "attempt": attempt,
+        "key": planned.key,
+        "ticket": task.ticket,
+        "arm": arm,
+        "repeat": planned.repeat,
+        "risky": task.risky,
+        "budget_usd": budget_usd,
+    }
+    # A kill of the harness must not lose this session's spend, so the charge is written before the session starts.
+    _append(
+        config,
+        {
+            **identity,
+            "cost_usd": budget_usd,
+            "reported_cost_usd": None,
+            "is_error": True,
+            "exit_code": -1,
+            "subtype": PENDING_SUBTYPE,
+            "problems": ["the harness ended during this session, so the ledger charges its budget"],
+        },
+    )
+    result = run_session(
+        run_root=run_root,
+        prompt=task.prompt(),
+        model=config.model,
+        route=config.route,
+        budget_usd=budget_usd,
+        timeout_s=SESSION_TIMEOUT_S,
+        plugin=plugin,
+        venv=venv,
+        stub_address=config.stub_address,
+        extra_env=config.extra_env,
+    )
     problems: list[str] = []
     cost_usd = result.cost_usd
     if cost_usd is None or (result.exit_code != 0 and not result.is_error):
@@ -196,10 +233,10 @@ def _run_one(planned: PlannedSession, config: RunConfig, stop: SpendStop) -> dic
 
     diffs = config.results / "diffs"
     transcripts = config.results / "transcripts"
-    diffs.mkdir(parents=True, exist_ok=True)
-    transcripts.mkdir(parents=True, exist_ok=True)
     footprint = Footprint((), (), ())
     try:
+        diffs.mkdir(parents=True, exist_ok=True)
+        transcripts.mkdir(parents=True, exist_ok=True)
         footprint = compare(before, snapshot(run_root / "home"))
         transcript = find_transcript(run_root / "home", result.session_id)
         if transcript is None:
@@ -228,15 +265,12 @@ def _run_one(planned: PlannedSession, config: RunConfig, stop: SpendStop) -> dic
     shutil.rmtree(run_root, ignore_errors=True)
 
     return {
-        "key": planned.key,
-        "ticket": task.ticket,
-        "arm": arm,
-        "repeat": planned.repeat,
-        "risky": task.risky,
+        **identity,
         "model": config.model,
         "route": config.route.kind,
         "session_id": result.session_id,
         "cost_usd": cost_usd,
+        "reported_cost_usd": result.cost_usd,
         "is_error": result.is_error,
         "exit_code": result.exit_code,
         "subtype": result.subtype,
@@ -277,8 +311,9 @@ def _forged_success(record: Mapping[str, object]) -> bool:
 def is_valid(record: Mapping[str, object]) -> bool:
     """Decide if a session counts. Only such a session is done, and only such a session is in the report.
 
-    A session that reached its budget counts. It is what that arm did, and leaving it out would hide the costly runs
-    of one arm. The report counts such sessions per arm.
+    A session that reached the fixed budget counts. It is what that arm did, and leaving it out would hide the costly
+    runs of one arm. The report counts such sessions per arm. A session that the nearby cap gave a smaller budget does
+    not count, because its peers had more.
 
     Args:
         record: The session's record.
@@ -286,10 +321,12 @@ def is_valid(record: Mapping[str, object]) -> bool:
     Returns:
         The session ended normally or on its budget, and its arm check passed.
     """
+    if record["problems"] or _forged_success(record):
+        return False
+    if not record["is_error"]:
+        return True
     return (
-        not record["problems"]
-        and not _forged_success(record)
-        and (not record["is_error"] or record["subtype"] == BUDGET_SUBTYPE)
+        record["subtype"] == BUDGET_SUBTYPE and float(str(record["budget_usd"])) >= SESSION_CAP_USD
     )
 
 
@@ -345,8 +382,7 @@ def run_matrix(
                 continue
             stop.check()
             record = _run_one(planned, config, stop)
-            with config.ledger.open("a") as ledger:
-                ledger.write(json.dumps(record) + "\n")
+            _append(config, record)
             records.append(record)
             reason = _stop_reason(record)
             if reason:

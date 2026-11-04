@@ -15,6 +15,10 @@ class RunStopped(Exception):
     """The run must stop, and master must be told why."""
 
 
+class RunLocked(RunStopped):
+    """Another run holds the lock, so this one must not touch the results."""
+
+
 @dataclass
 class SpendStop:
     """Adds up the spend and stops the run.

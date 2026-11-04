@@ -127,9 +127,9 @@ def plugin_changed_content(
 ) -> tuple[str, ...]:
     """Name the files that both arms wrote, where the plugin arm wrote other content.
 
-    A plugin can write into a file that Claude Code also creates, such as ``.bashrc``. A file whose content differs
-    between control runs is not listed, because its content varies with no plugin. Those files are in ``plugin_only``
-    or are Claude Code's own.
+    A plugin can write into a file that Claude Code also creates, such as ``.bashrc``. A file counts as stable only if
+    at least two control sessions wrote the same content. So one control session names nothing, and a file whose content
+    varies with no plugin is not listed. Pass the sessions of one task, because content can differ per task.
 
     Args:
         plugin: The digests of each plugin arm session.
@@ -138,14 +138,14 @@ def plugin_changed_content(
     Returns:
         The paths.
     """
-    seen: dict[str, set[str]] = {}
+    seen: dict[str, list[str]] = {}
     for session in control:
         for path, digest in session.items():
-            seen.setdefault(_VOLATILE.sub("*", path), set()).add(digest)
+            seen.setdefault(_VOLATILE.sub("*", path), []).append(digest)
     found = set()
     for session in plugin:
         for path, digest in session.items():
-            digests = seen.get(_VOLATILE.sub("*", path), set())
-            if len(digests) == 1 and digest not in digests:
+            digests = seen.get(_VOLATILE.sub("*", path), [])
+            if len(digests) >= 2 and len(set(digests)) == 1 and digest != digests[0]:
                 found.add(path)
     return tuple(sorted(found))

@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from scripts.eval.fre1730.egress import ANTHROPIC_API, EgressPolicy, serve_gate
@@ -25,6 +25,7 @@ from scripts.eval.fre1730.jail import (
 )
 
 _GIT_DEPTH = 20
+TIMEOUT_SUBTYPE = "timeout"
 _SESSION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Both arms lose the web. A page on the public repo holds the merged fix.
 _DISALLOWED_TOOLS = ("WebFetch", "WebSearch")
@@ -160,6 +161,12 @@ class SessionResult:
     stderr_tail: str = ""
 
 
+def _text(output: str | bytes | None) -> str:
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output or ""
+
+
 def _number(value: object) -> float | None:
     """Read a number from session output. A plugin can write to the session's stdout, so nothing is assumed.
 
@@ -235,7 +242,7 @@ def run_session(
         allowed_hosts: What ``CONNECT`` may reach. By default the Anthropic API, or nothing on a stub run.
 
     Returns:
-        The result.
+        The result. A session that passes its time limit has no known cost.
     """
     claude = shutil.which("claude")
     if claude is None:
@@ -274,16 +281,23 @@ def run_session(
     policy = EgressPolicy(allowed=allowed_hosts, stub=stub_address)
     jail = Jail(run_root=run_root, venv=venv, plugin=plugin)
     with serve_gate(run_root / EGRESS_SOCKET_NAME, policy):
-        done = subprocess.run(
-            jail.argv(with_egress_relay(command)),
-            env=env,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=timeout_s,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            done = subprocess.run(
+                jail.argv(with_egress_relay(command)),
+                env=env,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout_s,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            # The output so far names the session, so its transcript and its refusals stay as evidence.
+            partial = _parse_result(
+                _text(error.stdout), tuple(policy.refused), -1, _text(error.stderr)
+            )
+            return replace(partial, cost_usd=None, is_error=True, subtype=TIMEOUT_SUBTYPE)
     return _parse_result(done.stdout, tuple(policy.refused), done.returncode, done.stderr)
 
 

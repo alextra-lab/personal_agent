@@ -13,7 +13,13 @@ from pathlib import Path
 import pytest
 from scripts.eval.fre1730 import report, run, score, session, tasks
 from scripts.eval.fre1730.egress import EgressPolicy, serve_gate
-from scripts.eval.fre1730.footprint import compare, plugin_only, snapshot
+from scripts.eval.fre1730.footprint import (
+    compare,
+    plugin_changed_content,
+    plugin_only,
+    snapshot,
+)
+from scripts.eval.fre1730.jail import Jail
 from scripts.eval.fre1730.matrix import _stop_reason, is_valid, plan_sessions
 from scripts.eval.fre1730.spend import RunStopped, SpendStop
 from scripts.eval.fre1730.transcript import TranscriptFacts, arm_problems, read_transcript
@@ -83,11 +89,6 @@ def test_the_session_budget_is_fixed_until_the_last_sessions() -> None:
     assert stop.session_budget_usd == 10
     stop.add(25.0)
     assert stop.session_budget_usd == 5
-
-
-def test_a_session_with_no_cost_stops_the_run() -> None:
-    with pytest.raises(RunStopped, match="spend is unknown"):
-        SpendStop(hard_stop_usd=3, projected_usd=3).add(None)
 
 
 def test_the_footprint_reports_each_change(tmp_path: Path) -> None:
@@ -391,12 +392,8 @@ _REAL_ID = "11111111-2222-3333-4444-555555555555"
         '{"type":"result","total_cost_usd":true,"is_error":false}',
     ],
 )
-def test_a_forged_cost_is_an_unknown_cost_and_stops_the_run(line: str) -> None:
-    result = session._parse_result(line, (), 0, "")
-    assert result.cost_usd is None
-    stop = SpendStop(hard_stop_usd=3, projected_usd=3)
-    with pytest.raises(RunStopped, match="spend is unknown"):
-        stop.add(result.cost_usd)
+def test_a_forged_cost_reads_as_no_cost(line: str) -> None:
+    assert session._parse_result(line, (), 0, "").cost_usd is None
 
 
 def test_garbage_on_stdout_does_not_raise() -> None:
@@ -443,3 +440,103 @@ def test_a_directory_at_the_socket_path_does_not_raise_after_the_session(tmp_pat
         path.unlink()
         path.mkdir()
     assert path.is_dir()
+
+
+def test_an_added_blank_line_above_an_old_test_is_not_a_new_test() -> None:
+    assert not score._ADDED_TEST.findall("+\n def test_existing():\n")
+    assert len(score._ADDED_TEST.findall("+def test_new():\n+    async def test_inner():\n")) == 2
+    assert not score._ADDED_TEST.findall(" def test_context():\n-def test_gone():\n")
+
+
+def test_a_failed_git_call_raises_and_does_not_read_as_a_small_diff(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    failed = subprocess.CompletedProcess([], 128, "", "index.lock exists")
+    monkeypatch.setattr(score, "run_in_jail", lambda *_args, **_kwargs: failed)
+    with pytest.raises(RunStopped, match="index.lock"):
+        score.score_diff(Jail(run_root=tmp_path), "base")
+
+
+def test_a_plugin_write_into_a_file_that_both_arms_create_is_named() -> None:
+    control = [
+        {".bashrc": "empty", ".claude.json": "one"},
+        {".bashrc": "empty", ".claude.json": "two"},
+    ]
+    plugin = [{".bashrc": "planted line", ".claude.json": "three"}, {".bashrc": "empty"}]
+    assert plugin_changed_content(plugin, control) == (".bashrc",)
+    assert plugin_changed_content(control, control) == ()
+
+
+def test_the_snapshot_lists_directory_links_empty_and_unreadable_directories(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "empty").mkdir()
+    (tmp_path / "full").mkdir()
+    (tmp_path / "full" / "file").write_text("x")
+    (tmp_path / "link").symlink_to(tmp_path / "full")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "hidden").write_text("x")
+    locked.chmod(0)
+    try:
+        listing = snapshot(tmp_path)
+    finally:
+        locked.chmod(0o700)
+    assert listing["empty/"] == "empty directory"
+    assert listing["link/"] == f"link:{tmp_path / 'full'}"
+    assert listing["locked/"].startswith("unreadable:")
+    assert "full/file" in listing
+    assert "full/" not in listing
+
+
+def test_paid_has_no_option_that_starts_a_new_ledger() -> None:
+    with pytest.raises(SystemExit):
+        run.main(
+            ["paid", "--plugin-dir", "x", "--marker", "m", "--hard-stop-usd", "1"]
+            + ["--projected-usd", "1", "--owner-go", "go", "--name", "retry"]
+        )
+
+
+def test_a_paid_run_needs_a_passed_verification_of_this_task_set(tmp_path: Path) -> None:
+    loaded = tasks.load_tasks()
+    with pytest.raises(SystemExit, match="verify-tasks"):
+        run.require_verified(loaded, tmp_path)
+
+    good = [f"{task.ticket}: ... usable" for task in loaded]
+    assert run.record_verified(loaded, good, tmp_path)
+    run.require_verified(loaded, tmp_path)
+    with pytest.raises(SystemExit, match="verify-tasks"):
+        run.require_verified(loaded[:4], tmp_path)
+
+    assert not run.record_verified(loaded, [*good[:4], "FRE-1: ... NOT USABLE"], tmp_path)
+    with pytest.raises(SystemExit, match="verify-tasks"):
+        run.require_verified(loaded, tmp_path)
+
+
+def test_a_half_built_environment_is_rebuilt_and_a_failed_build_is_not_marked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    half = tmp_path / "envs" / "abcdefabcdef" / "bin"
+    half.mkdir(parents=True)
+    (half / "python").write_text("half")
+    monkeypatch.setattr(run, "prepare_repo", lambda _s, _b, target: target.mkdir(parents=True))
+    failed = subprocess.CompletedProcess([], 1, "", "no network")
+    monkeypatch.setattr(run, "run_in_jail", lambda *_args, **_kwargs: failed)
+    with pytest.raises(RunStopped, match="uv sync failed"):
+        run.ensure_venv(tmp_path, "abcdefabcdef0000", tmp_path)
+    assert not (half / "python").exists()
+    assert not (tmp_path / "envs" / "abcdefabcdef.complete").exists()
+
+
+def test_a_session_at_its_budget_counts_and_an_arm_cannot_hide_its_costly_runs() -> None:
+    record = {
+        "key": "k",
+        "problems": [],
+        "is_error": True,
+        "exit_code": 1,
+        "subtype": "error_max_budget_usd",
+        "api_error_status": None,
+    }
+    assert is_valid(record)
+    assert _stop_reason(record) is None
+    assert not is_valid({**record, "subtype": "error_during_execution"})

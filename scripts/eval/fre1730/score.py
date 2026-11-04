@@ -23,7 +23,7 @@ _ENV = {
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _USUAL_IGNORED = (".venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache")
-_ADDED_TEST = re.compile(r"^\+\s*(?:async\s+)?def\s+test_\w+", re.MULTILINE)
+_ADDED_TEST = re.compile(r"^\+[ \t]*(?:async[ \t]+)?def[ \t]+test_\w+", re.MULTILINE)
 _COUNT = re.compile(r"(\d+) (passed|failed|errors?)")
 #: A library can log after pytest's summary, so the summary is the last line of this form.
 _SUMMARY = re.compile(
@@ -99,6 +99,25 @@ def parse_numstat(numstat: str) -> tuple[int, int]:
     return code, test
 
 
+def git(jail: Jail, *args: str) -> str:
+    """Run git in the jail. A failure must not read as a small diff.
+
+    Args:
+        jail: The session's jail, without the plugin.
+        *args: The arguments.
+
+    Returns:
+        The output.
+
+    Raises:
+        RunStopped: If git fails.
+    """
+    done = run_in_jail(jail, ["git", *args])
+    if done.returncode != 0:
+        raise RunStopped(f"git {args[0]} failed: {done.stderr[-300:]}")
+    return done.stdout
+
+
 def score_diff(jail: Jail, base: str) -> DiffScore:
     """Measure the result against the base, committed or not.
 
@@ -109,10 +128,10 @@ def score_diff(jail: Jail, base: str) -> DiffScore:
     Returns:
         The score.
     """
-    run_in_jail(jail, ["git", "add", "-A"])
-    numstat = run_in_jail(jail, ["git", "diff", "--cached", "--numstat", base])
-    diff = run_in_jail(jail, ["git", "diff", "--cached", base]).stdout
-    code, test = parse_numstat(numstat.stdout)
+    git(jail, "add", "-A")
+    numstat = git(jail, "diff", "--cached", "--numstat", base)
+    diff = git(jail, "diff", "--cached", base)
+    code, test = parse_numstat(numstat)
     test_hunks = "\n".join(
         part for part in diff.split("diff --git ") if _is_test_path(part.split(" ", 1)[0][2:])
     )
@@ -128,9 +147,9 @@ def ignored_paths(jail: Jail) -> list[str]:
     Returns:
         The paths, for the owner to read.
     """
-    listing = run_in_jail(
-        jail, ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"]
-    ).stdout.splitlines()
+    listing = git(
+        jail, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"
+    ).splitlines()
     return [path for path in listing if not any(cache in path for cache in _USUAL_IGNORED)]
 
 

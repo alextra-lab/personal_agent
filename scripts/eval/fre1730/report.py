@@ -9,7 +9,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.eval.fre1730.footprint import plugin_only
+from scripts.eval.fre1730.footprint import plugin_changed_content, plugin_only
+from scripts.eval.fre1730.matrix import BUDGET_SUBTYPE, is_valid
 
 #: Name, label, and digits to show.
 METRICS = (
@@ -122,8 +123,8 @@ def render_report(records: Sequence[Record], hook_events: Sequence[str], go: str
         The report as Markdown.
     """
     spent = sum(_value(r, "cost_usd") for r in records)
-    excluded = [r for r in records if _left_out(r)]
-    records = [r for r in records if not _left_out(r)]
+    excluded = [r for r in records if not is_valid(r)]
+    records = [r for r in records if is_valid(r)]
     lines = [
         "# FRE-1730 replay report",
         "",
@@ -169,8 +170,14 @@ def render_report(records: Sequence[Record], hook_events: Sequence[str], go: str
         details.append("")
     plugin_added, plugin_risky = risky_test_rate(records, "plugin")
     control_added, control_risky = risky_test_rate(records, "control")
+    at_budget = {
+        arm: sum(1 for r in records if r["arm"] == arm and r["subtype"] == BUDGET_SUBTYPE)
+        for arm in ("plugin", "control")
+    }
     lines += [
         "",
+        f"Sessions that reached their budget and did not finish: plugin {at_budget['plugin']}, "
+        f"control {at_budget['control']}. They count in the tables at the cost and diff that they reached.",
         f"Sessions on a risky task that added a test: plugin {plugin_added} of {plugin_risky}, "
         f"control {control_added} of {control_risky}.",
         f"Total spend, with the sessions left out: ${spent:.2f}.",
@@ -183,6 +190,9 @@ def render_report(records: Sequence[Record], hook_events: Sequence[str], go: str
     control_paths = [p for r in records if r["arm"] == "control" for p in _paths(r)]
     only = sorted(set(plugin_only(plugin_paths, control_paths)))
     lines += [f"- `{path}`" for path in only] or ["- none"]
+    lines += ["", "## Files that both arms wrote, where the plugin arm wrote other content", ""]
+    content = plugin_changed_content(_digests(records, "plugin"), _digests(records, "control"))
+    lines += [f"- `{path}`" for path in content] or ["- none"]
     refused = sorted({str(t) for r in records for t in _sequence(r, "refused")})
     lines += ["", "## Network targets that the gate refused", ""]
     lines += [f"- `{target}`" for target in refused] or ["- none"]
@@ -206,8 +216,13 @@ def render_report(records: Sequence[Record], hook_events: Sequence[str], go: str
     return "\n".join(lines) + "\n"
 
 
-def _left_out(record: Record) -> bool:
-    return bool(record["problems"] or record["is_error"] or record.get("exit_code", 0))
+def _digests(records: Sequence[Record], arm: str) -> list[Mapping[str, str]]:
+    found: list[Mapping[str, str]] = []
+    for record in records:
+        digests = record.get("footprint_digests")
+        if record["arm"] == arm and isinstance(digests, dict):
+            found.append(digests)
+    return found
 
 
 def _sequence(record: Record, key: str) -> Sequence[object]:

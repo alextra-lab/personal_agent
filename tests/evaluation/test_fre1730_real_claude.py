@@ -14,8 +14,9 @@ from pathlib import Path
 
 import pytest
 from scripts.eval.fre1730.jail import Jail, main_repo_root, run_in_jail
+from scripts.eval.fre1730 import matrix
 from scripts.eval.fre1730.matrix import PlannedSession, RunConfig, plan_sessions, run_matrix
-from scripts.eval.fre1730.run import FIXTURE_MARKER, FIXTURE_PLUGIN, MODEL
+from scripts.eval.fre1730.run import FIXTURE_MARKER, FIXTURE_PLUGIN, MODEL, run_and_report
 from scripts.eval.fre1730.score import copy_pr_tests, ignored_paths, score_diff
 from scripts.eval.fre1730.session import (
     find_transcript,
@@ -247,6 +248,41 @@ def test_a_restart_runs_an_errored_session_again_and_keeps_its_spend(
     records = run_matrix(sessions, config, SpendStop(3.0, 3.0))
     assert [r["is_error"] for r in records] == [True, False]
     assert len(config.ledger.read_text().splitlines()) == 2
+
+
+def test_a_stopped_run_still_writes_its_report_from_the_ledger(
+    tmp_path: Path, source: Path, stub: tuple[StubModel, tuple[str, int]]
+) -> None:
+    model, address = stub
+    model.input_tokens = _TWO_DOLLAR_INPUT_TOKENS
+    sessions = plan_sessions([_task(source)], 3, "seed")
+    config = _config(tmp_path, source, address)
+    with pytest.raises(RunStopped, match="reached the cap"):
+        run_and_report(sessions, config, SpendStop(3.0, 100.0), ["SessionStart"], "go")
+    report = (config.results / "report.md").read_text()
+    assert "Valid sessions: 2." in report
+    assert "$4.00" in report
+
+
+def test_a_session_with_unknown_spend_charges_its_budget_and_a_restart_keeps_it(
+    tmp_path: Path,
+    source: Path,
+    stub: tuple[StubModel, tuple[str, int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, address = stub
+    monkeypatch.setattr(matrix, "SESSION_TIMEOUT_S", 0.01)
+    sessions = [PlannedSession(_task(source), "control", 0)]
+    config = _config(tmp_path, source, address)
+    with pytest.raises(RunStopped, match="spend is unknown"):
+        run_matrix(sessions, config, SpendStop(hard_stop_usd=4.0, projected_usd=100.0))
+    assert json.loads(config.ledger.read_text())["cost_usd"] == 4.0
+
+    stop = SpendStop(hard_stop_usd=4.0, projected_usd=100.0)
+    with pytest.raises(RunStopped, match="reached the cap"):
+        run_matrix(sessions, config, stop)
+    assert stop.spent_usd == 4.0
+    assert model.requests == []
 
 
 def test_ac4_the_listing_names_each_file_that_only_the_plugin_wrote(

@@ -24,6 +24,7 @@ from scripts.eval.fre1730.score import (
 )
 from scripts.eval.fre1730.session import (
     Route,
+    SessionResult,
     find_transcript,
     prepare_home,
     prepare_repo,
@@ -34,6 +35,7 @@ from scripts.eval.fre1730.tasks import Task, base_commit
 from scripts.eval.fre1730.transcript import ARMS, Arm, arm_problems, read_transcript
 
 SESSION_TIMEOUT_S = 1800
+BUDGET_SUBTYPE = "error_max_budget_usd"
 
 
 @dataclass(frozen=True)
@@ -166,30 +168,36 @@ def _run_one(planned: PlannedSession, config: RunConfig, stop: SpendStop) -> dic
     venv = config.venvs.get(base)
     plugin = config.plugin if arm == "plugin" else None
     before = snapshot(run_root / "home")
+    budget_usd = stop.session_budget_usd
     try:
         result = run_session(
             run_root=run_root,
             prompt=task.prompt(),
             model=config.model,
             route=config.route,
-            budget_usd=stop.session_budget_usd,
+            budget_usd=budget_usd,
             timeout_s=SESSION_TIMEOUT_S,
             plugin=plugin,
             venv=venv,
             stub_address=config.stub_address,
             extra_env=config.extra_env,
         )
-    except subprocess.TimeoutExpired as error:
-        raise RunStopped(
-            f"{planned.key}: the session passed its time limit, so its spend is unknown"
-        ) from error
-    stop.add(result.cost_usd)
+    except subprocess.TimeoutExpired:
+        result = SessionResult("", None, True, "timeout", None, 0, SESSION_TIMEOUT_S, exit_code=-1)
+    problems: list[str] = []
+    cost_usd = result.cost_usd
+    if cost_usd is None or (result.exit_code != 0 and not result.is_error):
+        # The ledger is the stop's memory across restarts, so an unknown spend counts as the most it can be.
+        cost_usd = budget_usd
+        problems.append(
+            f"the spend is unknown, so the ledger charges the session's budget: {result.subtype}"
+        )
+    stop.add(cost_usd)
 
     diffs = config.results / "diffs"
     transcripts = config.results / "transcripts"
     diffs.mkdir(parents=True, exist_ok=True)
     transcripts.mkdir(parents=True, exist_ok=True)
-    problems: list[str] = []
     footprint = Footprint((), (), ())
     try:
         footprint = compare(before, snapshot(run_root / "home"))
@@ -228,7 +236,7 @@ def _run_one(planned: PlannedSession, config: RunConfig, stop: SpendStop) -> dic
         "model": config.model,
         "route": config.route.kind,
         "session_id": result.session_id,
-        "cost_usd": result.cost_usd,
+        "cost_usd": cost_usd,
         "is_error": result.is_error,
         "exit_code": result.exit_code,
         "subtype": result.subtype,
@@ -246,6 +254,7 @@ def _run_one(planned: PlannedSession, config: RunConfig, stop: SpendStop) -> dic
         "pr_tests_fraction": tests.fraction,
         "footprint": list(footprint.paths()),
         "footprint_lines": footprint.lines(),
+        "footprint_digests": dict(footprint.digests),
         "problems": problems,
         "diff_path": str(diff_path),
     }
@@ -268,19 +277,26 @@ def _forged_success(record: Mapping[str, object]) -> bool:
 def is_valid(record: Mapping[str, object]) -> bool:
     """Decide if a session counts. Only such a session is done, and only such a session is in the report.
 
+    A session that reached its budget counts. It is what that arm did, and leaving it out would hide the costly runs
+    of one arm. The report counts such sessions per arm.
+
     Args:
         record: The session's record.
 
     Returns:
-        The session finished, and its arm check passed.
+        The session ended normally or on its budget, and its arm check passed.
     """
-    return not record["problems"] and not record["is_error"] and not _forged_success(record)
+    return (
+        not record["problems"]
+        and not _forged_success(record)
+        and (not record["is_error"] or record["subtype"] == BUDGET_SUBTYPE)
+    )
 
 
 def _stop_reason(record: Mapping[str, object]) -> str | None:
     """Decide if a finished session must stop the run.
 
-    A session that reached its budget is a valid stop of its own, and the next ``SpendStop.check`` ends the run.
+    A session that reached its budget is valid, and the next ``SpendStop.check`` ends the run if the cap is reached.
 
     Args:
         record: The session's record.
@@ -292,7 +308,7 @@ def _stop_reason(record: Mapping[str, object]) -> str | None:
         return f"{record['key']}: a success result, but exit code {record['exit_code']}. The spend is unknown."
     if record["problems"]:
         return f"{record['key']}: invalid session: {record['problems']}"
-    if record["is_error"] and record["subtype"] != "error_max_budget_usd":
+    if record["is_error"] and record["subtype"] != BUDGET_SUBTYPE:
         return (
             f"{record['key']}: the session ended on an error: subtype {record['subtype']}, "
             f"API status {record['api_error_status']}. A quota or credit error must go to master."

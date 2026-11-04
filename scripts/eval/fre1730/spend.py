@@ -72,15 +72,10 @@ class SpendStop:
                 f"(hard stop ${self.hard_stop_usd:.2f}, projection ${self.projected_usd:.2f})"
             )
 
-    def add(self, cost_usd: float | None) -> None:
-        """Add one session. A session with no reported cost stops the run, because its spend is unknown.
+    def add(self, cost_usd: float) -> None:
+        """Add one session.
 
         Args:
             cost_usd: The session's cost.
-
-        Raises:
-            RunStopped: If the cost is unknown.
         """
-        if cost_usd is None:
-            raise RunStopped("a session ended with no reported cost, so the spend is unknown")
         self.spent_usd += cost_usd

@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 #: A file name that holds a session id or a time differs between any two sessions.
@@ -27,7 +27,17 @@ def snapshot(home: Path) -> dict[str, str]:
     if home.is_symlink():
         return {".": f"link:{os.readlink(home)}"}
     listing: dict[str, str] = {}
-    for folder, _, names in os.walk(home):
+
+    def unreadable(error: OSError) -> None:
+        listing[f"{Path(str(error.filename)).relative_to(home)}/"] = f"unreadable:{error.errno}"
+
+    for folder, folders, names in os.walk(home, onerror=unreadable):
+        for name in folders:
+            path = Path(folder, name)
+            if path.is_symlink():
+                listing[f"{path.relative_to(home)}/"] = f"link:{os.readlink(path)}"
+        if not folders and not names and Path(folder) != home:
+            listing[f"{Path(folder).relative_to(home)}/"] = "empty directory"
         for name in names:
             path = Path(folder, name)
             relative = str(path.relative_to(home))
@@ -49,11 +59,13 @@ class Footprint:
         added: Paths that are new.
         changed: Paths whose content differs.
         removed: Paths that are gone.
+        digests: The final digest of each added or changed path.
     """
 
     added: tuple[str, ...]
     changed: tuple[str, ...]
     removed: tuple[str, ...]
+    digests: Mapping[str, str] = field(default_factory=dict)
 
     def lines(self) -> list[str]:
         """Format the listing.
@@ -86,10 +98,13 @@ def compare(before: Mapping[str, str], after: Mapping[str, str]) -> Footprint:
     Returns:
         The difference.
     """
+    added = tuple(sorted(after.keys() - before.keys()))
+    changed = tuple(sorted(p for p in after.keys() & before.keys() if after[p] != before[p]))
     return Footprint(
-        added=tuple(sorted(after.keys() - before.keys())),
-        changed=tuple(sorted(p for p in after.keys() & before.keys() if after[p] != before[p])),
+        added=added,
+        changed=changed,
         removed=tuple(sorted(before.keys() - after.keys())),
+        digests={path: after[path] for path in (*added, *changed)},
     )
 
 
@@ -105,3 +120,32 @@ def plugin_only(plugin: Iterable[str], control: Iterable[str]) -> tuple[str, ...
     """
     seen = {_VOLATILE.sub("*", path) for path in control}
     return tuple(sorted(path for path in plugin if _VOLATILE.sub("*", path) not in seen))
+
+
+def plugin_changed_content(
+    plugin: Iterable[Mapping[str, str]], control: Iterable[Mapping[str, str]]
+) -> tuple[str, ...]:
+    """Name the files that both arms wrote, where the plugin arm wrote other content.
+
+    A plugin can write into a file that Claude Code also creates, such as ``.bashrc``. A file whose content differs
+    between control runs is not listed, because its content varies with no plugin. Those files are in ``plugin_only``
+    or are Claude Code's own.
+
+    Args:
+        plugin: The digests of each plugin arm session.
+        control: The digests of each control arm session.
+
+    Returns:
+        The paths.
+    """
+    seen: dict[str, set[str]] = {}
+    for session in control:
+        for path, digest in session.items():
+            seen.setdefault(_VOLATILE.sub("*", path), set()).add(digest)
+    found = set()
+    for session in plugin:
+        for path, digest in session.items():
+            digests = seen.get(_VOLATILE.sub("*", path), set())
+            if len(digests) == 1 and digest not in digests:
+                found.add(path)
+    return tuple(sorted(found))

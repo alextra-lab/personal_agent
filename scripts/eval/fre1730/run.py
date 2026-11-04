@@ -20,7 +20,13 @@ from pathlib import Path
 
 from scripts.eval.fre1730.footprint import plugin_only
 from scripts.eval.fre1730.jail import Jail, main_repo_root, run_in_jail
-from scripts.eval.fre1730.matrix import PlannedSession, RunConfig, plan_sessions, run_matrix
+from scripts.eval.fre1730.matrix import (
+    PlannedSession,
+    RunConfig,
+    load_records,
+    plan_sessions,
+    run_matrix,
+)
 from scripts.eval.fre1730.report import plugin_hook_events, render_report
 from scripts.eval.fre1730.score import copy_pr_tests, run_pr_tests
 from scripts.eval.fre1730.session import paid_route, prepare_repo, stub_route
@@ -42,6 +48,8 @@ PONYTAIL_REPO = "https://github.com/DietrichGebert/ponytail"
 PONYTAIL_SHA = "7801d061243d7b753bad0e0b3c057cd250b11755"
 PONYTAIL_MARKER = "PONYTAIL MODE ACTIVE"
 EXIT_STOPPED = 5
+EXIT_NOT_USABLE = 6
+VERIFIED_FILE = "verified-tasks.json"
 #: Opus 5.5 at API prices, read from 39 build-seat session transcripts on 2026-11-04. A seat session holds the
 #: ``/build`` steps and the seat's plugins, which a replay does not. So a replay is likely to cost less.
 SEAT_SESSION_MEDIAN_USD = 4.94
@@ -106,26 +114,32 @@ def ensure_venv(source: Path, base: str, scratch: Path) -> Path:
         RunStopped: If the build fails.
     """
     venv = scratch / "envs" / base[:12]
-    if (venv / "bin" / "python").exists():
+    marker = scratch / "envs" / f"{base[:12]}.complete"
+    if marker.exists():
         return venv
+    shutil.rmtree(venv, ignore_errors=True)
     run_root = scratch / "runs" / f"env-{base[:12]}"
     shutil.rmtree(run_root, ignore_errors=True)
     prepare_repo(source, base, run_root / "repo")
     (run_root / "uv-cache").mkdir()
     venv.mkdir(parents=True, exist_ok=True)
-    done = run_in_jail(
-        Jail(run_root=run_root, venv=venv, network=True, writable_venv=True),
-        ["uv", "sync", "--frozen", "--extra", "dev"],
-        env={
-            "UV_CACHE_DIR": "/tmp/work/uv-cache",
-            "UV_PROJECT_ENVIRONMENT": "/tmp/work/repo/.venv",
-        },
-        timeout_s=1200,
-    )
-    shutil.rmtree(run_root, ignore_errors=True)
+    try:
+        done = run_in_jail(
+            Jail(run_root=run_root, venv=venv, network=True, writable_venv=True),
+            ["uv", "sync", "--frozen", "--extra", "dev"],
+            env={
+                "UV_CACHE_DIR": "/tmp/work/uv-cache",
+                "UV_PROJECT_ENVIRONMENT": "/tmp/work/repo/.venv",
+            },
+            timeout_s=1200,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RunStopped(f"uv sync passed its time limit for {base[:12]}") from error
+    finally:
+        shutil.rmtree(run_root, ignore_errors=True)
     if done.returncode != 0:
-        shutil.rmtree(venv, ignore_errors=True)
         raise RunStopped(f"uv sync failed for {base[:12]}: {done.stderr[-500:]}")
+    marker.touch()
     return venv
 
 
@@ -170,6 +184,66 @@ def verify_tasks(tasks: Sequence[Task], source: Path, scratch: Path) -> list[str
             f"At merge {at_merge.passed} passed, {at_merge.failed} failed. {'usable' if usable else 'NOT USABLE'}"
         )
     return lines
+
+
+def record_verified(tasks: Sequence[Task], lines: Sequence[str], scratch: Path) -> bool:
+    """Record a verification that passed. A paid run needs it.
+
+    Args:
+        tasks: The tasks.
+        lines: The lines from ``verify_tasks``.
+        scratch: The scratch directory.
+
+    Returns:
+        Every task is usable.
+    """
+    path = scratch / VERIFIED_FILE
+    path.unlink(missing_ok=True)
+    if len(lines) != len(tasks) or not all(line.endswith(" usable") for line in lines):
+        return False
+    path.write_text(json.dumps(sorted(task.merge for task in tasks)))
+    return True
+
+
+def require_verified(tasks: Sequence[Task], scratch: Path) -> None:
+    """Refuse a paid run on tasks that have no passed verification.
+
+    Args:
+        tasks: The tasks.
+        scratch: The scratch directory.
+
+    Raises:
+        SystemExit: If this task set has no passed verification.
+    """
+    path = scratch / VERIFIED_FILE
+    if not path.exists() or json.loads(path.read_text()) != sorted(t.merge for t in tasks):
+        raise SystemExit("run verify-tasks first, and every task must be usable")
+
+
+def run_and_report(
+    sessions: Sequence[PlannedSession],
+    config: RunConfig,
+    stop: SpendStop,
+    hook_events: Sequence[str],
+    go: str,
+) -> list[dict[str, object]]:
+    """Run, and write the report from the ledger even if the run stops. A stopped run is the likely end of this run.
+
+    Args:
+        sessions: The plan.
+        config: The run.
+        stop: The stop.
+        hook_events: The hook events that the plugin declares.
+        go: The owner's recorded go.
+
+    Returns:
+        The records.
+    """
+    try:
+        return run_matrix(sessions, config, stop)
+    finally:
+        report = render_report(load_records(config), hook_events, go)
+        (config.results / "report.md").write_text(report)
 
 
 def _stub_run(
@@ -333,7 +407,8 @@ def cmd_paid(args: argparse.Namespace, tasks: Sequence[Task]) -> int:
     require_pin(args.plugin_dir)
     route = paid_route(os.environ)
     source = main_repo_root()
-    results = SCRATCH / "results" / args.name
+    require_verified(tasks, SCRATCH)
+    results = SCRATCH / "results" / "paid"
     results.mkdir(parents=True, exist_ok=True)
     (results / "owner_go.txt").write_text(args.owner_go + "\n")
     sessions = plan_sessions(tasks, REPEATS, SEED)
@@ -349,9 +424,9 @@ def cmd_paid(args: argparse.Namespace, tasks: Sequence[Task]) -> int:
         global_claude_md=GLOBAL_CLAUDE_MD,
         venvs=_venvs(source, tasks, SCRATCH),
     )
-    records = run_matrix(trace_sessions(sessions) if args.trace else sessions, config, stop)
-    report = render_report(records, plugin_hook_events(args.plugin_dir), args.owner_go)
-    (results / "report.md").write_text(report)
+    planned = trace_sessions(sessions) if args.trace else sessions
+    hook_events = plugin_hook_events(args.plugin_dir)
+    records = run_and_report(planned, config, stop, hook_events, args.owner_go)
     print(
         json.dumps(
             {
@@ -389,7 +464,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     paid.add_argument("--hard-stop-usd", type=float, required=True)
     paid.add_argument("--projected-usd", type=float, required=True)
     paid.add_argument("--owner-go", required=True)
-    paid.add_argument("--name", default="paid")
     paid.add_argument("--trace", action="store_true")
     args = parser.parse_args(argv)
     tasks = load_tasks()
@@ -398,8 +472,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             case "preflight":
                 return cmd_preflight(tasks)
             case "verify-tasks":
-                print("\n".join(verify_tasks(tasks, main_repo_root(), SCRATCH)))
-                return 0
+                lines = verify_tasks(tasks, main_repo_root(), SCRATCH)
+                print("\n".join(lines))
+                return 0 if record_verified(tasks, lines, SCRATCH) else EXIT_NOT_USABLE
             case "dry-run":
                 return _cmd_stub_check(tasks, FIXTURE_PLUGIN, FIXTURE_MARKER, "dry-run")
             case "check-arms":

@@ -6,6 +6,7 @@ refused or failed edit must leave the file unchanged.
 
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 from unittest.mock import patch
 
@@ -299,6 +300,24 @@ async def test_an_unreadable_file_is_permission_denied(tmp_path: Path) -> None:
             await _edit(target, "beta", "BETA")
 
     assert exc_info.value.code == "permission_denied"
+
+
+@pytest.mark.asyncio
+async def test_a_path_that_changes_to_a_link_is_a_read_failure(tmp_path: Path) -> None:
+    """The open refuses a link that appears after the checks, and the file stays as it was."""
+    target = _file(tmp_path)
+    before = target.read_text()
+
+    with patch(
+        "personal_agent.tools.primitives.edit.open_file_no_symlinks",
+        side_effect=OSError(errno.ELOOP, "Too many levels of symbolic links"),
+    ):
+        with pytest.raises(EditError) as exc_info:
+            await _edit(target, "beta", "BETA")
+
+    assert exc_info.value.code == "io_error"
+    assert exc_info.value.retryable is True
+    assert target.read_text() == before
 
 
 # ---------------------------------------------------------------------------

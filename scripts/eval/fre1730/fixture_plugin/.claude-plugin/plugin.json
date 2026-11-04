@@ -1,6 +1,0 @@
-{
-  "name": "fre1730-fixture",
-  "version": "0.0.1",
-  "description": "FRE-1730 test fixture. It adds a marker to the session and writes two flag files.",
-  "hooks": "./hooks/hooks.json"
-}

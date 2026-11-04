@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -57,6 +58,7 @@ from personal_agent.tools.primitives._child_workspace import (
     CHILD_UID,
     give_to_child,
     missing_parts,
+    path_for_root_open,
 )
 from personal_agent.tools.primitives._governance import open_file_no_symlinks
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -105,6 +107,7 @@ CHILD_SETPRIV_ARGV: tuple[str, ...] = (
 # start-up files from those places. A new entry needs a review of the script's arguments.
 _APP_DIR = "/app"
 _OVERFLOW_ROOT = Path("/tmp/agent_scratch")
+_OVERFLOW_NAME = re.compile(r"bash_output_([0-9]{1,9})\.txt")
 _SCRIPT_CHILD_PATH = "/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _SCRIPT_CHILD_ENV_NAMES = frozenset({"LANG", "LC_ALL", "LC_CTYPE", "TZ"})
 _SCRIPT_CREDENTIAL_NAMES: Mapping[str, frozenset[str]] = {
@@ -158,8 +161,9 @@ bash_tool = ToolDefinition(
         "Do not use it to read a file that read can open, or to fetch a web page (use "
         "fetch_url). "
         "On a deployed gateway the command runs as the unprivileged nobody account, with no "
-        "secret in its environment, so $AGENT_ variables are empty, and docker and writes "
-        "outside /app/agent_workspace and /tmp fail. Do not look for a way around this. "
+        "secret in its environment, so $AGENT_ variables are empty and docker fails. Writes "
+        "work in /tmp and, on production, in /app/agent_workspace; other writes fail. "
+        "Do not look for a way around this. "
         "Examples: bash(command=\"grep -rn 'def bash_executor' /app/src/\"), "
         "bash(command=\"find /app/config -name '*.yaml' -type f | wc -l\"), "
         'bash(command="curl -s http://elasticsearch:9200/_cluster/health | jq .status").'
@@ -504,18 +508,23 @@ async def bash_executor(
 
     if len(combined.encode("utf-8")) > MAX_OUTPUT_BYTES:
         try:
-            scratch = _OVERFLOW_ROOT / trace_id
-            existing = list(scratch.glob("bash_output_*.txt"))
-            n = len(existing)
-            overflow_file = scratch / f"bash_output_{n}.txt"
+            scratch = path_for_root_open(_OVERFLOW_ROOT) / trace_id
+            numbers = [
+                int(match.group(1))
+                for existing in scratch.glob("bash_output_*.txt")
+                if (match := _OVERFLOW_NAME.fullmatch(existing.name))
+            ]
+            overflow_file = scratch / f"bash_output_{max(numbers, default=-1) + 1}.txt"
             # This process is root, and the child can own this directory (FRE-1732), so a link
             # here must not choose which file root writes.
             created = missing_parts(overflow_file)
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            fd = open_file_no_symlinks(overflow_file, flags, 0o644, make_parents=True)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(combined)
-            give_to_child(created, trace_id=trace_id)
+            try:
+                fd = open_file_no_symlinks(overflow_file, flags, 0o644, make_parents=True)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(combined)
+            finally:
+                give_to_child(created, trace_id=trace_id)
             truncated_path = str(overflow_file)
             log.info(
                 "bash_output_overflow",

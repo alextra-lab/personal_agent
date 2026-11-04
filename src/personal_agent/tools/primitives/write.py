@@ -18,6 +18,7 @@ from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._child_workspace import give_to_child, missing_parts
 from personal_agent.tools.primitives._governance import (
+    PATH_CHANGED_ERRNOS,
     PathCode,
     _check_durability,
     _check_path_governance,
@@ -33,7 +34,7 @@ log = structlog.get_logger(__name__)
 # Failure codes (ADR-0156 D6.1)
 # ---------------------------------------------------------------------------
 
-WriteCode = Literal[PathCode, "invalid_mode", "permission_denied", "io_error"]
+WriteCode = Literal[PathCode, "invalid_mode", "permission_denied", "path_changed", "io_error"]
 
 
 class WriteError(ToolError[WriteCode]):
@@ -210,12 +211,17 @@ async def write_executor(
         created = missing_parts(resolved)
         flags = os.O_WRONLY | (os.O_TRUNC if mode == "overwrite" else os.O_APPEND)
         try:
-            fd = open_file_no_symlinks(resolved, flags)
-        except FileNotFoundError:
-            fd = open_file_no_symlinks(resolved, flags | os.O_CREAT | os.O_EXCL, make_parents=True)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        give_to_child(created, trace_id=trace_id)
+            try:
+                fd = open_file_no_symlinks(resolved, flags)
+            except FileNotFoundError:
+                fd = open_file_no_symlinks(
+                    resolved, flags | os.O_CREAT | os.O_EXCL, make_parents=True
+                )
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+        finally:
+            # Also after a failure: a retry finds these parts in place, and does not give them.
+            give_to_child(created, trace_id=trace_id)
     except PermissionError as exc:
         log.warning(
             "write_permission_denied", path=str(resolved), error=str(exc), trace_id=trace_id
@@ -227,6 +233,15 @@ async def write_executor(
             next_action="Do not retry this path. Write under /app/agent_workspace/ or /tmp/.",
         ) from exc
     except OSError as exc:
+        if exc.errno in PATH_CHANGED_ERRNOS:
+            log.warning("write_path_changed", path=str(resolved), trace_id=trace_id)
+            raise WriteError(
+                "path_changed",
+                f"{str(resolved)!r} is not the plain file path that the checks saw: "
+                "a part of it is a link or no directory.",
+                retryable=False,
+                next_action="Do not retry this path. Tell the user that the path changed.",
+            ) from exc
         log.error("write_io_error", path=str(resolved), error=str(exc), trace_id=trace_id)
         raise WriteError(
             "io_error",

@@ -24,6 +24,7 @@ log = structlog.get_logger(__name__)
 # 65534 is ``nobody``/``nogroup`` in the Debian-based gateway image.
 CHILD_UID = 65534
 CHILD_GID = 65534
+CHILD_IDS = (CHILD_UID, CHILD_GID)
 WORKSPACE_ROOT = Path("/app/agent_workspace")
 # A root itself keeps its owner: ``/tmp`` stays root's. ``prepare_workspace`` gives the workspace.
 CHILD_ROOTS: tuple[Path, ...] = (WORKSPACE_ROOT, Path("/tmp"))
@@ -33,10 +34,16 @@ def _child_owns_workspace() -> bool:
     return settings.deployment_profile == "cloud" and os.geteuid() == 0
 
 
+def _names_another_file(status: os.stat_result) -> bool:
+    """Report whether a regular file has a second name, which can be a hard link from elsewhere."""
+    return stat.S_ISREG(status.st_mode) and status.st_nlink > 1
+
+
 def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
     """Give the workspace tree to the child's account, at gateway startup.
 
-    No child runs at that time. A symbolic link is changed itself and is not followed.
+    No child runs at that time. A symbolic link is changed itself and is not followed. An entry
+    that the child owns already, or a file with a second name, stays as it is.
 
     Args:
         root: The workspace directory.
@@ -45,16 +52,39 @@ def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
         return
     changed = 0
     failed = 0
-    entries = [root]
-    for directory, subdirs, files in os.walk(root, followlinks=False):
-        entries += [Path(directory, name) for name in (*subdirs, *files)]
-    for entry in entries:
+
+    def give(entry: Path) -> None:
+        nonlocal changed, failed
         try:
+            status = os.lstat(entry)
+            if _names_another_file(status) or (status.st_uid, status.st_gid) == CHILD_IDS:
+                return
             os.chown(entry, CHILD_UID, CHILD_GID, follow_symlinks=False)
             changed += 1
         except OSError:
             failed += 1  # for example, a file that a run removed in this walk
+
+    give(root)
+    for directory, subdirs, files in os.walk(root, followlinks=False):
+        for name in (*subdirs, *files):
+            give(Path(directory, name))
     log.info("child_workspace_prepared", changed=changed, failed=failed)
+
+
+def path_for_root_open(path: Path) -> Path:
+    """Return a configured path in the form that the no-link open needs.
+
+    On ``local``, a system path can hold a link (``/tmp`` on macOS), and no child owns anything,
+    so the path resolves. On a deployed gateway it stays as it is: the child can plant a link in
+    it, and that link must refuse.
+
+    Args:
+        path: The configured absolute path.
+
+    Returns:
+        The path to open.
+    """
+    return path.resolve() if settings.deployment_profile == "local" else path
 
 
 def missing_parts(path: Path) -> list[Path]:
@@ -100,11 +130,12 @@ def give_to_child(
         try:
             fd = open_no_symlinks(path, os.O_RDONLY | os.O_NONBLOCK)
             try:
-                status = os.fstat(fd)
-                if not (stat.S_ISREG(status.st_mode) and status.st_nlink > 1):
+                if not _names_another_file(os.fstat(fd)):
                     os.fchown(fd, CHILD_UID, CHILD_GID)
             finally:
                 os.close(fd)
+        except FileNotFoundError:
+            continue  # the tool failed before it created this part
         except OSError as exc:
             log.warning(
                 "child_workspace_give_failed",

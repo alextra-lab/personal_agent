@@ -303,14 +303,14 @@ async def test_an_unreadable_file_is_permission_denied(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_path_that_changes_to_a_link_is_a_read_failure(tmp_path: Path) -> None:
-    """The open refuses a link that appears after the checks, and the file stays as it was."""
+async def test_an_open_failure_is_a_retryable_read_failure(tmp_path: Path) -> None:
+    """An I/O error on the read step can pass, and the file stays as it was."""
     target = _file(tmp_path)
     before = target.read_text()
 
     with patch(
         "personal_agent.tools.primitives.edit.open_file_no_symlinks",
-        side_effect=OSError(errno.ELOOP, "Too many levels of symbolic links"),
+        side_effect=OSError(errno.EIO, "Input/output error"),
     ):
         with pytest.raises(EditError) as exc_info:
             await _edit(target, "beta", "BETA")

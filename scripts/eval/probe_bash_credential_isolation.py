@@ -15,9 +15,10 @@ Against a locally built image, with seeded fake credentials only::
 
 With ``AGENT_DEPLOYMENT_PROFILE=cloud``, the probe also runs the commands that FRE-1732 names,
 the two reviewed scripts that need a credential, and the workspace steps. Use fake credentials and
-a tmpfs at ``/app/agent_workspace``. To test a branch, mount its ``src``, ``config``, ``skills``
-and ``scripts`` over the image's. Never run this mode in a production container, because it
-changes the workspace.
+a tmpfs at ``/app/agent_workspace``, and set ``PROBE_MAY_CHANGE_WORKSPACE=1``. To test a branch,
+mount its ``src``, ``config``, ``skills`` and ``scripts`` over the image's. These steps change the
+workspace and ``/app``, so with no opt-in they do not run, and the probe fails. Never set the
+variable in a production container.
 
 Against the running eval-treatment container (real credentials; the probe prints variable
 names only, never values)::
@@ -77,6 +78,7 @@ from personal_agent.tools.primitives.write import write_executor
 SCAN_SECONDS = 25
 MIN_VALUE_LENGTH = 8
 RACE_ATTEMPTS = 3000
+_OPT_IN = "PROBE_MAY_CHANGE_WORKSPACE"
 
 _SCAN_ONCE = (
     "for f in /proc/[0-9]*/environ /proc/[0-9]*/task/*/environ; do "
@@ -360,7 +362,7 @@ async def _probe() -> dict[str, object]:
         "eval_scan_leaked": _leaked_names(scan_output, credentials),
         "echo_ok": echo.get("stdout") == "ok\n" and echo.get("exit_code") == 0,
     }
-    if settings.deployment_profile == "cloud":
+    if settings.deployment_profile == "cloud" and os.environ.get(_OPT_IN) == "1":
         report["item_one_leaks"] = await _item_one_commands(credentials, ctx)
         report["script_calls"] = await _script_calls(credentials, ctx)
         report["workspace"] = await _workspace_steps(ctx)
@@ -412,7 +414,9 @@ def main() -> int:
         and report["echo_ok"] is True
     )
     if report["deployment_profile"] == "cloud":
-        passed = _cloud_checks_pass(report) and passed
+        ran = "item_one_leaks" in report
+        report["cloud_checks_ran"] = ran
+        passed = ran and _cloud_checks_pass(report) and passed
     report["passed"] = passed
     sys.stdout.write(json.dumps(report, indent=2) + "\n")
     return 0 if passed else 1

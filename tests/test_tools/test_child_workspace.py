@@ -7,7 +7,9 @@ call acts on. The kernel outcome as ``nobody`` is in
 
 from __future__ import annotations
 
+import errno
 import os
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
@@ -155,6 +157,32 @@ def test_prepare_workspace_changes_the_tree_and_not_a_link_target(tmp_path: Path
         root / "link",
     }
     assert not any(follow for _, follow in calls)
+
+
+def test_prepare_workspace_leaves_an_owned_entry_and_a_second_name(tmp_path: Path) -> None:
+    """An entry that the child owns needs no call, and a hard link can name another file."""
+    (tmp_path / "plain.txt").write_text("x")
+    (tmp_path / "hard.txt").write_text("x")
+    (tmp_path / "hard2.txt").hardlink_to(tmp_path / "hard.txt")
+    (tmp_path / "owned.txt").write_text("x")
+    owned = (tmp_path / "owned.txt").stat()
+
+    with (
+        patch.object(workspace, "_child_owns_workspace", return_value=True),
+        patch.object(workspace, "CHILD_IDS", (owned.st_uid, owned.st_gid)),
+        patch.object(workspace.os, "chown") as chown,
+    ):
+        workspace.prepare_workspace(tmp_path)
+    assert chown.call_count == 0  # every entry here is the "child's" or has a second name
+
+    with (
+        patch.object(workspace, "_child_owns_workspace", return_value=True),
+        patch.object(workspace.os, "chown") as chown,
+    ):
+        workspace.prepare_workspace(tmp_path)
+    changed = {Path(call.args[0]).name for call in chown.call_args_list}
+    assert "plain.txt" in changed
+    assert not changed & {"hard.txt", "hard2.txt"}
 
 
 def test_prepare_workspace_goes_on_after_one_entry_fails(tmp_path: Path) -> None:
@@ -463,13 +491,61 @@ async def test_the_overflow_write_does_not_follow_a_planted_file_link(
     protected.write_text("protected")
     trace_dir = overflow_root / _CTX.trace_id
     trace_dir.mkdir(parents=True)
-    # The next name counts the entries that match, so one link there is the name that root writes.
-    (trace_dir / "bash_output_1.txt").symlink_to(protected)
+    (trace_dir / "bash_output_0.txt").symlink_to(protected)
 
+    # The name is one past the highest, so this call does not meet the link.
     result = await bash_module.bash_executor(_BIG_OUTPUT, ctx=_CTX)
 
     assert protected.read_text() == "protected"
+    assert result["truncated_path"] == str(trace_dir / "bash_output_1.txt")
+
+    # A link at that exact name refuses, at the open.
+    with patch.object(bash_module, "_OVERFLOW_NAME", re.compile(r"no-match")):
+        (trace_dir / "bash_output_1.txt").unlink()
+        (trace_dir / "bash_output_0.txt").unlink()
+        (trace_dir / "bash_output_0.txt").symlink_to(protected)
+        result = await bash_module.bash_executor(_BIG_OUTPUT, ctx=_CTX)
+
+    assert protected.read_text() == "protected"
     assert result["truncated_path"] == "<truncated: scratch write failed>"
+
+
+@pytest.mark.asyncio
+async def test_a_gap_in_the_overflow_numbers_does_not_lose_the_output(overflow_root: Path) -> None:
+    """A child that removes ``bash_output_0.txt`` does not stop the next overflow file."""
+    trace_dir = overflow_root / _CTX.trace_id
+    trace_dir.mkdir(parents=True)
+    (trace_dir / "bash_output_1.txt").write_text("kept")
+
+    result = await bash_module.bash_executor(_BIG_OUTPUT, ctx=_CTX)
+
+    assert result["truncated_path"] == str(trace_dir / "bash_output_2.txt")
+    assert (trace_dir / "bash_output_1.txt").read_text() == "kept"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("profile", "kept"), [("local", True), ("cloud", False)])
+async def test_a_link_in_the_overflow_root_resolves_only_on_local(
+    profile: str, kept: bool, tmp_path: Path
+) -> None:
+    """``/tmp`` is a link on macOS. On a deployed gateway, a link refuses."""
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)
+
+    with (
+        patch.object(bash_module, "_OVERFLOW_ROOT", tmp_path / "link" / "agent_scratch"),
+        patch.object(bash_module, "settings") as bash_settings,
+        patch.object(workspace, "settings") as workspace_settings,
+        patch.object(bash_module.os, "geteuid", return_value=0),
+        patch.object(bash_module, "CHILD_SETPRIV_ARGV", ()),
+    ):
+        bash_settings.deployment_profile = profile
+        workspace_settings.deployment_profile = profile
+        result = await bash_module.bash_executor(_BIG_OUTPUT, ctx=_CTX)
+
+    assert (result["truncated_path"] != "<truncated: scratch write failed>") is kept
+    assert (real / "agent_scratch").exists() is kept
 
 
 @pytest.mark.asyncio
@@ -553,6 +629,79 @@ async def test_write_gives_only_what_this_call_created(tmp_path: Path) -> None:
     assert first == [root / "new", root / "new" / "deep", root / "new" / "deep" / "file.txt"]
     assert second == []
     assert target.read_text() == "two"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_write_still_gives_what_it_created(tmp_path: Path) -> None:
+    """A retry finds these parts in place, so it cannot give them. AC-6 needs them now."""
+    target = tmp_path / "new" / "deep" / "file.txt"
+
+    with (
+        patch("personal_agent.tools.primitives.write._check_path_governance"),
+        patch("personal_agent.tools.primitives.write._check_durability"),
+        patch("personal_agent.tools.primitives.write.give_to_child") as gave,
+        pytest.raises(UnicodeEncodeError),
+    ):
+        await write_executor(str(target), "lone surrogate \udc80", ctx=_CTX)
+
+    root = tmp_path.resolve()
+    assert gave.call_args.args[0] == [
+        root / "new",
+        root / "new" / "deep",
+        root / "new" / "deep" / "file.txt",
+    ]
+
+
+def test_give_to_child_skips_a_part_that_was_not_created(
+    tmp_path: Path, owned: list[tuple[int, int]]
+) -> None:
+    """A write that failed early leaves no warning about a path that does not exist."""
+    workspace.give_to_child([tmp_path / "missing"], trace_id="t", roots=(tmp_path,))
+
+    assert owned == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "number", [errno.ELOOP, errno.ENOTDIR, errno.EINVAL, errno.ENXIO]
+)
+async def test_a_changed_path_is_not_retryable_in_write_and_edit(
+    number: int, tmp_path: Path
+) -> None:
+    """A retry races the same change, so the model is told not to retry."""
+    target = tmp_path / "file.txt"
+    target.write_text("one two")
+    changed = OSError(number, "changed")
+
+    with (
+        patch("personal_agent.tools.primitives.write._check_path_governance"),
+        patch("personal_agent.tools.primitives.write._check_durability"),
+        patch("personal_agent.tools.primitives.write.open_file_no_symlinks", side_effect=changed),
+        pytest.raises(WriteError) as refused_write,
+    ):
+        await write_executor(str(target), "new", ctx=_CTX)
+    assert refused_write.value.code == "path_changed"
+    assert refused_write.value.retryable is False
+
+    with (
+        patch("personal_agent.tools.primitives.edit._check_path_governance"),
+        patch("personal_agent.tools.primitives.edit._check_durability"),
+        patch("personal_agent.tools.primitives.edit.open_file_no_symlinks", side_effect=changed),
+        pytest.raises(EditError) as refused_read,
+    ):
+        await edit_executor(str(target), "one", "three", ctx=_CTX)
+    assert refused_read.value.code == "path_changed"
+    assert refused_read.value.retryable is False
+
+    with (
+        patch("personal_agent.tools.primitives.edit._check_path_governance"),
+        patch("personal_agent.tools.primitives.edit._check_durability"),
+        patch("personal_agent.tools.primitives.edit._replace_file", side_effect=changed),
+        pytest.raises(EditError) as refused_replace,
+    ):
+        await edit_executor(str(target), "one", "three", ctx=_CTX)
+    assert refused_replace.value.code == "path_changed"
+    assert refused_replace.value.retryable is False
 
 
 @pytest.mark.asyncio

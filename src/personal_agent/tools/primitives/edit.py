@@ -23,6 +23,7 @@ from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._governance import (
     DIRECTORY_FLAGS,
+    PATH_CHANGED_ERRNOS,
     PathCode,
     _check_durability,
     _check_path_governance,
@@ -47,6 +48,7 @@ EditCode = Literal[
     "no_match",
     "multiple_matches",
     "permission_denied",
+    "path_changed",
     "io_error",
 ]
 
@@ -185,6 +187,26 @@ def _replace_file(target: Path, data: bytes) -> None:
         os.close(parent)
 
 
+def _path_changed(resolved: Path, trace_id: str | None) -> EditError:
+    """Build the failure for a path that is not the plain file that the checks saw (FRE-1732).
+
+    Args:
+        resolved: The resolved path.
+        trace_id: The request's trace id.
+
+    Returns:
+        The error to raise. A retry only races the same change, so it is not retryable.
+    """
+    log.warning("edit_path_changed", path=str(resolved), trace_id=trace_id)
+    return EditError(
+        "path_changed",
+        f"{str(resolved)!r} is not the plain file path that the checks saw: "
+        "a part of it is a link or no directory.",
+        retryable=False,
+        next_action="Do not retry this path. Tell the user that the path changed.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Executor
 # ---------------------------------------------------------------------------
@@ -260,6 +282,8 @@ async def edit_executor(
             next_action="Do not retry this path. Edit a file under /app/agent_workspace/ or /tmp/.",
         ) from exc
     except OSError as exc:
+        if exc.errno in PATH_CHANGED_ERRNOS:
+            raise _path_changed(resolved, trace_id) from exc
         log.warning("edit_read_error", path=str(resolved), error=str(exc), trace_id=trace_id)
         raise EditError(
             "io_error",
@@ -312,6 +336,8 @@ async def edit_executor(
             next_action="Do not retry this path. Edit a file under /app/agent_workspace/ or /tmp/.",
         ) from exc
     except OSError as exc:
+        if exc.errno in PATH_CHANGED_ERRNOS:
+            raise _path_changed(resolved, trace_id) from exc
         log.error("edit_io_error", path=str(resolved), error=str(exc), trace_id=trace_id)
         raise EditError(
             "io_error",

@@ -52,7 +52,11 @@ from pathlib import Path
 
 from personal_agent.config import settings
 from personal_agent.telemetry import get_logger
-from personal_agent.tools.primitives._child_workspace import give_to_child, missing_parts
+from personal_agent.tools.primitives._child_workspace import (
+    give_to_child,
+    missing_parts,
+    path_for_root_open,
+)
 from personal_agent.tools.primitives._governance import make_directory_no_symlinks
 
 log = get_logger(__name__)
@@ -161,8 +165,9 @@ async def run_in_sandbox(
     # Ensure scratch directory exists on the host before Docker tries to mount it.
     try:
         # This process is root, and the child owns the parent directory (FRE-1732).
-        created = missing_parts(scratch_host_path)
-        make_directory_no_symlinks(scratch_host_path)
+        scratch_for_root = path_for_root_open(scratch_host_path)
+        created = missing_parts(scratch_for_root)
+        make_directory_no_symlinks(scratch_for_root)
         give_to_child(created, trace_id=trace_id)
     except OSError as exc:
         log.error(

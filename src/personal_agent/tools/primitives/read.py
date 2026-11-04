@@ -17,7 +17,6 @@ FRE-410: per-read head cap + line-based offset/limit to stop whole-file context 
 FRE-1575: one tool contract — a failure raises :class:`ReadError`.
 """
 
-import errno
 import os
 import shlex
 from pathlib import Path
@@ -29,6 +28,7 @@ from personal_agent.governance.worker_read_grant import GrantedFile, ReadGrant, 
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._governance import (
+    PATH_CHANGED_ERRNOS,
     PathCode,
     _check_path_governance,
     _expand_path,
@@ -483,7 +483,7 @@ async def read_executor(
             next_action="Do not retry this file. Read another file or tell the user.",
         ) from exc
     except OSError as exc:
-        if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EINVAL):
+        if exc.errno in PATH_CHANGED_ERRNOS:
             log.warning(
                 "read_path_changed",
                 path=str(resolved),

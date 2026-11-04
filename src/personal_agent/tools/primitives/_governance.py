@@ -34,6 +34,9 @@ class PathRefusalError(ToolError[PathCode]):
 
 
 _PATH_NEXT = "Do not retry this path. Use a path that the path rules allow."
+# What an open with no symbolic link raises when a path is not the plain file that the checks saw:
+# a link in a part, a part that is no directory, a target that is no regular file, or a FIFO.
+PATH_CHANGED_ERRNOS = frozenset({errno.ELOOP, errno.ENOTDIR, errno.EINVAL, errno.ENXIO})
 # O_PATH walks a directory that the caller cannot list. macOS has no O_PATH.
 DIRECTORY_FLAGS = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY
 

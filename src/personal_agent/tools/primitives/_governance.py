@@ -33,15 +33,31 @@ _PATH_NEXT = "Do not retry this path. Use a path that the path rules allow."
 
 
 def _expand_path(path: str) -> str:
-    """Expand environment variables and home directory in *path*.
+    """Expand the home directory in a model's *path*.
+
+    ``$VAR`` stays literal text: a variable's value must not reach a path, an error or a log
+    line (FRE-1729).
 
     Args:
-        path: Raw path string possibly containing ``~`` or ``$VAR`` tokens.
+        path: Raw path string from a model, possibly containing ``~``.
 
     Returns:
         Expanded string.
     """
-    return os.path.expanduser(os.path.expandvars(path))
+    return os.path.expanduser(path)
+
+
+def _expand_pattern(pattern: str) -> str:
+    """Expand environment variables and home directory in an operator's *pattern*.
+
+    Args:
+        pattern: Glob pattern from the governance config, possibly containing ``~`` or
+            ``$VAR`` tokens.
+
+    Returns:
+        Expanded string.
+    """
+    return os.path.expanduser(os.path.expandvars(pattern))
 
 
 def _matches_any(path: str, patterns: list[str]) -> bool:
@@ -54,7 +70,7 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
     Returns:
         True if any pattern matches.
     """
-    return any(fnmatch(path, _expand_path(p)) for p in patterns)
+    return any(fnmatch(path, _expand_pattern(p)) for p in patterns)
 
 
 def _mount_points(mountinfo_path: str = "/proc/self/mountinfo") -> frozenset[str] | None:

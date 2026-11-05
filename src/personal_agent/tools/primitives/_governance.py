@@ -35,8 +35,11 @@ class PathRefusalError(ToolError[PathCode]):
 
 _PATH_NEXT = "Do not retry this path. Use a path that the path rules allow."
 # What an open with no symbolic link raises when a path is not the plain file that the checks saw:
-# a link in a part, a part that is no directory, a target that is no regular file, or a FIFO.
-PATH_CHANGED_ERRNOS = frozenset({errno.ELOOP, errno.ENOTDIR, errno.EINVAL, errno.ENXIO})
+# a link in a part, a part that is no directory, a target that is no regular file, a FIFO, or a
+# file with a second name.
+PATH_CHANGED_ERRNOS = frozenset(
+    {errno.ELOOP, errno.ENOTDIR, errno.EINVAL, errno.ENXIO, errno.EMLINK}
+)
 # O_PATH walks a directory that the caller cannot list. macOS has no O_PATH.
 DIRECTORY_FLAGS = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY
 
@@ -106,7 +109,9 @@ def open_file_no_symlinks(
     """Open a regular file with :func:`open_no_symlinks`, for ``os.fdopen``.
 
     ``O_NONBLOCK`` has no effect on a regular file, and it stops a FIFO that the child planted
-    from blocking the event loop.
+    from blocking the event loop. A file with a second name (``st_nlink > 1``) is refused, because
+    the child can link a file that root owns into a directory that the child controls. The host
+    setting ``fs.protected_hardlinks`` blocks that link today. This check holds if it changes.
 
     Args:
         path: The resolved absolute path.
@@ -119,12 +124,16 @@ def open_file_no_symlinks(
 
     Raises:
         OSError: A part of the path is a symbolic link, the path is not a regular file
-            (``EINVAL``), or the open fails.
+            (``EINVAL``), the file has a second name (``EMLINK``), or the open fails.
     """
     fd = open_no_symlinks(path, flags | os.O_NONBLOCK, mode, make_parents=make_parents)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
         os.close(fd)
         raise OSError(errno.EINVAL, "not a regular file", str(path))
+    if info.st_nlink > 1:
+        os.close(fd)
+        raise OSError(errno.EMLINK, "file has a second name", str(path))
     return fd
 
 

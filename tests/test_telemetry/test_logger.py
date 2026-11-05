@@ -163,6 +163,36 @@ class TestLoggerConfiguration:
             logger_module._get_log_dir = original_get_log_dir
             logger_module._get_log_level = original_get_log_level
 
+    def test_litellm_logger_is_quiet_after_setup(self, tmp_path: pathlib.Path) -> None:
+        """LiteLLM debug text holds call parameters and message bodies (FRE-1734).
+
+        The root logger is at DEBUG, so the library logger must be raised to WARNING.
+        """
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        import personal_agent.telemetry.logger as logger_module
+
+        original_get_log_dir = logger_module._get_log_dir
+        original_get_log_level = logger_module._get_log_level
+        original_level = logging.getLogger("LiteLLM").level
+        logger_module._get_log_dir = lambda: log_dir
+        logger_module._get_log_level = lambda: "DEBUG"
+
+        try:
+            structlog.reset_defaults()
+            logging.root.handlers.clear()
+            logging.getLogger("LiteLLM").setLevel(logging.NOTSET)
+
+            configure_logging()
+
+            assert logging.getLogger("LiteLLM").level == logging.WARNING
+            assert not logging.getLogger("LiteLLM").isEnabledFor(logging.DEBUG)
+        finally:
+            logging.getLogger("LiteLLM").setLevel(original_level)
+            logger_module._get_log_dir = original_get_log_dir
+            logger_module._get_log_level = original_get_log_level
+
     def test_logger_merges_bound_contextvars(self, tmp_path: pathlib.Path) -> None:
         """Verify bound contextvars are merged into emitted log records.
 

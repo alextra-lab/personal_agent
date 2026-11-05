@@ -250,6 +250,8 @@ def configure_logging() -> None:
     logging.getLogger("neo4j").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # LiteLLM debug text holds call parameters and message bodies (FRE-1734).
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
     configured_level = getattr(logging, log_level, logging.INFO)
 

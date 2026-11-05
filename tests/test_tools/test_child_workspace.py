@@ -663,7 +663,7 @@ def test_give_to_child_skips_a_part_that_was_not_created(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "number", [errno.ELOOP, errno.ENOTDIR, errno.EINVAL, errno.ENXIO]
+    "number", [errno.ELOOP, errno.ENOTDIR, errno.EINVAL, errno.ENXIO, errno.EMLINK]
 )
 async def test_a_changed_path_is_not_retryable_in_write_and_edit(
     number: int, tmp_path: Path
@@ -749,6 +749,46 @@ def test_a_directory_is_refused_and_leaks_no_descriptor(tmp_path: Path) -> None:
         open_file_no_symlinks(tmp_path, os.O_RDONLY)
 
     assert len(os.listdir("/proc/self/fd")) == baseline
+
+
+@pytest.mark.parametrize("flags", [os.O_RDONLY, os.O_WRONLY])
+def test_a_file_with_a_second_name_is_refused_and_leaks_no_descriptor(
+    flags: int, tmp_path: Path
+) -> None:
+    """A hard link to a file that root acts on is refused, and a plain file still opens."""
+    plain = tmp_path / "plain.txt"
+    plain.write_text("plain")
+    linked = tmp_path / "linked.txt"
+    linked.write_text("linked")
+    os.link(linked, tmp_path / "second_name.txt")
+    baseline = len(os.listdir("/proc/self/fd"))
+
+    os.close(open_file_no_symlinks(plain, flags))
+    with pytest.raises(OSError) as raised:
+        open_file_no_symlinks(linked, flags)
+
+    assert raised.value.errno == errno.EMLINK
+    assert len(os.listdir("/proc/self/fd")) == baseline
+
+
+@pytest.mark.asyncio
+async def test_read_write_and_edit_still_work_on_a_plain_file(tmp_path: Path) -> None:
+    """The second-name refusal does not stop the three tools on a normal file."""
+    target = tmp_path / "file.txt"
+    target.write_text("one two")
+    with (
+        patch("personal_agent.tools.primitives.read._check_path_governance"),
+        patch("personal_agent.tools.primitives.write._check_path_governance"),
+        patch("personal_agent.tools.primitives.write._check_durability"),
+        patch("personal_agent.tools.primitives.edit._check_path_governance"),
+        patch("personal_agent.tools.primitives.edit._check_durability"),
+    ):
+        await write_executor(str(target), "one two three", ctx=_CTX)
+        await edit_executor(str(target), "three", "four", ctx=_CTX)
+        result = await read_executor(str(target), ctx=_CTX)
+
+    assert target.read_text() == "one two four"
+    assert "one two four" in str(result)
 
 
 def test_make_directory_no_symlinks_refuses_a_link(tmp_path: Path) -> None:

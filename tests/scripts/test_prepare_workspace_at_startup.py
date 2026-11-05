@@ -15,19 +15,28 @@ _APP = REPO_ROOT / "src" / "personal_agent" / "service" / "app.py"
 
 
 def _lifespan_prepares_the_workspace(source: str) -> bool:
-    """Return whether ``lifespan`` passes ``prepare_workspace`` to ``asyncio.to_thread``."""
+    """Return whether ``lifespan`` awaits ``asyncio.to_thread(prepare_workspace)`` at its top level.
+
+    A call in a nested function, under a branch or without ``await`` does not count: it can
+    leave the call dead, and the service starts with a workspace that the child cannot write.
+    """
     lifespan = next(
         node
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "lifespan"
     )
-    return any(
-        isinstance(call.func, ast.Attribute)
-        and call.func.attr == "to_thread"
-        and any(isinstance(arg, ast.Name) and arg.id == "prepare_workspace" for arg in call.args)
-        for call in ast.walk(lifespan)
-        if isinstance(call, ast.Call)
-    )
+    for statement in lifespan.body:
+        if not (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Await)):
+            continue
+        call = statement.value.value
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "to_thread"
+            and any(isinstance(arg, ast.Name) and arg.id == "prepare_workspace" for arg in call.args)
+        ):
+            return True
+    return False
 
 
 def test_lifespan_prepares_the_child_workspace() -> None:
@@ -43,3 +52,15 @@ def test_the_check_fails_on_a_copy_without_the_call() -> None:
     without_call = source.replace("await asyncio.to_thread(prepare_workspace)", "pass")
 
     assert not _lifespan_prepares_the_workspace(without_call)
+
+
+def test_the_check_fails_on_a_call_that_does_not_run() -> None:
+    """Seeded negatives: a call without ``await``, or under a branch, does not count."""
+    source = _APP.read_text()
+    call = "await asyncio.to_thread(prepare_workspace)"
+
+    not_awaited = source.replace(call, "asyncio.to_thread(prepare_workspace)")
+    under_branch = source.replace(call, "if False:\n        " + call)
+
+    assert not _lifespan_prepares_the_workspace(not_awaited)
+    assert not _lifespan_prepares_the_workspace(under_branch)

@@ -771,6 +771,22 @@ def test_a_file_with_a_second_name_is_refused_and_leaks_no_descriptor(
     assert len(os.listdir("/proc/self/fd")) == baseline
 
 
+def test_a_refused_file_with_a_second_name_is_not_emptied(tmp_path: Path) -> None:
+    """``O_TRUNC`` runs after the check: the refusal leaves the shared content in place."""
+    linked = tmp_path / "linked.txt"
+    linked.write_text("root content")
+    os.link(linked, tmp_path / "second_name.txt")
+    plain = tmp_path / "plain.txt"
+    plain.write_text("old content")
+
+    with pytest.raises(OSError):
+        open_file_no_symlinks(linked, os.O_WRONLY | os.O_TRUNC)
+    os.close(open_file_no_symlinks(plain, os.O_WRONLY | os.O_TRUNC))
+
+    assert linked.read_text() == "root content"
+    assert plain.read_text() == ""
+
+
 @pytest.mark.asyncio
 async def test_read_write_and_edit_still_work_on_a_plain_file(tmp_path: Path) -> None:
     """The second-name refusal does not stop the three tools on a normal file."""

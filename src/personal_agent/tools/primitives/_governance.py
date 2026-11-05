@@ -109,7 +109,8 @@ def open_file_no_symlinks(
     """Open a regular file with :func:`open_no_symlinks`, for ``os.fdopen``.
 
     ``O_NONBLOCK`` has no effect on a regular file, and it stops a FIFO that the child planted
-    from blocking the event loop. A file with a second name (``st_nlink > 1``) is refused, because
+    from blocking the event loop. ``O_TRUNC`` runs after the checks, because the open itself would
+    empty a file that the checks then refuse. A file with a second name (``st_nlink > 1``) is refused, because
     the child can link a file that root owns into a directory that the child controls. The host
     setting ``fs.protected_hardlinks`` blocks that link today. This check holds if it changes.
 
@@ -126,7 +127,9 @@ def open_file_no_symlinks(
         OSError: A part of the path is a symbolic link, the path is not a regular file
             (``EINVAL``), the file has a second name (``EMLINK``), or the open fails.
     """
-    fd = open_no_symlinks(path, flags | os.O_NONBLOCK, mode, make_parents=make_parents)
+    fd = open_no_symlinks(
+        path, (flags | os.O_NONBLOCK) & ~os.O_TRUNC, mode, make_parents=make_parents
+    )
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode):
         os.close(fd)
@@ -134,6 +137,12 @@ def open_file_no_symlinks(
     if info.st_nlink > 1:
         os.close(fd)
         raise OSError(errno.EMLINK, "file has a second name", str(path))
+    if flags & os.O_TRUNC:
+        try:
+            os.ftruncate(fd, 0)
+        except OSError:
+            os.close(fd)
+            raise
     return fd
 
 

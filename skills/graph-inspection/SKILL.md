@@ -90,7 +90,7 @@ Check the result before you answer:
 | `error: this script is read-only and the query holds SET` | A write clause, or a property named like one | Remove the write. If it is a property or alias name, quote it with backticks |
 | `error: the procedure apoc.x.y is not allowed` | A `CALL` outside the list | Use `MATCH` and `RETURN`, or one of the listed schema procedures |
 | `error: AGENT_NEO4J_PASSWORD is not set in this environment` | The script runs where the variable is not set | Say that the graph cannot be read from here. Do not look for the password |
-| The same line, in the gateway | A pipe, `&&` or anything else ran with the script. Only one plain call of the script gets the password (FRE-1732) | Run the script as the whole command, and read its output |
+| The same line, in the gateway | A pipe, `&&` or anything else ran with the script, or the query is in double quotes and holds `$` or a backtick. Only one plain call of the script gets the password (FRE-1732) | Run the script as the whole command, put the query in single quotes, and read its output |
 | `error: authentication failed` | The user or password is wrong | Stop. Tell the user. Do not try other credentials |
 | `error: cannot connect to bolt://...` | Neo4j is down, or the name does not resolve from here | Run the `service-health` skill for `neo4j`. Do not use `localhost` inside the container |
 | `error: the server refused the query: ...` | A syntax error, or the server refused a write | Fix the query as the message states |

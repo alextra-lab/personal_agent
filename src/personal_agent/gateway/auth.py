@@ -76,9 +76,11 @@ def _expand_env_var(value: str) -> str | None:
         value: Raw value string, potentially containing ``${VAR}`` references.
 
     Returns:
-        Expanded string, or ``None`` when a reference is unset or blank, or the result is blank.
-        This file's literal text must never work as a token (FRE-1732).
+        Expanded string, or ``None`` when a reference is unset, blank or malformed, or the result
+        is blank. This file's literal text must never work as a token (FRE-1732).
     """
+    if "$" in _ENV_REFERENCE.sub("", value):
+        return None
     if any(not os.environ.get(name, "").strip() for name in _ENV_REFERENCE.findall(value)):
         return None
     expanded = _ENV_REFERENCE.sub(lambda match: os.environ[match.group(1)], value)

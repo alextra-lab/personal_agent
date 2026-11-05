@@ -133,6 +133,16 @@ def test_the_repo_config_holds_no_literal_secret() -> None:
         assert entry["secret"].endswith("}"), entry["name"]
 
 
+@pytest.mark.parametrize("secret", ["${FRE1732_SET", "$FRE1732_SET", "x$y", "$"])
+def test_a_malformed_reference_gives_no_token(
+    secret: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo in a reference must not turn the public text into a token."""
+    monkeypatch.setenv("FRE1732_SET", "fre1732-real-value")
+
+    assert load_token_config(_config(tmp_path, secret)) == {}
+
+
 def test_an_invalid_entry_logs_no_secret(tmp_path: Path) -> None:
     """An entry with no name can hold a literal secret, so the log names only its fields."""
     path = tmp_path / "access.yaml"

@@ -392,7 +392,7 @@ async def bash_executor(
 
     Raises:
         BashError: ``empty_command``, ``timeout``, ``os_error``, or
-            ``credential_isolation_unavailable`` (eval deployment, gateway not root).
+            ``credential_isolation_unavailable`` (deployed gateway, not root).
     """
     trace_id = ctx.trace_id
 

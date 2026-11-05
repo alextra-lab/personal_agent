@@ -450,7 +450,8 @@ def run_query(
     if driver is None and not password:
         raise CypherError(
             "AGENT_NEO4J_PASSWORD is not set in this environment. "
-            "In the gateway, run this script as the whole command, with no pipe or &&."
+            "In the gateway, run this script as the whole command, with no pipe or &&, "
+            "and put the query in single quotes."
         )
     try:
         import neo4j

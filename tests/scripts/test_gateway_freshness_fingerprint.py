@@ -45,6 +45,16 @@ class TestComputeBuildFingerprint:
         after = compute_build_fingerprint(tmp_path)
         assert before != after
 
+    def test_ignores_bytecode_that_a_local_import_writes(self, tmp_path: Path) -> None:
+        """FRE-1728: .dockerignore keeps bytecode out of the image, so it is not a build input."""
+        _make_tree(tmp_path)
+        before = compute_build_fingerprint(tmp_path)
+
+        (tmp_path / "src" / "__pycache__").mkdir()
+        (tmp_path / "src" / "__pycache__" / "a.cpython-314.pyc").write_bytes(b"\x00")
+
+        assert compute_build_fingerprint(tmp_path) == before
+
     def test_changes_when_a_new_untracked_file_is_added(self, tmp_path: Path) -> None:
         _make_tree(tmp_path)
         before = compute_build_fingerprint(tmp_path)

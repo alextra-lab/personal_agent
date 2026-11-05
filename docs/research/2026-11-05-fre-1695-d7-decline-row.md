@@ -21,7 +21,7 @@ It made no paid call and it built no new harness.
 
 The expand result is the finding that needs an owner decision. It is outside the four questions of the ticket.
 The planner now answers `SINGLE` on 97 of 320 expand-fixture draws (30%). On Oct 25 it did so on 8 of 80 draws (10%).
-The planner input is byte-identical to the Oct 25 input. Only the engine and its model file changed.
+The planner input is byte-identical to the Oct 25 input. The engine build changed, and the model file may have changed.
 
 ## Method as run
 
@@ -32,7 +32,8 @@ The planner input is byte-identical to the Oct 25 input. Only the engine and its
 - **Inputs.** Capture and render ran on `origin/main` at `abb9589e`, which includes FRE-1740. The rendered prompt hash is
   `d13f0dca…` (the shipped C1 prompt, ADR-0154 Amendment 3). The 27 fixtures and their user messages equal those of the
   FRE-1694 study byte for byte. The planner mode, the sampling and the quant (`UD-IQ4_XS`) equal those of the FRE-1694
-  C1 run. The fingerprints differ only in engine build and git head.
+  C1 run. The fingerprints differ only in engine build and git head. The planner input does not depend on the git head,
+  because the prompt hash and the fixtures are equal.
 - **Runs.** Each run used `--mode planner --arms decide --trials 10`. That gives 100 decline draws and 160 expand draws
   per run, plus follow-up fixtures inside those counts. `c5_noverb` is not scored. The order was C1 run 1, C1 run 2
   (the noise arm), V2, the unrelated digest, then the relevant digests. Each full run took 19 to 25 minutes.
@@ -102,8 +103,7 @@ rows on disk, so it is not in the table.
 **The limit.** The builds were not measured side by side. Each group holds several different prompts. The earlier runs
 used 3 or 5 trials per fixture, and these runs used 10. The production move of 2026-11-05 may also have changed the model
 file. The fingerprint cannot show this, because the model path reads `unknown`. So the data cannot separate the engine
-from the model file. Runs of one prompt differ by more than their intervals show, so the earlier groups carry more
-spread than the table shows.
+from the model file. One pair of runs cannot rule out more spread between runs than the intervals show.
 
 ## AC-5 — a D7 decline row that separates a regression from chance
 
@@ -159,10 +159,11 @@ These rows are outside AC-5. They are listed so that the owner sees them before 
   misses.
 - **The best action.** Remove `tool_logs` from the scored decline set, or relabel it as "either answer is correct". The
   change alters the D7 denominators, so it belongs in the same ADR-0154 amendment as AC-5.
-- **The message.** The line "Strategy: HYBRID" appears on every planner user message. It echoes into the output in 4 of 400
-  decline draws (1%), as `HYBRID` with no task. No arm measured the effect of removing the line. A change to the
-  message is a routing change under D7 and needs a new qualification on a gate that is already noisy. The measured cost
-  of the line is 1% of decline draws that end as a tool-loop return, which is the same effect as a decline. Leave it.
+- **The message.** The line "Strategy: HYBRID" appears on every planner user message. In 4 of 400
+  decline draws (1%) the planner returned `HYBRID` with no task. The data does not show that the line causes this. No arm
+  measured the effect of removing the line. A change to the message is a routing change under D7 and needs a new
+  qualification on a gate that is already noisy. The rate of this failure is 1% of decline draws. In production such a
+  plan returns the turn to the tool loop, which is the same effect as a decline. Leave it.
   An arm that removes the line costs one 25-minute run with a copy of `prompts.json`, if the owner wants the data.
 
 ## AC-6b — the two digest arms (ADR-0154 D7 and AC-8)
@@ -188,7 +189,8 @@ production line fit cuts such a description to an empty text.
 - The unrelated digest moved expand-correct by +5.9 points. That is larger than the gap of 3.1 points, and its interval
   includes zero.
 - The relevant digest moved expand-correct on four fixtures by +26 points. This is far outside the gap. The digest
-  helps in this sample because the planner under-expands on b12138. With 4 fixtures and one digest wording each, the
+  helps in this sample, and the planner under-expands on b12138. The data does not show whether the two are linked. With
+  4 fixtures and one digest wording each, the
   size of the effect is not firm.
 - AC-8 part 3 of the ADR fails a run that changes the decision on more than 1 of 24 draws (8 fixtures, 3 trials). At 10
   trials that count does not apply. The change here moves toward the correct label. The owner reads this against the
@@ -226,8 +228,9 @@ The captured primary requests and the rendered prompts are in `20261105-fre1695/
 
 ## Decisions for the owner
 
-1. The expand drop. The shipped prompt on b12138 expands 70% of expand-fixture draws, against 89% on b11751. The cause is
-   the engine or the model file. The D7 expand row fails by a wide margin.
+1. The expand drop. The shipped prompt on b12138 expands 70% of expand-fixture draws, against 89% on b11751. The cause is not
+   isolated. The differences are the engine build and a possible change of the model file. The D7 expand row fails by a
+   wide margin.
 2. The AC-5 row, and whether to apply the same design to the expand row and the zero-invalid row. Each needs an ADR-0154
    amendment.
 3. The `tool_logs` fixture (AC-6).

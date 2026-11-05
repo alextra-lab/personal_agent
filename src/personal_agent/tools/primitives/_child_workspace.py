@@ -26,8 +26,9 @@ CHILD_UID = 65534
 CHILD_GID = 65534
 CHILD_IDS = (CHILD_UID, CHILD_GID)
 WORKSPACE_ROOT = Path("/app/agent_workspace")
-# The ``run_python`` scratch root, inside the workspace. Root owns it and the trace directories in
-# it, so the child cannot replace a trace directory that the sandbox mounts (FRE-1736).
+# The ``run_python`` scratch root, inside the workspace. Root owns it, so the child does not own the
+# parent of the trace directories (FRE-1736). The child still owns the workspace itself, so this
+# does not stop it from renaming ``sandbox``. It only removes the child's direct ownership.
 SANDBOX_DIRECTORY = "sandbox"
 ROOT_IDS = (0, 0)
 # A root itself keeps its owner: ``/tmp`` stays root's. ``prepare_workspace`` gives the workspace.
@@ -48,7 +49,8 @@ def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
 
     No child runs at that time. A symbolic link is changed itself and is not followed. An entry
     that the child owns already, or a file with a second name, stays as it is. The ``sandbox``
-    directory goes to root instead, and the walk does not enter it (FRE-1736).
+    directory goes to root instead, and the walk does not enter it. A missing ``sandbox``
+    directory is created for root (FRE-1736).
 
     Args:
         root: The workspace directory.
@@ -82,6 +84,12 @@ def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
         for name in (*subdirs, *files):
             entry = Path(directory, name)
             give(entry, ROOT_IDS if entry == sandbox else CHILD_IDS)
+    if not os.path.lexists(sandbox):
+        # A fresh volume has none. Created later by a child's first write, it would be the child's.
+        try:
+            sandbox.mkdir(mode=0o755)
+        except OSError:
+            failed += 1
     log.info("child_workspace_prepared", changed=changed, failed=failed, second_names=second_names)
 
 

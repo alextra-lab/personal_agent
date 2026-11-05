@@ -198,9 +198,10 @@ async def run_in_sandbox(
 
     # Ensure scratch directory exists before Docker tries to mount it.
     try:
-        # The directory and its parents stay with this process (root on a deployed gateway). The
-        # ``bash`` child must not own a parent: its owner could replace the trace directory
-        # between the steps below (FRE-1736). Only the trace directory goes to the sandbox user.
+        # The directory and its parents stay with this process (root on a deployed gateway), and
+        # only the trace directory goes to the sandbox user (FRE-1736). The ``bash`` child owns
+        # ``/app/agent_workspace`` itself, so it can still rename ``sandbox``. This is not a
+        # barrier. The daemon keeps the mount inside the volume, whatever the child does.
         scratch_for_root = path_for_root_open(scratch_host_path)
         make_directory_no_symlinks(scratch_for_root)
         _give_to_sandbox_user(scratch_for_root)

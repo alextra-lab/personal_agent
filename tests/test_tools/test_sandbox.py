@@ -754,7 +754,7 @@ async def test_the_trace_directory_goes_to_the_sandbox_user(
     """The gateway (root) gives the trace directory to uid 1000, and nothing above it.
 
     A directory that exists already (a repeat call in one trace) is given too. The parent
-    ``sandbox`` directory stays as it is, so the ``bash`` child cannot replace the trace directory.
+    ``sandbox`` directory stays as it is, so the ``bash`` child does not own it.
     """
     scratch = tmp_path / "ws" / "sandbox" / "trace-a"
     if exists_already:

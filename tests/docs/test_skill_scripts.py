@@ -925,6 +925,7 @@ def test_ac3_the_classifier_and_the_timeline_read_only_stdin() -> None:
 
 _PSQL_ARGV = [
     "psql",
+    "-X",
     "-w",
     "-h",
     "127.0.0.1",

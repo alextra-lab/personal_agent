@@ -43,7 +43,9 @@ FRE-261 Step 5. FRE-1462 (execution bound + cleanup).
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
+import stat
 import time
 import uuid
 from contextlib import suppress
@@ -52,6 +54,15 @@ from pathlib import Path
 
 from personal_agent.config import settings
 from personal_agent.telemetry import get_logger
+from personal_agent.tools.primitives._child_workspace import (
+    give_to_child,
+    missing_parts,
+    path_for_root_open,
+)
+from personal_agent.tools.primitives._governance import (
+    make_directory_no_symlinks,
+    open_no_symlinks,
+)
 
 log = get_logger(__name__)
 
@@ -158,7 +169,14 @@ async def run_in_sandbox(
 
     # Ensure scratch directory exists on the host before Docker tries to mount it.
     try:
-        scratch_host_path.mkdir(parents=True, exist_ok=True)
+        # This process is root, and the child owns the parent directory (FRE-1732).
+        scratch_for_root = path_for_root_open(scratch_host_path)
+        created = missing_parts(scratch_for_root)
+        try:
+            make_directory_no_symlinks(scratch_for_root)
+        finally:
+            # Also after a failure: the next call finds these parts in place, and does not give them.
+            give_to_child(created, trace_id=trace_id)
     except OSError as exc:
         log.error(
             "sandbox_scratch_mkdir_failed",
@@ -342,6 +360,10 @@ async def run_in_sandbox(
 def _list_scratch_files(path: Path) -> list[str]:
     """Return a list of absolute paths of files in *path* (non-recursive).
 
+    This process is root and the ``bash`` child can own this directory, so the listing goes
+    through a descriptor that opened with no symbolic link (FRE-1732). A link in the directory is
+    not listed.
+
     Args:
         path: Directory to list.
 
@@ -350,9 +372,16 @@ def _list_scratch_files(path: Path) -> list[str]:
         or cannot be listed.
     """
     try:
-        if not path.exists():
-            return []
-        return sorted(str(f) for f in path.iterdir() if f.is_file())
+        fd = open_no_symlinks(path_for_root_open(path), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            files: list[str] = []
+            for name in os.listdir(fd):
+                with suppress(FileNotFoundError):  # one removed file does not lose the others
+                    if stat.S_ISREG(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode):
+                        files.append(str(path / name))
+            return sorted(files)
+        finally:
+            os.close(fd)
     except OSError:
         return []
 

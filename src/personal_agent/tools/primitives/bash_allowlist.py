@@ -524,6 +524,8 @@ _SED_ADDRESS = r"(?:[0-9]+|\$|/(?:[^/\\]|\\.)*/[IM]*)"
 _SED_EXEC_COMMAND = re.compile(
     rf"(?:^|[;{{}}\n])\s*(?:{_SED_ADDRESS}(?:\s*,\s*(?:{_SED_ADDRESS}|[~+][0-9]+))?)?\s*!?\s*[ewW]"
 )
+_MMDC_BOOLEAN_OPTIONS = frozenset("fqhV")
+_MMDC_VALUE_OPTIONS = frozenset("twHijebcCIs")
 _CURL_SHORT_WITH_ARG = frozenset("AbcCdDeEFHKmoPQrtTuUwxXyYz")
 _CURL_LONG_WITH_ARG = frozenset(
     {
@@ -814,6 +816,54 @@ def _sort_hazard(args: Sequence[str]) -> str | None:
     return None
 
 
+def _mmdc_hazard(args: Sequence[str]) -> str | None:
+    """Return why an mmdc call needs approval, or ``None`` (FRE-1732).
+
+    mmdc reads its options with commander, which joins a value to its option and clusters short
+    options: ``-p/x``, ``-qp /x`` and ``-qp/x`` all name the puppeteer config. That file names the
+    program that puppeteer starts. commander also reads ``-q-name`` as ``-q`` and then ``--name``,
+    so a letter that is not a listed option asks. A word that an optional value takes is read as
+    an option here too, which at worst asks.
+
+    Args:
+        args: mmdc's arguments, without the command name.
+
+    Returns:
+        A reason when mmdc reads a puppeteer config, or writes outside scratch space.
+    """
+    i = 0
+    while i < len(args):
+        word = args[i]
+        i += 1
+        if word.startswith("--"):
+            name, eq, value = word.partition("=")
+            if name == "--puppeteerConfigFile":
+                return "mmdc puppeteer config"
+            if name in ("--output", "--artefacts"):
+                if not eq:
+                    value = args[i] if i < len(args) else ""
+                    i += 1
+                if not is_scratch_path(value):
+                    return "mmdc writes a non-scratch file"
+        elif word.startswith("-") and len(word) > 1:
+            for j, letter in enumerate(word[1:], start=1):
+                if letter == "p":
+                    return "mmdc puppeteer config"
+                if letter in "oa":
+                    value = word[j + 1 :]
+                    if not value:
+                        value = args[i] if i < len(args) else ""
+                        i += 1
+                    if not is_scratch_path(value):
+                        return "mmdc writes a non-scratch file"
+                    break
+                if letter in _MMDC_VALUE_OPTIONS:
+                    break  # this option takes the rest of the word, or the next word, as its value
+                if letter not in _MMDC_BOOLEAN_OPTIONS:
+                    return f"mmdc option cluster holds {letter!r}"
+    return None
+
+
 def option_hazard(words: Sequence[str]) -> str | None:
     """Return why an allowlisted command needs approval because of its options, or ``None``.
 
@@ -874,22 +924,7 @@ def option_hazard(words: Sequence[str]) -> str | None:
                 if word in ("--output", "--ext-diff") or word.startswith("--output="):
                     return f"git {word.partition('=')[0]}"
         case "mmdc":
-            i = 0
-            while i < len(args):
-                word = args[i]
-                if word in ("-p", "--puppeteerConfigFile") or word.startswith(
-                    "--puppeteerConfigFile="
-                ):
-                    return "mmdc puppeteer config"
-                if word in ("-o", "--output"):
-                    i += 1
-                    if i >= len(args) or not is_scratch_path(args[i]):
-                        return "mmdc writes a non-scratch file"
-                elif word.startswith("--output=") or (word.startswith("-o") and len(word) > 2):
-                    value = word.partition("=")[2] if word.startswith("--") else word[2:]
-                    if not is_scratch_path(value):
-                        return "mmdc writes a non-scratch file"
-                i += 1
+            return _mmdc_hazard(args)
         case "curl":
             return _curl_hazard(args)
         case _:

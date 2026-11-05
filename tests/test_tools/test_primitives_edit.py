@@ -6,6 +6,7 @@ refused or failed edit must leave the file unchanged.
 
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 from unittest.mock import patch
 
@@ -294,11 +295,29 @@ async def test_an_unreadable_file_is_permission_denied(tmp_path: Path) -> None:
     """A file the process cannot read is ``permission_denied``."""
     target = _file(tmp_path)
 
-    with patch.object(Path, "read_bytes", side_effect=PermissionError(13, "Permission denied")):
+    with patch("personal_agent.tools.primitives.edit.open_file_no_symlinks", side_effect=PermissionError(13, "Permission denied")):
         with pytest.raises(EditError) as exc_info:
             await _edit(target, "beta", "BETA")
 
     assert exc_info.value.code == "permission_denied"
+
+
+@pytest.mark.asyncio
+async def test_an_open_failure_is_a_retryable_read_failure(tmp_path: Path) -> None:
+    """An I/O error on the read step can pass, and the file stays as it was."""
+    target = _file(tmp_path)
+    before = target.read_text()
+
+    with patch(
+        "personal_agent.tools.primitives.edit.open_file_no_symlinks",
+        side_effect=OSError(errno.EIO, "Input/output error"),
+    ):
+        with pytest.raises(EditError) as exc_info:
+            await _edit(target, "beta", "BETA")
+
+    assert exc_info.value.code == "io_error"
+    assert exc_info.value.retryable is True
+    assert target.read_text() == before
 
 
 # ---------------------------------------------------------------------------

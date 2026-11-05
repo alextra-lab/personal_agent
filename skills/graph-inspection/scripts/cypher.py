@@ -448,7 +448,10 @@ def run_query(
     uri = env.get("AGENT_NEO4J_URI", "bolt://neo4j:7687")
     password = env.get("AGENT_NEO4J_PASSWORD", "")
     if driver is None and not password:
-        raise CypherError("AGENT_NEO4J_PASSWORD is not set in this environment")
+        raise CypherError(
+            "AGENT_NEO4J_PASSWORD is not set in this environment. "
+            "In the gateway, run this script as the whole command, with no pipe or &&."
+        )
     try:
         import neo4j
         from neo4j import exceptions as neo4j_exceptions

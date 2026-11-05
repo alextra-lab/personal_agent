@@ -28,9 +28,11 @@ from personal_agent.governance.worker_read_grant import GrantedFile, ReadGrant, 
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._governance import (
+    PATH_CHANGED_ERRNOS,
     PathCode,
     _check_path_governance,
     _expand_path,
+    open_file_no_symlinks,
 )
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
@@ -441,14 +443,15 @@ async def read_executor(
             next_action="Check the path with bash ls or find, then read an existing file.",
         )
 
-    actual_size = resolved.stat().st_size
     tail_cap = max_bytes if max_bytes is not None else LEGACY_TAIL_CAP
     requested_limit = limit if limit is not None else DEFAULT_LINE_LIMIT
     effective_limit = max(requested_limit, 1)  # a non-positive limit would skip content
     byte_cap = max_bytes if max_bytes is not None else DEFAULT_HEAD_BYTES
 
     try:
-        with resolved.open("rb") as fh:
+        # The path can change to a link after the checks above, and this process is root.
+        with os.fdopen(open_file_no_symlinks(resolved, os.O_RDONLY), "rb") as fh:
+            actual_size = os.fstat(fh.fileno()).st_size
             # ADR-0156 D9.4, second check, before any byte is read: the opened file is
             # the file recorded at grant time. This refuses a rename-over and a symlink
             # swapped in after the grant, including between the first check and the open.
@@ -480,6 +483,19 @@ async def read_executor(
             next_action="Do not retry this file. Read another file or tell the user.",
         ) from exc
     except OSError as exc:
+        if exc.errno in PATH_CHANGED_ERRNOS:
+            log.warning(
+                "read_path_changed",
+                path=str(resolved),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            raise ReadError(
+                "file_replaced",
+                f"{str(resolved)!r} changed after the path checks, and it is not the same file.",
+                retryable=False,
+                next_action="Do not retry this path. Tell the user that the path changed.",
+            ) from exc
         log.error(
             "read_io_error",
             path=str(resolved),

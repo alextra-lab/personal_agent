@@ -3,6 +3,7 @@
 FRE-261 Step 3.
 """
 
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -229,8 +230,10 @@ async def test_write_allows_mounted_app_path() -> None:
             "personal_agent.tools.primitives._governance._mount_points",
             return_value=_DURABLE_MOUNTS,
         ),
-        patch.object(Path, "mkdir", return_value=None),
-        patch.object(Path, "write_text", return_value=None),
+        patch(
+            "personal_agent.tools.primitives.write.open_file_no_symlinks",
+            side_effect=lambda *_args, **_kwargs: os.open(os.devnull, os.O_WRONLY),
+        ),
     ):
         result = await write_executor(target, content="model code", mode="overwrite", ctx=_CTX)
 
@@ -255,7 +258,7 @@ async def test_write_os_failure_maps_to_code(raised: OSError, code: str, retryab
     with TemporaryDirectory() as tmpdir:
         target = Path(tmpdir) / "out.txt"
 
-        with patch.object(Path, "write_text", side_effect=raised):
+        with patch("personal_agent.tools.primitives.write.open_file_no_symlinks", side_effect=raised):
             with pytest.raises(WriteError) as exc_info:
                 await write_executor(str(target), content="x", mode="overwrite", ctx=_CTX)
 

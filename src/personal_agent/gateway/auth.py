@@ -17,6 +17,7 @@ Usage::
 
 import hmac
 import os
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ from personal_agent.config.settings import get_settings
 log = structlog.get_logger(__name__)
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+_ENV_REFERENCE = re.compile(r"\$\{([^}]+)\}")
 
 
 @dataclass(frozen=True)
@@ -67,23 +69,20 @@ _DEV_TOKEN = TokenInfo(
 )
 
 
-def _expand_env_var(value: str) -> str:
+def _expand_env_var(value: str) -> str | None:
     """Expand ``${VAR_NAME}`` patterns using os.environ.
 
     Args:
         value: Raw value string, potentially containing ``${VAR}`` references.
 
     Returns:
-        Expanded string.  Unexpanded references are returned as-is so that
-        local dev YAML with literal secrets still works.
+        Expanded string, or ``None`` when a reference is unset or blank, or the result is blank.
+        This file's literal text must never work as a token (FRE-1732).
     """
-    import re
-
-    def replace(match: re.Match[str]) -> str:
-        var_name = match.group(1)
-        return os.environ.get(var_name, match.group(0))
-
-    return re.sub(r"\$\{([^}]+)\}", replace, value)
+    if any(not os.environ.get(name, "").strip() for name in _ENV_REFERENCE.findall(value)):
+        return None
+    expanded = _ENV_REFERENCE.sub(lambda match: os.environ[match.group(1)], value)
+    return expanded if expanded.strip() else None
 
 
 def load_token_config(path: Path) -> dict[str, TokenInfo]:
@@ -116,10 +115,13 @@ def load_token_config(path: Path) -> dict[str, TokenInfo]:
         rate_limit_raw: str | int = entry.get("rate_limit", 100)
 
         if not name or not secret_raw:
-            log.warning("gateway_access_config_invalid_entry", entry=entry)
+            log.warning("gateway_access_config_invalid_entry", fields=sorted(entry))
             continue
 
         secret = _expand_env_var(str(secret_raw))
+        if secret is None:
+            log.warning("gateway_access_token_unset", name=name)
+            continue
 
         # Parse "1000/hour" or plain int
         if isinstance(rate_limit_raw, str) and "/" in rate_limit_raw:

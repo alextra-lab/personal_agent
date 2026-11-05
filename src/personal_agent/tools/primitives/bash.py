@@ -18,18 +18,23 @@ Security model
 * Timeout is clamped to [1, 120] seconds.
 * Output is capped at 50 KiB (combined stdout + stderr); overflow is written to
   a scratch file and the path is returned.
-* On an eval deployment (``deployment_profile == "eval"``) the child runs as the
-  unprivileged ``nobody`` account with an allowlisted environment (FRE-1505). The
-  eval-treatment gateway runs bash with no human approval, so the child must not
-  read a credential: a non-root process cannot open ``/proc/<pid>/environ`` of any
-  root process (the gateway, PID 1, health checks, sibling children), and the
-  kernel clears capabilities on the uid change. If the gateway is not root it
-  cannot drop privileges, so eval bash refuses and spawns nothing. The identity
-  change runs through ``setpriv`` because the served event loop (uvloop) rejects the
-  ``user``/``group``/``extra_groups`` spawn kwargs (FRE-1518).
+* On a deployed gateway (``deployment_profile`` ``cloud`` or ``eval``) the child runs as the
+  unprivileged ``nobody`` account with an allowlisted environment (FRE-1505, FRE-1732). The
+  output goes back to the model, so the child must not read a credential: a non-root process
+  cannot open ``/proc/<pid>/environ`` of any root process (the gateway, PID 1, health checks,
+  sibling children), and the kernel clears capabilities on the uid change. If the gateway is
+  not root it cannot drop privileges, so bash refuses and spawns nothing. The identity change
+  runs through ``setpriv`` because the served event loop (uvloop) rejects the
+  ``user``/``group``/``extra_groups`` spawn kwargs (FRE-1518). On ``cloud`` the child owns
+  ``/app/agent_workspace`` (:mod:`._child_workspace`).
+* Two reviewed skill scripts need a credential (FRE-1732). On ``cloud``, when the whole command
+  is one plain call of such a script, the script runs with no shell, from a fixed interpreter and
+  path, and with only the names that it reads. It runs as a second unprivileged account,
+  ``seshat-scripts``: ``nobody`` cannot read its environment, and it has no root, no capabilities
+  and no Docker socket. Any other form, such as a pipe, runs as ``nobody`` with no credential.
 
 FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation) ·
-FRE-1518 (isolation on the served event loop) · FRE-1574 (one permission model) ·
+FRE-1518 (isolation on the served event loop) · FRE-1732 (isolation on every deployment) · FRE-1574 (one permission model) ·
 FRE-1575 (one tool contract: a guard failure raises :class:`BashError`; a non-zero exit is a
 normal result, because the tool ran the command).
 """
@@ -38,12 +43,24 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
 from personal_agent.config import settings
+from personal_agent.governance.bash_matcher import parse_bash
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.contract import ToolError, error_codes
+from personal_agent.tools.primitives._child_workspace import (
+    CHILD_GID,
+    CHILD_UID,
+    give_to_child,
+    missing_parts,
+    path_for_root_open,
+)
+from personal_agent.tools.primitives._governance import open_file_no_symlinks
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
@@ -62,29 +79,66 @@ _MAX_TIMEOUT = 120
 # is killed.  That is benign early-exit behavior, not a command failure. FRE-470.
 _SIGPIPE_EXIT_CODE = 141
 
-# FRE-1505: identity and environment of the bash child on an eval deployment.
-# 65534 is ``nobody``/``nogroup`` in the Debian-based gateway image.
-EVAL_CHILD_UID = 65534
-EVAL_CHILD_GID = 65534
+# FRE-1505, FRE-1732: the environment of the bash child on a deployed gateway.
 # An allowlist, not a denylist: AGENT_DATABASE_URL carries a password under a name no
-# suffix pattern matches. HOME and TMPDIR are set to /tmp, which ``nobody`` can write.
-EVAL_CHILD_ENV_NAMES: frozenset[str] = frozenset(
-    {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "VIRTUAL_ENV"}
+# suffix pattern matches. TMPDIR is /tmp, which ``nobody`` can write. HOME must be out of reach of
+# the ``write`` tool: curl, jq, git and psql read start-up files from it, and ``write`` runs with no
+# approval card, so a planted ~/.curlrc would change what an allowed curl sends. The image creates
+# this directory for ``nobody``, because mmdc's browser needs a writable one (FRE-1732).
+# PUPPETEER_EXECUTABLE_PATH names the browser in the image, and mmdc cannot start without it.
+CHILD_ENV_NAMES: frozenset[str] = frozenset(
+    {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "VIRTUAL_ENV", "PUPPETEER_EXECUTABLE_PATH"}
 )
-_EVAL_CHILD_HOME = "/tmp"
-# setpriv (util-linux) changes identity and then execs bash, so the spawned PID is bash.
+_CHILD_HOME = "/var/lib/seshat-bash-home"
+_CHILD_TMPDIR = "/tmp"
+
+
+# setpriv (util-linux) changes identity and then execs the program, so the spawned PID is it.
 # All capability sets are cleared, and no_new_privs stops a setuid binary regaining root.
-EVAL_CHILD_SETPRIV_ARGV: tuple[str, ...] = (
-    "/usr/bin/setpriv",
-    f"--reuid={EVAL_CHILD_UID}",
-    f"--regid={EVAL_CHILD_GID}",
-    "--clear-groups",
-    "--inh-caps=-all",
-    "--ambient-caps=-all",
-    "--bounding-set=-all",
-    "--no-new-privs",
-    "--",
-)
+def _setpriv_argv(uid: int, gid: int) -> tuple[str, ...]:
+    return (
+        "/usr/bin/setpriv",
+        f"--reuid={uid}",
+        f"--regid={gid}",
+        "--clear-groups",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--bounding-set=-all",
+        "--no-new-privs",
+        "--",
+    )
+
+
+CHILD_SETPRIV_ARGV = _setpriv_argv(CHILD_UID, CHILD_GID)
+# The account in Dockerfile.gateway for a script that holds a credential. It is not ``nobody``, so
+# a ``nobody`` child cannot read /proc/<pid>/environ of the script.
+SCRIPT_CHILD_UID = 65533
+SCRIPT_CHILD_GID = 65533
+SCRIPT_SETPRIV_ARGV = _setpriv_argv(SCRIPT_CHILD_UID, SCRIPT_CHILD_GID)
+
+# FRE-1732: the reviewed skill scripts that need a credential, and the names that each one reads.
+# The process that runs one takes the interpreter, the script and PATH from here, not from the
+# command. It gets no HOME or TMPDIR, because ``nobody`` can write /tmp, and tools read start-up
+# files from those places. A new entry needs a review of the script's arguments.
+_APP_DIR = "/app"
+_OVERFLOW_ROOT = Path("/tmp/agent_scratch")
+_SPACES = re.compile(r"\s+")
+_OVERFLOW_NAME = re.compile(r"bash_output_([0-9]{1,9})\.txt")
+_SCRIPT_CHILD_PATH = "/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_SCRIPT_CHILD_ENV_NAMES = frozenset({"LANG", "LC_ALL", "LC_CTYPE", "TZ"})
+_SCRIPT_CREDENTIAL_NAMES: Mapping[str, frozenset[str]] = {
+    "skills/graph-inspection/scripts/cypher.py": frozenset(
+        {"AGENT_NEO4J_URI", "AGENT_NEO4J_USER", "AGENT_NEO4J_PASSWORD"}
+    ),
+    "skills/service-health/scripts/probe_services.py": frozenset(
+        {
+            "AGENT_DATABASE_URL",
+            "AGENT_ELASTICSEARCH_URL",
+            "AGENT_NEO4J_URI",
+            "AGENT_EVENT_BUS_REDIS_URL",
+        }
+    ),
+}
 
 # ---------------------------------------------------------------------------
 # ToolDefinition
@@ -122,6 +176,10 @@ bash_tool = ToolDefinition(
         "as success. "
         "Do not use it to read a file that read can open, or to fetch a web page (use "
         "fetch_url). "
+        "On a deployed gateway the command runs as the unprivileged nobody account, with no "
+        "secret in its environment, so $AGENT_ variables are empty and docker fails. Writes "
+        "work in /tmp and, on production, in /app/agent_workspace; other writes fail. "
+        "Do not look for a way around this. "
         "Examples: bash(command=\"grep -rn 'def bash_executor' /app/src/\"), "
         "bash(command=\"find /app/config -name '*.yaml' -type f | wc -l\"), "
         'bash(command="curl -s http://elasticsearch:9200/_cluster/health | jq .status").'
@@ -220,17 +278,54 @@ def _has_top_level_pipe(command: str) -> bool:
     return False
 
 
-def eval_child_env() -> dict[str, str]:
-    """Build the bash child's environment for an eval deployment.
+def child_env() -> dict[str, str]:
+    """Build the bash child's environment for a deployed gateway.
 
     Returns:
-        Only the allowlisted variables from this process's environment, plus
-        ``HOME`` and ``TMPDIR`` set to a directory the unprivileged child can write.
+        Only the allowlisted variables from this process's environment, plus a ``HOME`` that the
+        ``write`` tool cannot reach, and ``TMPDIR`` set to ``/tmp``.
     """
-    env = {name: value for name, value in os.environ.items() if name in EVAL_CHILD_ENV_NAMES}
-    env["HOME"] = _EVAL_CHILD_HOME
-    env["TMPDIR"] = _EVAL_CHILD_HOME
+    env = {name: value for name, value in os.environ.items() if name in CHILD_ENV_NAMES}
+    env["HOME"] = _CHILD_HOME
+    env["TMPDIR"] = _CHILD_TMPDIR
     return env
+
+
+def _credential_script_call(command: str) -> tuple[list[str], dict[str, str]] | None:
+    """Return the argv and environment when ``command`` is one call of a reviewed script.
+
+    The argv comes from the parsed words, so no shell reads the command. A pipe, a list, an
+    assignment, an expansion or a redirection to a file gives ``None``. A plain command can also
+    hold ``2>&1`` or a redirection to ``/dev/null``, and these have no effect here: the tool
+    returns the output of both streams.
+
+    Args:
+        command: The raw command string.
+
+    Returns:
+        The argv and environment for the script's own account, or ``None``.
+    """
+    parsed = parse_bash(command)
+    if parsed.refusal is not None or len(parsed.top_level) != 1:
+        return None
+    subcommand = parsed.top_level[0]
+    words = subcommand.words
+    if subcommand.refusal is not None or words is None or len(words) < 2 or words[0] != "python3":
+        return None
+    if _SPACES.sub(" ", subcommand.text) != _SPACES.sub(" ", command.strip()):
+        return None  # a trailing ``&`` or ``;``, or a comment: not one plain call
+    script = words[1].removeprefix(f"{_APP_DIR}/")
+    names = _SCRIPT_CREDENTIAL_NAMES.get(script)
+    if names is None:
+        return None
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name in names or name in _SCRIPT_CHILD_ENV_NAMES
+    }
+    env["PATH"] = _SCRIPT_CHILD_PATH
+    # -I: no PYTHON* variable, and neither the script's directory nor the user's is on sys.path.
+    return [*SCRIPT_SETPRIV_ARGV, sys.executable, "-I", f"{_APP_DIR}/{script}", *words[2:]], env
 
 
 def _truncate_to_bytes(s: str, max_bytes: int) -> str:
@@ -318,10 +413,10 @@ async def bash_executor(
     timeout_seconds = min(max(int(timeout_seconds), 1), _MAX_TIMEOUT)
 
     # ------------------------------------------------------------------
-    # 3a. Eval credential isolation (FRE-1505) — fail closed.
+    # 3a. Credential isolation (FRE-1505, FRE-1732) — fail closed.
     # ------------------------------------------------------------------
-    eval_isolation = settings.deployment_profile == "eval"
-    if eval_isolation and os.geteuid() != 0:
+    isolated = settings.deployment_profile != "local"
+    if isolated and os.geteuid() != 0:
         log.error(
             "bash_credential_isolation_unavailable",
             trace_id=trace_id,
@@ -329,41 +424,45 @@ async def bash_executor(
         )
         raise BashError(
             "credential_isolation_unavailable",
-            "bash on an eval deployment must drop to an unprivileged account, "
+            "bash on a deployed gateway must drop to an unprivileged account, "
             "which needs a root gateway; no command was run.",
             retryable=False,
             next_action="bash cannot run on this deployment. Use another tool.",
         )
-    child_env = eval_child_env() if eval_isolation else None
+    script_call = (
+        _credential_script_call(command) if settings.deployment_profile == "cloud" else None
+    )
+    spawn_env = child_env() if isolated else None
     # setpriv, not the user/group/extra_groups kwargs: uvloop (the served loop)
     # rejects those kwargs even when they are None (FRE-1518).
-    child_prefix = EVAL_CHILD_SETPRIV_ARGV if eval_isolation else ()
+    child_prefix = CHILD_SETPRIV_ARGV if isolated else ()
+    # -o pipefail: exit code reflects the worst-failing pipe segment. The command string is
+    # the sole -c argument, so it is never interpolated into the invocation.
+    argv: Sequence[str] = (*child_prefix, "/bin/bash", "-o", "pipefail", "-c", command)
+    cwd: str | None = None
+    if script_call is not None:
+        argv, spawn_env = script_call
+        cwd = _APP_DIR
 
     log.info(
         "bash_started",
         trace_id=trace_id,
         command=command,
         timeout_seconds=timeout_seconds,
-        credential_isolation=eval_isolation,
+        credential_isolation=isolated,
+        credential_script=script_call is not None,
     )
 
     # ------------------------------------------------------------------
-    # 4. Execute via /bin/bash (real shell — pipes and composition work).
-    #    -o pipefail: exit code reflects the worst-failing pipe segment.
-    #    The command string is passed as the sole -c argument, so it is
-    #    never interpolated into the invocation — no shell injection surface.
+    # 4. Execute. A shell command has real shell semantics: pipes and composition work.
     # ------------------------------------------------------------------
-    _shell = "/bin/bash"
-    _flags = ("-o", "pipefail", "-c")
     try:
         proc = await asyncio.create_subprocess_exec(
-            *child_prefix,
-            _shell,
-            *_flags,
-            command,
+            *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=child_env,
+            env=spawn_env,
+            cwd=cwd,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -425,12 +524,23 @@ async def bash_executor(
 
     if len(combined.encode("utf-8")) > MAX_OUTPUT_BYTES:
         try:
-            scratch = Path("/tmp/agent_scratch") / trace_id
-            scratch.mkdir(parents=True, exist_ok=True)
-            existing = list(scratch.glob("bash_output_*.txt"))
-            n = len(existing)
-            overflow_file = scratch / f"bash_output_{n}.txt"
-            overflow_file.write_text(combined, encoding="utf-8")
+            scratch = path_for_root_open(_OVERFLOW_ROOT) / trace_id
+            numbers = [
+                int(match.group(1))
+                for existing in scratch.glob("bash_output_*.txt")
+                if (match := _OVERFLOW_NAME.fullmatch(existing.name))
+            ]
+            overflow_file = scratch / f"bash_output_{max(numbers, default=-1) + 1}.txt"
+            # This process is root, and the child can own this directory (FRE-1732), so a link
+            # here must not choose which file root writes.
+            created = missing_parts(overflow_file)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            try:
+                fd = open_file_no_symlinks(overflow_file, flags, 0o644, make_parents=True)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(combined)
+            finally:
+                give_to_child(created, trace_id=trace_id)
             truncated_path = str(overflow_file)
             log.info(
                 "bash_output_overflow",

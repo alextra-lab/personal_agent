@@ -1,14 +1,14 @@
-"""A bash call on an eval gateway cannot read a credential (FRE-1505).
+"""A bash call on a deployed gateway cannot read a credential (FRE-1505, FRE-1732).
 
 Two kinds of test live here.
 
 The subprocess tests boot a real process that stands in for the gateway. It holds seeded
 fake credentials, registers the MVP tools through the production path
-(``register_mvp_tools``), and runs the registered ``bash`` executor. They prove AC-4
-(production unchanged) and the fail-closed refusal when the gateway is not root.
+(``register_mvp_tools``), and runs the registered ``bash`` executor. They prove that the
+``local`` profile is unchanged, and the fail-closed refusal when the gateway is not root.
 
-The eval isolation itself (drop to ``nobody``) needs a root parent. CI and the dev VPS run
-tests unprivileged, so the root outcome (AC-1, AC-3) is proven in the gateway image by
+The isolation itself (drop to ``nobody``) needs a root parent. CI and the dev VPS run
+tests unprivileged, so the root outcome is proven in the gateway image by
 ``scripts/eval/probe_bash_credential_isolation.py``. Here the spawn arguments are checked
 with a mocked subprocess, and that test says so.
 """
@@ -25,9 +25,9 @@ import pytest
 
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.primitives.bash import (
-    EVAL_CHILD_ENV_NAMES,
-    EVAL_CHILD_GID,
-    EVAL_CHILD_UID,
+    CHILD_ENV_NAMES,
+    CHILD_GID,
+    CHILD_UID,
     BashError,
     bash_executor,
 )
@@ -113,13 +113,13 @@ def _output(result: dict[str, object], key: str) -> str:
     return f"{call.get('stdout', '')}{call.get('stderr', '')}"
 
 
-def test_cloud_bash_behaviour_is_unchanged() -> None:
-    """AC-4 and instrument check: production bash still inherits the environment.
+def test_local_bash_behaviour_is_unchanged() -> None:
+    """Instrument check: on ``local``, bash still inherits the environment.
 
-    If this fails, the leak command cannot see credentials at all, and every eval
-    assertion about its output would pass vacuously.
+    If this fails, the leak command cannot see credentials at all, and every
+    assertion about its output on a deployed profile would pass vacuously.
     """
-    result = _run_gateway_standin("cloud")
+    result = _run_gateway_standin("local")
     assert result["bash_registered"] is True
     output = _output(result, "leak")
     assert all(value in output for value in _SEEDED.values())
@@ -129,9 +129,10 @@ def test_cloud_bash_behaviour_is_unchanged() -> None:
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="the refusal path needs a non-root gateway")
-def test_eval_bash_without_root_refuses_and_runs_nothing() -> None:
-    """Fail closed: a non-root eval gateway cannot drop privileges, so bash refuses."""
-    result = _run_gateway_standin("eval")
+@pytest.mark.parametrize("profile", ["cloud", "eval"])
+def test_deployed_bash_without_root_refuses_and_runs_nothing(profile: str) -> None:
+    """Fail closed: a non-root deployed gateway cannot drop privileges, so bash refuses."""
+    result = _run_gateway_standin(profile)
     assert result["bash_registered"] is True
     for key in ("leak", "ok"):
         call = result[key]
@@ -142,10 +143,11 @@ def test_eval_bash_without_root_refuses_and_runs_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_eval_bash_without_root_refuses_in_process() -> None:
+@pytest.mark.parametrize("profile", ["cloud", "eval"])
+async def test_deployed_bash_without_root_refuses_in_process(profile: str) -> None:
     """Fail closed, in process (FRE-1575): coverage does not measure the subprocess above.
 
-    A non-root eval gateway raises ``credential_isolation_unavailable`` and spawns nothing.
+    A non-root deployed gateway raises ``credential_isolation_unavailable`` and spawns nothing.
     """
     with (
         patch("personal_agent.tools.primitives.bash.settings") as ms,
@@ -155,7 +157,7 @@ async def test_eval_bash_without_root_refuses_in_process() -> None:
             new=AsyncMock(return_value=_mock_proc()),
         ) as mock_exec,
     ):
-        ms.deployment_profile = "eval"
+        ms.deployment_profile = profile
         with pytest.raises(BashError) as exc_info:
             await bash_executor("echo ok", ctx=_CTX)
 
@@ -173,8 +175,9 @@ def _mock_proc() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_eval_spawn_drops_to_nobody_with_allowlisted_env() -> None:
-    """Wiring (mocked spawn): on eval as root the child gets nobody and no credential.
+@pytest.mark.parametrize("profile", ["cloud", "eval"])
+async def test_deployed_spawn_drops_to_nobody_with_allowlisted_env(profile: str) -> None:
+    """Wiring (mocked spawn): on a deployed profile as root the child gets nobody and no credential.
 
     The kernel outcome for these arguments is proven in the gateway image by
     scripts/eval/probe_bash_credential_isolation.py.
@@ -188,11 +191,11 @@ async def test_eval_spawn_drops_to_nobody_with_allowlisted_env() -> None:
             new=AsyncMock(return_value=_mock_proc()),
         ) as mock_exec,
     ):
-        ms.deployment_profile = "eval"
+        ms.deployment_profile = profile
         result = await bash_executor("echo ok", ctx=_CTX)
 
     assert result["exit_code"] == 0
-    assert EVAL_CHILD_UID == EVAL_CHILD_GID == 65534
+    assert CHILD_UID == CHILD_GID == 65534
     assert mock_exec.call_args.args == (
         "/usr/bin/setpriv",
         "--reuid=65534",
@@ -213,14 +216,13 @@ async def test_eval_spawn_drops_to_nobody_with_allowlisted_env() -> None:
     # uvloop rejects these kwargs (FRE-1518); the identity change is setpriv's job.
     assert not {"user", "group", "extra_groups", "preexec_fn"} & set(kwargs)
     env = kwargs["env"]
-    assert set(env) <= EVAL_CHILD_ENV_NAMES | {"HOME", "TMPDIR"}
+    assert set(env) <= CHILD_ENV_NAMES | {"HOME", "TMPDIR"}
     assert not [value for value in _SEEDED.values() if value in env.values()]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile", ["cloud", "local"])
-async def test_production_spawn_keeps_identity_and_environment(profile: str) -> None:
-    """AC-4 (mocked spawn): production bash inherits the gateway's user and environment."""
+async def test_local_spawn_keeps_identity_and_environment() -> None:
+    """Mocked spawn: on ``local``, bash inherits the developer's user and environment."""
     with (
         patch("personal_agent.tools.primitives.bash.settings") as ms,
         patch(
@@ -228,7 +230,7 @@ async def test_production_spawn_keeps_identity_and_environment(profile: str) -> 
             new=AsyncMock(return_value=_mock_proc()),
         ) as mock_exec,
     ):
-        ms.deployment_profile = profile
+        ms.deployment_profile = "local"
         await bash_executor("echo ok", ctx=_CTX)
 
     assert mock_exec.call_args.args == ("/bin/bash", "-o", "pipefail", "-c", "echo ok")
@@ -237,24 +239,24 @@ async def test_production_spawn_keeps_identity_and_environment(profile: str) -> 
     assert not {"user", "group", "extra_groups", "preexec_fn"} & set(kwargs)
 
 
-@pytest.mark.parametrize("profile", ["cloud", "local"])
-def test_production_bash_runs_on_served_event_loop(profile: str) -> None:
-    """FRE-1518: production bash runs on uvloop, the loop uvicorn serves the gateway on.
+def test_local_bash_runs_on_served_event_loop() -> None:
+    """FRE-1518: bash runs on uvloop, the loop uvicorn serves the gateway on.
 
     uvloop rejects ``user``/``group``/``extra_groups`` even when they are None, so the
     FRE-1505 spawn broke bash on every profile, not only on eval.
     """
     uvloop = pytest.importorskip("uvloop")
     with patch("personal_agent.tools.primitives.bash.settings") as ms:
-        ms.deployment_profile = profile
+        ms.deployment_profile = "local"
         result = uvloop.run(bash_executor("echo ok", ctx=_CTX))
 
     assert result["exit_code"] == 0
     assert result["stdout"] == "ok\n"
 
 
-def test_eval_spawn_accepted_by_served_event_loop() -> None:
-    """FRE-1518: the eval spawn runs on uvloop, the loop uvicorn serves the gateway on.
+@pytest.mark.parametrize("profile", ["cloud", "eval"])
+def test_deployed_spawn_accepted_by_served_event_loop(profile: str) -> None:
+    """FRE-1518: the deployed spawn runs on uvloop, the loop uvicorn serves the gateway on.
 
     uvloop raises ``ValueError`` for the ``user``/``group``/``extra_groups`` kwargs, and
     that error escaped ``bash_executor``. Here the spawn is real. As a non-root test
@@ -265,12 +267,12 @@ def test_eval_spawn_accepted_by_served_event_loop() -> None:
         patch("personal_agent.tools.primitives.bash.settings") as ms,
         patch("personal_agent.tools.primitives.bash.os.geteuid", return_value=0),
     ):
-        ms.deployment_profile = "eval"
+        ms.deployment_profile = profile
         result = uvloop.run(bash_executor("id -u", ctx=_CTX))
 
     assert isinstance(result, dict)
     if os.geteuid() == 0:
-        assert result["stdout"] == f"{EVAL_CHILD_UID}\n"
+        assert result["stdout"] == f"{CHILD_UID}\n"
     else:
         # setpriv itself ran and refused before exec, so bash never ran as the test user.
         assert result["exit_code"] != 0

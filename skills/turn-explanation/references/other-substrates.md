@@ -1,5 +1,10 @@
 # turn-explanation — Steps 1b to 4: the other substrates, with bash
 
+**On a deployed gateway, a `docker` command through `bash` fails** (FRE-1732). The `bash` child runs
+as an unprivileged account with no access to the Docker socket and no secret in its environment. The
+`docker` and `psql` recipes below work only from a shell on the host. In the gateway, use `search_logs`
+(Step 1) and curl on `tempo:3200` (Step 1c), and tell the user which step needs the host.
+
 ### Step 1b — The same timeline from the gateway log, with the time gaps
 
 Use this when the tool reply holds fewer events than expected, or when you need the gap in

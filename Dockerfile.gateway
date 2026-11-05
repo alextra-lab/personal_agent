@@ -56,6 +56,18 @@ RUN npm install -g --no-audit --no-fund @mermaid-js/mermaid-cli@^11 && \
 
 WORKDIR /app
 
+# FRE-1732: HOME of the bash child, which runs as nobody. mmdc's browser needs a writable config
+# directory. The write tool's path rules do not reach this path, so a start-up file such as
+# ~/.curlrc cannot appear here with no approval card. The parent is root's, so the child cannot
+# replace this directory with a link.
+RUN install -d -o nobody -g nogroup -m 700 /var/lib/seshat-bash-home
+
+# FRE-1732: the account of a reviewed script that holds a credential. It is not nobody, so a bash
+# child cannot read the script's environment. psql needs the account to exist.
+RUN groupadd --system --gid 65533 seshat-scripts && \
+    useradd --system --uid 65533 --gid 65533 --no-create-home --home-dir /nonexistent \
+      --shell /usr/sbin/nologin seshat-scripts
+
 # Docker CLI — needed to launch docker/mcp-gateway via mounted Docker socket (cloud MCP)
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 

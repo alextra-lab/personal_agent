@@ -2667,6 +2667,10 @@ async def _chat_impl(
         await await_previous_session_write(sid, trace_id=trace_id)
     elif sid in _pending_append_tasks:
         await _pending_append_tasks.pop(sid)
+    # FRE-1733: the load above ran before the wait, and a second select does not overwrite a loaded
+    # attribute. Without this, the turn does not see the reply that landed during the wait.
+    if session_id:
+        await db.refresh(session)
 
     # --- Phase: session_hydration ---
     prior_messages, messages_dropped_by_window = _apply_history_window(

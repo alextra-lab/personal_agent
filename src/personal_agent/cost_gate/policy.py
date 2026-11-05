@@ -196,7 +196,8 @@ def validate_role_estimate_override(
         value: The proposed fields.
 
     Returns:
-        The edited fields to store.
+        The fields that differ from the file. A later file change to any other field takes effect
+        (FRE-1733). The result is empty when no field differs.
 
     Raises:
         BudgetConfigError: With the reason, when the value is refused.
@@ -205,8 +206,9 @@ def validate_role_estimate_override(
     if role not in config.roles:
         raise BudgetConfigError(f"the role {role} is not in the budget file")
     dump = _role_with_value(role, config.roles[role], value).model_dump(mode="json")
+    file_dump = config.roles[role].model_dump(mode="json")
     assert isinstance(value, dict)
-    return {field: dump[field] for field in sorted(value)}
+    return {field: dump[field] for field in sorted(value) if dump[field] != file_dump[field]}
 
 
 def apply_budget_overrides(

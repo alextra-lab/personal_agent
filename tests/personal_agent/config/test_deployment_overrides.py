@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
+from personal_agent.config import model_loader
 from personal_agent.config.model_loader import (
     ModelConfigError,
     file_deployment_fields,
@@ -59,7 +61,52 @@ def test_every_deployment_passes_its_own_file_fields() -> None:
         fields = file_deployment_fields(key)
         assert isinstance(fields, dict)
         assert "endpoint" not in fields
-        validate_deployment_override(key, fields)
+        # FRE-1733: an unchanged Save differs from the file in no field.
+        assert validate_deployment_override(key, fields) == {}
+
+
+def test_one_changed_field_of_the_whole_row_stores_one_field(key: str) -> None:
+    """The PWA sends the whole row (FRE-1733 AC-4)."""
+    fields = file_deployment_fields(key)
+    assert isinstance(fields, dict)
+    timeout = fields["default_timeout"]
+    assert isinstance(timeout, int)
+
+    stored = validate_deployment_override(key, {**fields, "default_timeout": timeout + 11})
+
+    assert stored == {"default_timeout": timeout + 11}
+
+
+def test_a_later_file_change_to_another_field_takes_effect(key: str) -> None:
+    """A stored row holds the edited field only, so the file still owns the rest (FRE-1733 AC-4)."""
+    fields = file_deployment_fields(key)
+    assert isinstance(fields, dict)
+    timeout, max_tokens = fields["default_timeout"], fields["max_tokens"]
+    assert isinstance(timeout, int) and isinstance(max_tokens, int)
+    stored = validate_deployment_override(key, {**fields, "default_timeout": timeout + 11})
+    read = model_loader._read_catalog_content
+
+    def _changed_file(path: Path) -> dict[str, object]:
+        content = read(path)
+        models = content["models"]
+        assert isinstance(models, dict)
+        return {**content, "models": {**models, key: {**models[key], "max_tokens": max_tokens + 1}}}
+
+    def _forget_catalogs() -> None:
+        model_loader._load_model_config_at_path.cache_clear()
+        model_loader._load_model_config_with_overrides.cache_clear()
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(model_loader, "_read_catalog_content", _changed_file)
+        _forget_catalogs()
+        try:
+            replace_overrides({f"deployment.{key}": stored})
+            definition = load_model_config().models[key]
+        finally:
+            _forget_catalogs()
+
+    assert definition.default_timeout == timeout + 11
+    assert definition.max_tokens == max_tokens + 1
 
 
 @pytest.mark.parametrize(

@@ -213,3 +213,43 @@ def test_fre1724_validate_a_role_estimate() -> None:
         validate_role_estimate_override(
             config, "role_estimate.main_inference", {"safety_factor": 0.5}
         )
+
+
+def test_fre1733_one_changed_field_of_the_whole_row_stores_one_field() -> None:
+    config = _budget_with_role()
+    row = config.roles["main_inference"].model_dump(mode="json")
+
+    stored = validate_role_estimate_override(
+        config, "role_estimate.main_inference", {**row, "safety_factor": 1.5}
+    )
+
+    assert stored == {"safety_factor": 1.5}
+
+
+def test_fre1733_an_unchanged_row_stores_nothing() -> None:
+    config = _budget_with_role()
+    row = config.roles["main_inference"].model_dump(mode="json")
+
+    assert validate_role_estimate_override(config, "role_estimate.main_inference", row) == {}
+
+
+def test_fre1733_a_later_file_change_to_another_field_takes_effect() -> None:
+    config = _budget_with_role()
+    row = config.roles["main_inference"].model_dump(mode="json")
+    stored = validate_role_estimate_override(
+        config, "role_estimate.main_inference", {**row, "safety_factor": 1.5}
+    )
+    changed_file = config.model_copy(
+        update={
+            "roles": {
+                "main_inference": config.roles["main_inference"].model_copy(
+                    update={"default_output_tokens": 777}
+                )
+            }
+        }
+    )
+
+    applied = apply_budget_overrides(changed_file, {"role_estimate.main_inference": stored})
+
+    assert applied.roles["main_inference"].safety_factor == 1.5
+    assert applied.roles["main_inference"].default_output_tokens == 777

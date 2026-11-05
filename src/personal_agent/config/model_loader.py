@@ -294,7 +294,8 @@ def validate_deployment_override(key: str, value: JsonValue) -> dict[str, JsonVa
         value: The fields to change. A string does not coerce.
 
     Returns:
-        The edited fields to store, in their canonical form.
+        The fields that differ from the file, in their canonical form. A later file change to any
+        other field takes effect (FRE-1733). The result is empty when no field differs.
 
     Raises:
         ModelConfigError: If the catalog refuses the edit. The message states the reason.
@@ -314,7 +315,8 @@ def validate_deployment_override(key: str, value: JsonValue) -> dict[str, JsonVa
         raise ModelConfigError(reasons) from None
     _validate_catalog(content)
     dump = definition.model_dump(mode="json")
-    return {field: dump[field] for field in sorted(value)}
+    file_dump = file_model_config().models[key].model_dump(mode="json")
+    return {field: dump[field] for field in sorted(value) if dump[field] != file_dump[field]}
 
 
 def file_model_config() -> ModelConfig:

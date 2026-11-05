@@ -201,26 +201,29 @@ class SessionRepository:
                     f"assistant message missing required attribution fields: {missing}"
                 )
 
-        session = await self.get(session_id)
-        if not session:
-            return None
-
-        messages = list(session.messages or [])
-        messages.append(message)
-
+        # FRE-1733: one statement, so two appends cannot lose each other, and a session object that
+        # this db session loaded earlier cannot write its old list back. The one-item array keeps
+        # the message one element.
         await self.db.execute(
-            update(SessionModel)
-            .where(SessionModel.session_id == session_id)
-            .values(
-                messages=messages,
-                last_active_at=datetime.now(timezone.utc),
+            text(
+                "UPDATE sessions "
+                "SET messages = COALESCE(messages, '[]'::jsonb) || CAST(:message AS jsonb), "
                 # ADR-0098 D4/D6 (FRE-860) — writing messages reactivates a
                 # previously soft-pruned session; clear the tombstone.
-                purged_at=None,
-            )
+                "last_active_at = :now, purged_at = NULL "
+                "WHERE session_id = :sid"
+            ),
+            {
+                "message": json.dumps([message]),
+                "now": datetime.now(timezone.utc),
+                "sid": session_id,
+            },
         )
         await self.db.commit()
-        return await self.get(session_id)
+        session = await self.get(session_id)
+        if session is not None:
+            await self.db.refresh(session)
+        return session
 
     async def delete(self, session_id: UUID) -> bool:
         """Delete session (internal — no ownership check).

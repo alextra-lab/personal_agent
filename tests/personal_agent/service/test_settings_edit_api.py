@@ -6,6 +6,7 @@ real rows is in ``test_settings_edit_db.py``.
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import litellm
 import pytest
 import structlog
 from fastapi.testclient import TestClient
@@ -23,6 +25,8 @@ from personal_agent.brainstem.consumers.mode_controller import ModeControllerCon
 from personal_agent.config import settings
 from personal_agent.config.governance_loader import file_governance_config, load_governance_config
 from personal_agent.config.model_loader import (
+    file_deployment_fields,
+    file_model_config,
     load_model_config,
     resolve_role_model_key,
     resolve_role_target,
@@ -44,6 +48,7 @@ from personal_agent.config.setting_overrides import (
 )
 from personal_agent.config.settings import AppConfig
 from personal_agent.cost_gate import BudgetConfig, BudgetConfigError, CapEntry, CostGate
+from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.orchestrator.executor import _resolve_max_iterations
 from personal_agent.service import settings_edit
 from personal_agent.service.app import app
@@ -680,6 +685,146 @@ def test_fre1724_a_deployment_edit_reaches_the_catalog(store: _Store) -> None:
 
     assert resp.status_code == 200, resp.text
     assert load_model_config().models[key].default_timeout == before + 3
+
+
+# ---------------------------------------------------------------------------
+# FRE-1733 AC-4: a price edit reaches the litellm cost table, and a row holds the changed fields
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cost_table() -> Iterator[None]:
+    saved = copy.deepcopy(litellm.model_cost)
+    yield
+    litellm.model_cost.clear()
+    litellm.model_cost.update(saved)
+
+
+def _priced_deployment() -> str:
+    return next(
+        key
+        for key, model in file_model_config().models.items()
+        if model.kind.value == "llm" and model.input_cost_per_token and model.provider
+    )
+
+
+def _table_price(key: str) -> float:
+    """Read the cost table with the lookup of ``estimate_reservation_for_call``."""
+    model = file_model_config().models[key]
+    litellm_model = f"{model.provider}/{model.id}"
+    entry = litellm.model_cost.get(litellm_model) or litellm.model_cost.get(model.id)
+    assert entry is not None
+    price: float = entry["input_cost_per_token"]
+    return price
+
+
+def test_fre1733_a_price_edit_reaches_the_cost_table_and_clear_restores(
+    store: _Store, cost_table: None
+) -> None:
+    key = _priced_deployment()
+    file_price = file_model_config().models[key].input_cost_per_token
+    assert file_price is not None
+    register_model_pricing(file_model_config())
+    new_price = file_price * 3
+    assert _table_price(key) == file_price
+
+    resp = _client().put(
+        _URL, json={"parameter": f"deployment.{key}", "value": {"input_cost_per_token": new_price}}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert _table_price(key) == new_price
+
+    _client().delete(_URL, params={"parameter": f"deployment.{key}"})
+
+    assert _table_price(key) == file_price
+
+
+def test_fre1733_a_failed_price_registration_does_not_undo_the_edit(
+    store: _Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = _priced_deployment()
+    file_price = file_model_config().models[key].input_cost_per_token
+    assert file_price is not None
+
+    def _fail(_config: object) -> int:
+        raise RuntimeError("registry refused")
+
+    monkeypatch.setattr(settings_edit, "register_model_pricing", _fail)
+
+    with structlog.testing.capture_logs() as logs:
+        resp = _client().put(
+            _URL,
+            json={
+                "parameter": f"deployment.{key}",
+                "value": {"input_cost_per_token": file_price * 3},
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert load_model_config().models[key].input_cost_per_token == file_price * 3
+    failures = [log for log in logs if log["event"] == "model_pricing_registration_failed"]
+    assert len(failures) == 1
+    assert failures[0]["trace_id"]
+
+
+def test_fre1733_a_whole_row_with_one_changed_field_stores_one_field(store: _Store) -> None:
+    key = _priced_deployment()
+    fields = file_deployment_fields(key)
+    assert isinstance(fields, dict)
+    timeout = fields["default_timeout"]
+    assert isinstance(timeout, int)
+    parameter = f"deployment.{key}"
+
+    resp = _client().put(
+        _URL, json={"parameter": parameter, "value": {**fields, "default_timeout": timeout + 3}}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["value"] == {"default_timeout": timeout + 3}
+    assert store.overrides[parameter] == {"default_timeout": timeout + 3}
+
+
+def test_fre1733_a_row_that_returns_to_the_file_is_removed(store: _Store) -> None:
+    key = _priced_deployment()
+    fields = file_deployment_fields(key)
+    assert isinstance(fields, dict)
+    timeout = fields["default_timeout"]
+    assert isinstance(timeout, int)
+    parameter = f"deployment.{key}"
+    _client().put(_URL, json={"parameter": parameter, "value": {"default_timeout": timeout + 3}})
+    assert parameter in store.overrides
+
+    resp = _client().put(_URL, json={"parameter": parameter, "value": fields})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["value"] == {}
+    assert parameter not in store.overrides
+    assert parameter not in current_overrides()
+    assert load_model_config().models[key].default_timeout == timeout
+    assert [row["action"] for row in store.audit] == ["set", "clear"]
+
+
+def test_fre1733_an_unchanged_row_with_no_override_writes_nothing(store: _Store) -> None:
+    key = _priced_deployment()
+
+    resp = _client().put(
+        _URL, json={"parameter": f"deployment.{key}", "value": file_deployment_fields(key)}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert store.overrides == {}
+    assert store.audit == []
+
+
+def test_fre1733_a_setting_that_stores_an_empty_object_keeps_its_row(store: _Store) -> None:
+    """The row is removed for the three field families only. A setting can hold ``{}``."""
+    parameter = "setting.sub_agent_rounds_by_thoroughness"
+
+    resp = _client().put(_URL, json={"parameter": parameter, "value": {}})
+
+    assert resp.status_code == 200, resp.text
+    assert store.overrides[parameter] == {}
 
 
 def test_fre1724_uncapped_roles_and_grounding_state_cannot_be_edited(store: _Store) -> None:

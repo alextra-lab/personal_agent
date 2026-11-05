@@ -35,6 +35,7 @@ from personal_agent.llm_client import adapters as adapters_module
 from personal_agent.llm_client import litellm_client as litellm_client_module
 from personal_agent.llm_client.inflight import (
     InflightCall,
+    InflightCallRegistry,
     get_inflight_registry,
     reset_inflight_registry,
 )
@@ -1217,6 +1218,9 @@ def _progress_report(processed: int, *, shape: str) -> dict[str, Any]:
     ``role_delta`` carries a role-only delta, and litellm keeps the
     ``prompt_progress`` key on it. ``no_choices`` has an empty ``choices`` list,
     and litellm drops the key from it. The raw SSE carries the key in both.
+
+    litellm also drops every role-only delta after the first chunk of a stream (FRE-1738). A
+    stream of ``role_delta`` reports gives the stream loop one report, not all of them.
     """
     report = (
         _chunk(delta={"role": "assistant", "content": None}) if shape == "role_delta" else _chunk()
@@ -1795,20 +1799,49 @@ class TestInflightRegistry:
         assert stamps == sorted(stamps)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("shape", _REPORT_SHAPES)
-    async def test_prefill_reports_advance_the_last_byte_stamp(self, shape: str) -> None:
-        """AC-2 — a long prefill that reports progress is alive, not stalled."""
-        reports = [_progress_report(step * 1024, shape=shape) for step in range(4)]
-        answer = [
-            _chunk(delta={"role": "assistant", "content": "the answer"}),
-            _chunk(delta={}, finish_reason="stop"),
-            _chunk(usage=USAGE_BLOCK),
-        ]
+    @pytest.mark.parametrize(
+        ("shape", "reports_that_reach_the_loop"),
+        [
+            # litellm keeps a role-only delta only while it has sent no chunk (FRE-1738), so
+            # the first report reaches the loop and the three after it do not.
+            ("role_delta", 1),
+            ("no_choices", 4),
+        ],
+    )
+    async def test_prefill_reports_advance_the_last_byte_stamp(
+        self, shape: str, reports_that_reach_the_loop: int
+    ) -> None:
+        """AC-2 — a long prefill that reports progress is alive, not stalled.
 
-        watch = await _watched_dispatch(stream=_paced_sse(*reports, *answer, delay=0.1))
+        The test records the ``touch`` calls. It reads no sampler, so it depends on no timing.
+        The stream counts the touches made when it is about to send the answer, so only the
+        reports are counted.
+        """
+        touches: list[bool] = []
+        touches_before_the_answer: list[int] = []
+        real_touch = InflightCallRegistry.touch
 
-        assert watch.error is None
-        assert len(_distinct_last_byte_stamps(watch)) >= 4
+        def record_touch(registry: InflightCallRegistry, key: tuple[str, int]) -> None:
+            touches.append(registry.get(key) is not None)
+            real_touch(registry, key)
+
+        async def reports_then_answer() -> AsyncIterator[bytes]:
+            for step in range(4):
+                report = _progress_report(step * 1024, shape=shape)
+                yield b"data: " + json.dumps(report).encode() + b"\n\n"
+            touches_before_the_answer.append(len(touches))
+            yield _sse(
+                _chunk(delta={"role": "assistant", "content": "the answer"}),
+                _chunk(delta={}, finish_reason="stop"),
+                _chunk(usage=USAGE_BLOCK),
+            )
+
+        with patch.object(InflightCallRegistry, "touch", record_touch):
+            captured = await _dispatch(stream=reports_then_answer())
+
+        assert captured.response is not None
+        assert touches_before_the_answer == [reports_that_reach_the_loop]
+        assert all(touches), "a touch reached a call that was no longer registered"
 
     @pytest.mark.asyncio
     async def test_reasoning_text_never_reaches_generation_progress(self) -> None:
@@ -1852,7 +1885,11 @@ class TestInflightRegistry:
     @pytest.mark.parametrize(
         ("exit_name", "dispatch_kwargs", "expected"),
         [
-            ("success", lambda: {"stream": _paced_sse(*_reasoning_then_answer(), delay=0.05)}, None),
+            (
+                "success",
+                lambda: {"stream": _paced_sse(*_reasoning_then_answer(), delay=0.05)},
+                None,
+            ),
             (
                 "gap_timeout",
                 lambda: {
@@ -1916,7 +1953,9 @@ class TestInflightRegistry:
         else:
             assert isinstance(watch.error, expected), repr(watch.error)
         if exit_name != "connection_failure_before_the_stream_opens":
-            assert watch.live(), f"{exit_name}: the call was never seen live, so the test proves nothing"
+            assert watch.live(), (
+                f"{exit_name}: the call was never seen live, so the test proves nothing"
+            )
         assert get_inflight_registry().snapshot() == ()
 
     @pytest.mark.asyncio

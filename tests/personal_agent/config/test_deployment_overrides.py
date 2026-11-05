@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -63,6 +64,22 @@ def test_every_deployment_passes_its_own_file_fields() -> None:
         assert "endpoint" not in fields
         # FRE-1733: an unchanged Save differs from the file in no field.
         assert validate_deployment_override(key, fields) == {}
+
+
+def test_the_order_of_a_set_field_is_not_a_change() -> None:
+    """A frozenset dumps in an order that the hash seed and the insertion order decide (FRE-1733)."""
+    config = load_model_config()
+    key, definition = next(
+        (name, model)
+        for name, model in config.models.items()
+        if model.reasoning_effort_domain and len(model.reasoning_effort_domain) > 2
+    )
+    domain = definition.reasoning_effort_domain
+    assert domain is not None
+
+    for order in itertools.permutations(sorted(domain)):
+        stored = validate_deployment_override(key, {"reasoning_effort_domain": list(order)})
+        assert stored == {}, order
 
 
 def test_one_changed_field_of_the_whole_row_stores_one_field(key: str) -> None:

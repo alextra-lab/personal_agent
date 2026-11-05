@@ -1664,6 +1664,15 @@ class LiteLLMClient:
                                 trace_id=trace_id,
                                 session_id=trace_ctx.session_id,
                             )
+                        except Exception as commit_exc:  # noqa: BLE001
+                            log.error(
+                                "litellm_commit_after_cancel_failed",
+                                trace_id=trace_id,
+                                session_id=trace_ctx.session_id,
+                                reservation_id=str(reservation_id),
+                                error=str(commit_exc),
+                            )
+                        else:
                             log.warning(
                                 "litellm_cancelled_call_committed_estimate",
                                 model=self._litellm_model,
@@ -1673,14 +1682,6 @@ class LiteLLMClient:
                                 note="can overcount a call that the provider did not bill",
                                 trace_id=trace_id,
                                 session_id=trace_ctx.session_id,
-                            )
-                        except Exception as commit_exc:  # noqa: BLE001
-                            log.error(
-                                "litellm_commit_after_cancel_failed",
-                                trace_id=trace_id,
-                                session_id=trace_ctx.session_id,
-                                reservation_id=str(reservation_id),
-                                error=str(commit_exc),
                             )
                         raise
                     except Exception as e:

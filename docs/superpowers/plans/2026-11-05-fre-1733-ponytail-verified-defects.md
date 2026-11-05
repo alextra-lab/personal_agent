@@ -90,8 +90,10 @@ Tests in `tests/personal_agent/cost_gate/test_reaper.py`:
 Files: `model_loader.validate_deployment_override`, `policy.validate_role_estimate_override`,
 `governance_loader.validate_governance_override` (tool branch).
 
-Each validator keeps a sent field only when its canonical value differs from the file value. The
-comparison reads the canonical dump on both sides.
+Each validator keeps a sent field only when its validated value differs from the file value. The
+comparison reads the validated values, not the JSON dump. The list order of a dumped `frozenset`
+(`reasoning_effort_domain`) depends on the hash seed, so a dump comparison reports a false change
+(self-review probe: 7 of 12 seeds).
 
 `set_override`: for these three families, an empty result means that the row equals the file. So it
 calls `clear_override` before it takes `_edit_lock` (codex plan review: the lock is not reentrant),

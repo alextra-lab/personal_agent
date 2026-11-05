@@ -315,8 +315,13 @@ def validate_deployment_override(key: str, value: JsonValue) -> dict[str, JsonVa
         raise ModelConfigError(reasons) from None
     _validate_catalog(content)
     dump = definition.model_dump(mode="json")
-    file_dump = file_model_config().models[key].model_dump(mode="json")
-    return {field: dump[field] for field in sorted(value) if dump[field] != file_dump[field]}
+    file_definition = file_model_config().models[key]
+    # Compare the values, not the dump: the list order of a dumped frozenset is not stable.
+    return {
+        field: dump[field]
+        for field in sorted(value)
+        if getattr(definition, field) != getattr(file_definition, field)
+    }
 
 
 def file_model_config() -> ModelConfig:

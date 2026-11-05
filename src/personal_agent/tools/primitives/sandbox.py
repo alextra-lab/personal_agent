@@ -9,7 +9,9 @@ Security model
 * Non-root user (uid/gid 1000) inside the container.
 * Read-only root filesystem (``--read-only``).
 * ``/tmp`` mounted as a tmpfs (64 MB) for in-container temporary storage.
-* ``/sandbox`` bind-mounted from a per-trace host scratch directory (rw).
+* ``/sandbox`` mounted (rw) from a per-trace scratch directory. A gateway that talks to the host
+  daemon names a Docker volume (``sandbox_scratch_volume``), so the daemon and the gateway use
+  the same directory. Otherwise the directory is bind-mounted by host path (FRE-1736).
 * Network disabled by default (``--network=none``); opt-in via ``network=True``.
 * All Linux capabilities dropped (``--cap-drop=ALL``).
 * Privilege escalation blocked (``--security-opt=no-new-privileges``).
@@ -44,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import stat
 import time
@@ -54,11 +57,7 @@ from pathlib import Path
 
 from personal_agent.config import settings
 from personal_agent.telemetry import get_logger
-from personal_agent.tools.primitives._child_workspace import (
-    give_to_child,
-    missing_parts,
-    path_for_root_open,
-)
+from personal_agent.tools.primitives._child_workspace import WORKSPACE_ROOT, path_for_root_open
 from personal_agent.tools.primitives._governance import (
     make_directory_no_symlinks,
     open_no_symlinks,
@@ -71,6 +70,14 @@ log = get_logger(__name__)
 # in-band cleanup path's own duration (local-proc kill/wait + docker rm -f)
 # so the reaper does not race a cleanup that is already in flight.
 _REAPER_GRACE_SECONDS = 45.0
+
+# The account that the sandbox runs as (the ``-u`` flag), and that owns its scratch directory.
+_SANDBOX_UID = 1000
+_SANDBOX_GID = 1000
+
+# Docker's rule for a volume name, and the rule for one part of a path inside the volume.
+_VOLUME_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_SUBPATH_PART = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +96,8 @@ class SandboxResult:
         oom: True when the container was killed by the OOM killer (exit 137).
         timed_out: True when the outer asyncio timeout fired before the
             container finished.
-        scratch_files: List of absolute host paths of files present in the
-            scratch directory after the run (files written by the script).
+        scratch_files: List of absolute paths, as the calling process sees them, of the
+            files in the scratch directory after the run (files written by the script).
     """
 
     exit_code: int
@@ -144,9 +151,12 @@ async def run_in_sandbox(
         cpus: CPU quota as a fraction (default 1.0).
         network: When True attach to the configured ``sandbox_network`` Docker
             network (from settings); when False pass ``--network=none`` (no outbound access).
-        scratch_host_path: Absolute path on the Docker host that will be
-            bind-mounted as ``/sandbox`` inside the container (rw).  Created
-            automatically if it does not yet exist.
+        scratch_host_path: Absolute path, as this process sees it, of the directory that
+            becomes ``/sandbox`` inside the container (rw). Created automatically if it does
+            not yet exist. With ``settings.sandbox_scratch_volume`` set, the directory must be
+            inside ``/app/agent_workspace``, where the gateway mounts that volume, and the
+            daemon mounts the same directory by volume and subpath. With no volume set, the
+            daemon mounts it by host path, so the host and this process must share the path.
         trace_id: Originating request trace_id, threaded onto every sandbox
             lifecycle log for §I3 identity threading. Defaults to ``None`` for
             callers without a request context (e.g. test fixtures).
@@ -167,16 +177,34 @@ async def run_in_sandbox(
         log.warning("sandbox_unavailable", reason="docker binary not found", trace_id=trace_id)
         return _DOCKER_UNAVAILABLE
 
-    # Ensure scratch directory exists on the host before Docker tries to mount it.
+    # Name the mount before any side effect: a bad setting must not leave a directory behind.
     try:
-        # This process is root, and the child owns the parent directory (FRE-1732).
+        mount_args = _scratch_mount_args(scratch_host_path, settings.sandbox_scratch_volume)
+    except ValueError as exc:
+        log.error(
+            "sandbox_scratch_mount_invalid",
+            path=str(scratch_host_path),
+            error=str(exc),
+            trace_id=trace_id,
+        )
+        return SandboxResult(
+            exit_code=1,
+            stdout="",
+            stderr=f"Cannot mount the sandbox scratch dir: {exc}",
+            oom=False,
+            timed_out=False,
+            scratch_files=[],
+        )
+
+    # Ensure scratch directory exists before Docker tries to mount it.
+    try:
+        # The directory and its parents stay with this process (root on a deployed gateway), and
+        # only the trace directory goes to the sandbox user (FRE-1736). The ``bash`` child owns
+        # ``/app/agent_workspace`` itself, so it can still rename ``sandbox``. This is not a
+        # barrier. The daemon keeps the mount inside the volume, whatever the child does.
         scratch_for_root = path_for_root_open(scratch_host_path)
-        created = missing_parts(scratch_for_root)
-        try:
-            make_directory_no_symlinks(scratch_for_root)
-        finally:
-            # Also after a failure: the next call finds these parts in place, and does not give them.
-            give_to_child(created, trace_id=trace_id)
+        make_directory_no_symlinks(scratch_for_root)
+        _give_to_sandbox_user(scratch_for_root)
     except OSError as exc:
         log.error(
             "sandbox_scratch_mkdir_failed",
@@ -223,10 +251,9 @@ async def run_in_sandbox(
         "--read-only",
         "--tmpfs",
         "/tmp:rw,size=64m",
-        "-v",
-        f"{scratch_host_path}:/sandbox:rw",
+        *mount_args,
         "-u",
-        "1000:1000",
+        f"{_SANDBOX_UID}:{_SANDBOX_GID}",
         "--security-opt",
         "no-new-privileges",
         "--cap-drop",
@@ -355,6 +382,64 @@ async def run_in_sandbox(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _scratch_mount_args(scratch: Path, volume: str) -> list[str]:
+    """Return the ``docker run`` arguments that mount *scratch* as ``/sandbox``.
+
+    The gateway reaches the host daemon through a socket. The daemon resolves a ``-v`` source on
+    the host, where the gateway's path names another directory (FRE-1736). With a volume set,
+    the arguments name the volume and the subpath of *scratch* inside it, and the daemon reads
+    the same directory as the gateway.
+
+    Args:
+        scratch: The scratch directory, as this process sees it.
+        volume: The Docker volume that the gateway mounts at ``/app/agent_workspace``. Empty
+            for a mount by host path.
+
+    Returns:
+        The mount arguments.
+
+    Raises:
+        ValueError: The volume name or the subpath is not safe in a ``--mount`` value, or
+            *scratch* is outside the workspace.
+    """
+    if not volume:
+        return ["-v", f"{scratch}:/sandbox:rw"]
+    if not _VOLUME_NAME.fullmatch(volume):
+        raise ValueError(f"sandbox_scratch_volume {volume!r} is not a Docker volume name")
+    try:
+        parts = scratch.relative_to(WORKSPACE_ROOT).parts
+    except ValueError:
+        raise ValueError(
+            f"sandbox_scratch_volume is set, but {scratch} is outside {WORKSPACE_ROOT}"
+        ) from None
+    if not parts or any(not _SUBPATH_PART.fullmatch(part) or part in {".", ".."} for part in parts):
+        raise ValueError(f"{scratch} is not a safe subpath of the volume {volume}")
+    subpath = "/".join(parts)
+    return ["--mount", f"type=volume,src={volume},dst=/sandbox,volume-subpath={subpath}"]
+
+
+def _give_to_sandbox_user(path: Path) -> None:
+    """Give one directory to the sandbox's account, when this process is root.
+
+    The sandbox runs as uid 1000 and cannot write a directory that root or ``nobody`` owns. The
+    directory opens with no symbolic link, and the change goes through that descriptor. It runs
+    on every call, so a directory that exists already is given too.
+
+    Args:
+        path: The scratch directory, in the form that the no-link open needs.
+
+    Raises:
+        OSError: The directory cannot open or change. The sandbox could not write it.
+    """
+    if os.geteuid() != 0:
+        return
+    fd = open_no_symlinks(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK)
+    try:
+        os.fchown(fd, _SANDBOX_UID, _SANDBOX_GID)
+    finally:
+        os.close(fd)
 
 
 def _list_scratch_files(path: Path) -> list[str]:

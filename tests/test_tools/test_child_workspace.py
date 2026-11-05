@@ -852,24 +852,6 @@ async def test_the_overflow_write_gives_what_it_created(overflow_root: Path) -> 
     ]
 
 
-@pytest.mark.asyncio
-async def test_the_sandbox_scratch_directory_goes_to_the_child(tmp_path: Path) -> None:
-    """The child can write in the directory that ``run_in_sandbox`` creates."""
-    from personal_agent.tools.primitives import sandbox
-
-    scratch = tmp_path / "sandbox" / "trace"
-
-    with (
-        patch.object(sandbox, "give_to_child") as gave,
-        patch.object(sandbox.asyncio, "create_subprocess_exec", side_effect=FileNotFoundError),
-    ):
-        await sandbox.run_in_sandbox(
-            image="x", script="1", timeout_seconds=1, network=False, scratch_host_path=scratch
-        )
-
-    assert gave.call_args.args[0] == [tmp_path / "sandbox", scratch]
-
-
 def test_the_sandbox_lists_no_files_behind_a_link(tmp_path: Path) -> None:
     """A planted scratch link shows no file name from another directory."""
     from personal_agent.tools.primitives import sandbox
@@ -925,19 +907,68 @@ async def test_read_reports_the_size_of_the_file_that_it_opened(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_a_failed_scratch_directory_still_gives_what_it_created(tmp_path: Path) -> None:
-    """The next call finds the parents in place, so it cannot give them."""
+async def test_a_failed_scratch_directory_gives_nothing_to_the_child(tmp_path: Path) -> None:
+    """FRE-1736: the sandbox scratch parts stay with root, and the child does not own them."""
     from personal_agent.tools.primitives import sandbox
 
     scratch = tmp_path / "sandbox" / "trace"
 
     with (
-        patch.object(sandbox, "give_to_child") as gave,
-        patch.object(sandbox, "make_directory_no_symlinks", side_effect=OSError(28, "no space")),
+        patch("shutil.which", return_value="/usr/bin/docker"),
+        patch.object(sandbox.os, "geteuid", return_value=0),
+        patch.object(sandbox.os, "fchown") as fchown,
+        patch.object(
+            sandbox, "make_directory_no_symlinks", side_effect=OSError(28, "no space")
+        ) as make_directory,
     ):
         result = await sandbox.run_in_sandbox(
             image="x", script="1", timeout_seconds=1, network=False, scratch_host_path=scratch
         )
 
+    make_directory.assert_called_once()  # the run reached the directory step
     assert result.exit_code == 1
-    assert gave.call_args.args[0] == [tmp_path / "sandbox", scratch]
+    assert "Failed to create sandbox scratch dir" in result.stderr
+    fchown.assert_not_called()
+
+
+def test_prepare_workspace_keeps_the_sandbox_directory_for_root(tmp_path: Path) -> None:
+    """FRE-1736: the child must not own the parent of the trace directories.
+
+    Startup gives the sandbox directory to root, and does not walk into it.
+    """
+    root = tmp_path / "root"
+    (root / "project").mkdir(parents=True)
+    (root / "sandbox" / "trace").mkdir(parents=True)
+    (root / "sandbox" / "trace" / "out.txt").write_text("x")
+    calls: list[tuple[Path, int, int]] = []
+
+    def spy(path: Path, uid: int, gid: int, *, follow_symlinks: bool) -> None:
+        calls.append((Path(path), uid, gid))
+
+    with (
+        patch.object(workspace, "_child_owns_workspace", return_value=True),
+        patch.object(workspace.os, "chown", side_effect=spy),
+    ):
+        workspace.prepare_workspace(root)
+
+    given = {path: (uid, gid) for path, uid, gid in calls}
+    assert given[root / "project"] == (workspace.CHILD_UID, workspace.CHILD_GID)
+    # A test run as root finds the directory at (0, 0) already, and no call is needed.
+    assert given.get(root / "sandbox", (0, 0)) == (0, 0)
+    assert root / "sandbox" / "trace" not in given
+    assert root / "sandbox" / "trace" / "out.txt" not in given
+
+
+def test_prepare_workspace_creates_a_missing_sandbox_directory_for_root(tmp_path: Path) -> None:
+    """FRE-1736: on a fresh volume, a child's first write would create ``sandbox`` as the child's."""
+    root = tmp_path / "root"
+    root.mkdir()
+
+    with (
+        patch.object(workspace, "_child_owns_workspace", return_value=True),
+        patch.object(workspace.os, "chown"),
+    ):
+        workspace.prepare_workspace(root)
+
+    assert (root / "sandbox").is_dir()
+    assert (root / "sandbox").stat().st_uid == os.geteuid()  # created by this process, not given

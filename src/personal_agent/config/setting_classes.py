@@ -195,6 +195,7 @@ NEXT_TURN_SETTINGS: frozenset[str] = frozenset(
         "sandbox_image",
         "sandbox_network",
         "sandbox_scratch_root",
+        "sandbox_scratch_volume",
         "searxng_base_url",
         "searxng_default_categories",
         "searxng_max_results",

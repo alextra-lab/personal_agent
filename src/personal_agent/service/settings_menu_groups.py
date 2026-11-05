@@ -235,6 +235,7 @@ _BY_GROUP: Mapping[str, tuple[str, ...]] = {
         "sandbox_image",
         "sandbox_network",
         "sandbox_scratch_root",
+        "sandbox_scratch_volume",
         "searxng_base_url",
         "service_port",
         "service_url",

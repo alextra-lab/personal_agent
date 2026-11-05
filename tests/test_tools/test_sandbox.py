@@ -8,11 +8,13 @@ FRE-261 Step 5. FRE-1462 (execution bound + cleanup + reaper).
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.tools.primitives import sandbox
 from personal_agent.tools.primitives.sandbox import (
     reap_orphaned_sandbox_containers,
     run_in_sandbox,
@@ -491,6 +493,7 @@ async def test_sandbox_network_name_from_config(tmp_path: Path) -> None:
         patch("personal_agent.tools.primitives.sandbox.settings") as mock_settings,
     ):
         mock_settings.sandbox_network = "custom-network-name"
+        mock_settings.sandbox_scratch_volume = ""
         await run_in_sandbox(
             image="seshat-sandbox-python:0.1",
             script="print('hi')",
@@ -586,3 +589,197 @@ async def test_sandbox_network_failure_emits_named_event(tmp_path: Path) -> None
     assert kwargs["network"] == "seshat_cloud-sim"  # from config
     assert result.exit_code == 1
     assert result.stderr == network_error_stderr.decode("utf-8", errors="replace")
+
+
+# ---------------------------------------------------------------------------
+# FRE-1736 — /sandbox is writable, and scratch_files returns the files
+# ---------------------------------------------------------------------------
+
+_VOLUME = "seshat_seshat_workspace_cloud"
+
+
+async def _docker_run_args(
+    tmp_path: Path, scratch: Path | None = None, *, volume: str = _VOLUME
+) -> tuple[list[str] | None, Path, object]:
+    """Run ``run_in_sandbox`` on mocks, as the deployed gateway is set up.
+
+    The gateway sees the workspace volume at ``tmp_path / "ws"``. Returns the ``docker run``
+    arguments (``None`` when no docker call was made), the workspace root, and the result.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir(exist_ok=True)
+    scratch = scratch or workspace / "sandbox" / "trace-a"
+    run_proc, rm_proc = _run_and_rm_mocks(returncode=0, stdout=b"ok\n")
+    captured: list[list[str]] = []
+
+    async def _capture(*args: str, **kwargs: object) -> MagicMock:
+        captured.append(list(args))
+        return run_proc if args[1] == "run" else rm_proc
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/docker"),
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=_capture)),
+        patch.object(sandbox, "settings") as mock_settings,
+        patch.object(sandbox, "WORKSPACE_ROOT", workspace, create=True),
+    ):
+        mock_settings.sandbox_network = "net"
+        mock_settings.sandbox_scratch_volume = volume
+        result = await run_in_sandbox(
+            image="seshat-sandbox-python:0.1",
+            script="print(1)",
+            timeout_seconds=10,
+            scratch_host_path=scratch,
+        )
+    runs = [args for args in captured if args[1] == "run"]
+    return (runs[0] if runs else None), workspace, result
+
+
+def _where_the_daemon_takes_sandbox_from(run_args: list[str]) -> tuple[str, ...]:
+    """Model the Docker daemon: say where it takes ``/sandbox`` from.
+
+    A ``-v SRC:/sandbox`` source is a path on the host. A ``--mount type=volume`` source is a
+    directory inside a named volume.
+    """
+    for index, arg in enumerate(run_args):
+        if arg == "-v" and run_args[index + 1].endswith(":/sandbox:rw"):
+            return ("host", run_args[index + 1].removesuffix(":/sandbox:rw"))
+        if arg == "--mount":
+            fields = dict(part.split("=", 1) for part in run_args[index + 1].split(","))
+            assert fields["dst"] == "/sandbox"
+            return ("volume", fields["src"], fields["volume-subpath"])
+    raise AssertionError("no mount for /sandbox")
+
+
+@pytest.mark.asyncio
+async def test_the_mount_source_is_the_directory_the_listing_reads(tmp_path: Path) -> None:
+    """AC-1: the daemon takes /sandbox from the directory that scratch_files lists.
+
+    The daemon resolves a host path on the host, not in the gateway. In the deployed
+    configuration the gateway lists a directory of the workspace volume, so the mount must name
+    that volume and the path inside it.
+    """
+    run_args, workspace, _ = await _docker_run_args(tmp_path)
+
+    assert run_args is not None
+    kind, *source = _where_the_daemon_takes_sandbox_from(run_args)
+    assert kind == "volume", f"the daemon would use a host path: {source}"
+    volume, subpath = source
+    assert volume == _VOLUME
+    assert workspace / subpath == workspace / "sandbox" / "trace-a"
+
+
+@pytest.mark.asyncio
+async def test_two_traces_get_two_subpaths(tmp_path: Path) -> None:
+    """AC-3: each trace mounts its own directory, so a trace sees no file of another."""
+    workspace = tmp_path / "ws"
+    args_a, _, _ = await _docker_run_args(tmp_path, workspace / "sandbox" / "trace-a")
+    args_b, _, _ = await _docker_run_args(tmp_path, workspace / "sandbox" / "trace-b")
+
+    assert args_a is not None and args_b is not None
+    assert _where_the_daemon_takes_sandbox_from(args_a)[2] == "sandbox/trace-a"
+    assert _where_the_daemon_takes_sandbox_from(args_b)[2] == "sandbox/trace-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("volume", [_VOLUME, ""])
+async def test_the_sandbox_flags_do_not_change(tmp_path: Path, volume: str) -> None:
+    """AC-4: both forms keep the hardening flags of the sandbox."""
+    run_args, _, _ = await _docker_run_args(tmp_path, volume=volume)
+
+    assert run_args is not None
+    assert "--read-only" in run_args
+    assert "--network=none" in run_args
+    assert run_args[run_args.index("-u") + 1] == "1000:1000"
+    assert run_args[run_args.index("--cap-drop") + 1] == "ALL"
+    assert run_args[run_args.index("--security-opt") + 1] == "no-new-privileges"
+    assert run_args[run_args.index("--tmpfs") + 1] == "/tmp:rw,size=64m"
+    assert "--privileged" not in run_args
+    assert run_args[-2:] == ["seshat-sandbox-python:0.1", "print(1)"]
+
+
+@pytest.mark.asyncio
+async def test_with_no_volume_the_scratch_directory_is_a_bind_mount(tmp_path: Path) -> None:
+    """Local runs keep the host path, where the daemon sees the same path as the process."""
+    run_args, workspace, _ = await _docker_run_args(tmp_path, volume="")
+
+    assert run_args is not None
+    assert _where_the_daemon_takes_sandbox_from(run_args) == (
+        "host",
+        str(workspace / "sandbox" / "trace-a"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("volume", ["a,b", "x=y", "-lead", "../v", "has space"])
+async def test_an_unsafe_volume_name_is_refused(tmp_path: Path, volume: str) -> None:
+    """A volume name cannot add a mount option, and no docker call is made."""
+    run_args, _, result = await _docker_run_args(tmp_path, volume=volume)
+
+    assert run_args is None
+    assert result.exit_code == 1
+    assert "sandbox_scratch_volume" in result.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parts",
+    [("sandbox", "a,b"), ("sandbox", ".."), ("sandbox", "..", "x"), ("sandbox", "a=b")],
+)
+async def test_an_unsafe_subpath_is_refused(tmp_path: Path, parts: tuple[str, ...]) -> None:
+    """A trace directory name cannot add a mount option or leave the volume."""
+    scratch = tmp_path / "ws"
+    for part in parts:
+        scratch = scratch / part
+    run_args, _, result = await _docker_run_args(tmp_path, scratch)
+
+    assert run_args is None
+    assert result.exit_code == 1
+
+
+@pytest.mark.asyncio
+async def test_a_scratch_root_outside_the_volume_is_refused(tmp_path: Path) -> None:
+    """With a volume set, the scratch directory must be inside the workspace the volume backs."""
+    run_args, _, result = await _docker_run_args(tmp_path, tmp_path / "elsewhere" / "trace")
+
+    assert run_args is None
+    assert result.exit_code == 1
+    assert "outside" in result.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exists_already", [False, True])
+async def test_the_trace_directory_goes_to_the_sandbox_user(
+    tmp_path: Path, exists_already: bool
+) -> None:
+    """The gateway (root) gives the trace directory to uid 1000, and nothing above it.
+
+    A directory that exists already (a repeat call in one trace) is given too. The parent
+    ``sandbox`` directory stays as it is, so the ``bash`` child does not own it.
+    """
+    scratch = tmp_path / "ws" / "sandbox" / "trace-a"
+    if exists_already:
+        scratch.mkdir(parents=True)
+    given: list[tuple[int, int, int]] = []
+
+    def spy(fd: int, uid: int, gid: int) -> None:
+        given.append((os.fstat(fd).st_ino, uid, gid))
+
+    with (
+        patch.object(sandbox.os, "geteuid", return_value=0),
+        patch.object(sandbox.os, "fchown", side_effect=spy),
+    ):
+        await _docker_run_args(tmp_path, scratch)
+
+    assert given == [(scratch.stat().st_ino, 1000, 1000)]
+
+
+@pytest.mark.asyncio
+async def test_a_gateway_without_root_gives_nothing(tmp_path: Path) -> None:
+    """A process that is not root cannot give a directory, and does not try."""
+    with (
+        patch.object(sandbox.os, "geteuid", return_value=1000),
+        patch.object(sandbox.os, "fchown") as fchown,
+    ):
+        await _docker_run_args(tmp_path)
+
+    fchown.assert_not_called()

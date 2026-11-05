@@ -2937,6 +2937,16 @@ class AppConfig(BaseSettings):
             "Env var: AGENT_SANDBOX_SCRATCH_ROOT"
         ),
     )
+    sandbox_scratch_volume: str = Field(
+        default="",
+        description=(
+            "Docker volume that the gateway mounts at /app/agent_workspace (FRE-1736). "
+            "When set, run_python mounts a per-trace subpath of this volume as /sandbox, because the "
+            "host Docker daemon cannot see the gateway's own paths. Empty means a bind mount by "
+            "host path, which works when the daemon and the process share the path. "
+            "Env var: AGENT_SANDBOX_SCRATCH_VOLUME"
+        ),
+    )
     sandbox_network: str = Field(
         default="seshat_cloud-sim",
         description=(

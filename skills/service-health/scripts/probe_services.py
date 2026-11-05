@@ -77,7 +77,7 @@ def probe_postgres(env: Mapping[str, str]) -> tuple[bool, str]:
     child_env = {**os.environ, "PGPASSWORD": password, "PGCONNECT_TIMEOUT": str(_TIMEOUT_S)}
     command = [
         "psql",
-        "-X",  # This script can run as root in the gateway, so psql reads no startup file (FRE-1732).
+        "-X",  # This script holds a credential in the gateway, so psql reads no startup file (FRE-1732).
         "-w",
         "-h",
         parts.hostname or "postgres",

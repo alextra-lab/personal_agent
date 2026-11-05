@@ -492,7 +492,8 @@ async def read_executor(
             )
             raise ReadError(
                 "file_replaced",
-                f"{str(resolved)!r} changed after the path checks, and it is not the same file.",
+                f"{str(resolved)!r} changed after the path checks and is not the same file, "
+                "or the file has a second name.",
                 retryable=False,
                 next_action="Do not retry this path. Tell the user that the path changed.",
             ) from exc

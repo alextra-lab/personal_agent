@@ -75,7 +75,7 @@ A `nobody` child owns directories under `/tmp` and the workspace, and root `read
 |---|---|
 | AC-1 | `tests/test_tools/test_eval_credential_isolation.py`: the spawn on `cloud` and `eval` uses `setpriv` and the allowlisted environment. A real child, with `setpriv` patched out, shows that the seeded value is not in `cat /proc/self/environ` or `jq -n env`. Seeded negative: on `local`, the same commands return the value. |
 | AC-1, with root | `scripts/eval/probe_bash_credential_isolation.py` runs the four commands and a wide scan in the gateway image as root, with fake values. CI runs tests with no root, so this result goes on the ticket. Its instrument check as root must find the value. |
-| AC-1, scripts | Spawn test: the exact form gets root and the script's names. A pipe, `&&`, an assignment or a redirection gets `nobody` and no secret. `eval` gets `nobody`. |
+| AC-1, scripts | Spawn test: the exact form gets the `seshat-scripts` account and the script's names. A pipe, `&&`, an assignment or a redirection gets `nobody` and no secret. `eval` gets `nobody`. |
 | AC-2 | `tests/personal_agent/governance/test_bash_joined_options.py`: `decide_permission` asks for each joined, spaced and clustered form of a refused option, and a plain diagram call still runs. |
 | AC-3 | `tests/personal_agent/gateway/test_auth_placeholder_tokens.py`: a placeholder, an empty value and the old `dev-local` text do not authenticate. A real variable still does. The real config file holds no literal secret. |
 | AC-4 | A static test reads the Caddyfile. A throwaway Caddy container on a new Docker network refuses a call from a second container and answers on loopback. The live check is in the handoff runbook. |

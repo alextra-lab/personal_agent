@@ -157,8 +157,8 @@ async def test_shell_start_failure_raises_os_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_output_cap_truncates_with_ctx() -> None:
-    """Output > 50 KiB is truncated; truncated_path is set to the scratch file path."""
+async def test_output_cap_truncates_with_ctx(tmp_path: Path) -> None:
+    """Output > 50 KiB is truncated, and the full output is in the overflow file."""
     # 60 KiB of ASCII output (well above the 50 KiB cap)
     big_output = b"x" * 61_440
     mock_proc = _make_mock_proc(exit_code=0, stdout=big_output, stderr=b"")
@@ -167,43 +167,23 @@ async def test_output_cap_truncates_with_ctx() -> None:
 
     ctx = TraceContext(trace_id="test-trace-overflow")
 
-    # Patch Path so the scratch-file write goes to a controlled temp directory.
-    scratch_root = Path("/tmp/test_agent_scratch")
-
     import personal_agent.tools.primitives.bash as bash_mod
 
-    original_path = bash_mod.Path
-
-    def patched_path(*args: object) -> Path:
-        if args and args[0] == "/tmp/agent_scratch":
-            return scratch_root
-        return original_path(*args)  # type: ignore[arg-type]
-
-    mock_overflow = MagicMock()
-    mock_overflow.__str__ = lambda self: (
-        "/tmp/test_agent_scratch/test-trace-overflow/bash_output_0.txt"
-    )
-
-    mock_scratch = MagicMock()
-    mock_scratch.glob.return_value = []
-    mock_scratch.__truediv__ = lambda self, name: mock_overflow
-
-    def patched_path_with_scratch(*args: object) -> MagicMock | Path:
-        if args and args[0] == "/tmp/agent_scratch":
-            return mock_scratch  # type: ignore[return-value]
-        return original_path(*args)  # type: ignore[arg-type]
+    scratch_root = tmp_path / "agent_scratch"
 
     with (
         patch(
             "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=mock_proc),
         ),
-        patch.object(bash_mod, "Path", side_effect=patched_path_with_scratch),
+        patch.object(bash_mod, "_OVERFLOW_ROOT", scratch_root),
     ):
         result = await bash_executor("cat bigfile", ctx=ctx)
 
-    # truncated_path must be set (not None) when output overflows
-    assert result["truncated_path"] is not None
+    overflow_file = scratch_root / "test-trace-overflow" / "bash_output_0.txt"
+    # A failed overflow write sets the marker "<truncated: scratch write failed>" instead.
+    assert result["truncated_path"] == str(overflow_file)
+    assert overflow_file.read_bytes() == big_output
     # In-memory stdout + stderr must be within byte budget (+2 for UTF-8 replace tolerance)
     total_bytes = len((result["stdout"] + result["stderr"]).encode("utf-8"))
     assert total_bytes <= 51_200 + 2, f"Byte cap exceeded: {total_bytes}"

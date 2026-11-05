@@ -201,7 +201,7 @@ def _path_changed(resolved: Path, trace_id: str | None) -> EditError:
     return EditError(
         "path_changed",
         f"{str(resolved)!r} is not the plain file path that the checks saw: "
-        "a part of it is a link or no directory.",
+        "a part of it is a link or no directory, or the file has a second name.",
         retryable=False,
         next_action="Do not retry this path. Tell the user that the path changed.",
     )

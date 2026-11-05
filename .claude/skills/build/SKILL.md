@@ -87,8 +87,10 @@ Fix every confirmed finding on-branch.
 
 **Diff class** — escalate if ANY apply, else self-serve: production write path (or in its call
 chain) · destructive/deleting code · schema change · cost or governance code. On escalate: note
-in the PR body + handoff "diff class: escalated — flagged for owner `/code-review ultra` before
-merge" (a flag, not a wait; go idle after the PR as usual).
+"diff class: escalated" in the PR body + handoff. After you open the PR, run `/code-review high <PR>`
+in this seat. Post the result on the ticket: each finding with file and line, its disposition, and
+the head SHA that the review covered. Master holds the merge until that comment arrives. Run the
+review again only if a fix changes identity, environment or file checks at a security boundary.
 
 ## 7 — Codex rescue (escalation only)
 3 failed attempts OR same error twice OR self-revert → `codex:rescue` with full error context.
@@ -101,7 +103,7 @@ checklist only.
 **Then post the handoff comment on the Linear ticket, addressed to master** (required):
 - **Per-criterion evidence** — this ticket's own criteria, each with the observed value (test
   name + result, probe/query output, observed behaviour). Backing ADR named for design intent.
-- **Self-review summary** — diff class (+ `/code-review ultra` status if escalated), security
+- **Self-review summary** — diff class (+ `/code-review high` status if escalated), security
   verdict, findings fixed on-branch, anything deliberately left unfixed and why.
 - **Post-deploy runbook** + what to verify live (commands + expected output) + any gotchas.
 - **Fold-ins** made and any follow-up tickets filed.

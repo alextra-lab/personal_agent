@@ -28,6 +28,7 @@ from personal_agent.orchestrator.untrusted_channel import (
     MEMORY_RECALL_TOOL,
     harness_call_id,
     harness_tool_exchange,
+    recalled_memory_result,
 )
 from tests.personal_agent.orchestrator.test_fre1360_untrusted_input_channel import (
     _assert_marker_only_in_tool_results,
@@ -246,7 +247,10 @@ class TestProfileBlock:
 
         (result,) = [m for m in wire if m.get("name") == MEMORY_RECALL_TOOL]
         state_line = MEMORY_STATE_LINES[ctx.memory_status.status]
-        assert result["content"] == f"{ctx.operator_profile}\n\n{state_line}"
+        # FRE-1740: the provenance paragraph opens the result; the profile heads the records.
+        assert result["content"] == recalled_memory_result(
+            f"{ctx.operator_profile}\n\n{state_line}"
+        )
 
     @pytest.mark.asyncio
     async def test_profile_never_reaches_the_turn_logs(

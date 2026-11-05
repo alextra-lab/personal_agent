@@ -76,6 +76,7 @@ from personal_agent.orchestrator.untrusted_channel import (
     MEMORY_RECALL_TOOL,
     harness_call_id,
     harness_tool_exchange,
+    recalled_memory_result,
 )
 from personal_agent.orchestrator.worker_types import (
     THOROUGHNESS_LEVELS,
@@ -463,8 +464,9 @@ class PlannerUserMessage:
             instruction. The query is never cut.
         total_chars: ``len(content) + len(digest_block)``: every input character the
             planner receives. This is the figure the bound applies to.
-        digest_block: The titled digest, carried to the planner as a ``memory_recall``
-            tool result (FRE-1360, ADR-0140 T2). Empty when there is no digest.
+        digest_block: The titled digest behind the provenance paragraph, carried to the
+            planner as a ``memory_recall`` tool result (FRE-1360, ADR-0140 T2, FRE-1740).
+            Empty when there is no digest.
     """
 
     content: str
@@ -531,8 +533,9 @@ def build_planner_user_message(
     """
     tail = _frame_planner_query(query, strategy)
     # FRE-1360: the titled digest is a tool result of its own, so it brings no separator
-    # into the user message — the bound counts its header and text, nothing more.
-    fixed_chars = len(tail) + (len(_DIGEST_HEADER) + len(digest_text) if digest_text else 0)
+    # into the user message. FRE-1740: the bound counts the block as it ships, provenance
+    # paragraph included.
+    fixed_chars = len(tail) + len(_planner_digest_block(digest_text))
     if fixed_chars > input_max_chars:
         raise PlannerInputTooLargeError(
             message_chars=len(tail), digest_chars=len(digest_text), max_chars=input_max_chars
@@ -561,8 +564,8 @@ def build_planner_user_message(
 
 
 def _planner_digest_block(digest_text: str) -> str:
-    """The titled digest, as the planner reads it (FRE-1472 title). Empty for no digest."""
-    return f"{_DIGEST_HEADER}{digest_text}" if digest_text else ""
+    """The titled digest behind the provenance paragraph (FRE-1472, FRE-1740). Empty for none."""
+    return recalled_memory_result(f"{_DIGEST_HEADER}{digest_text}") if digest_text else ""
 
 
 def planner_digest_exchange(digest_text: str, *, trace_id: str) -> list[dict[str, object]]:

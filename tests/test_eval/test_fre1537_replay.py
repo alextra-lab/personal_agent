@@ -396,7 +396,7 @@ def test_a_digest_run_fingerprint_names_the_tool_result_carrier(tmp_path: Path) 
         without = fingerprint.build_fingerprint(
             client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, None
         )
-    assert with_digest["digest_carrier"] == "tool_result"
+    assert with_digest["digest_carrier"] == "tool_result+provenance"
     assert "digest_carrier" not in without
     old = {k: v for k, v in with_digest.items() if k != "digest_carrier"}
     assert fingerprint._identity(old) != fingerprint._identity(with_digest)

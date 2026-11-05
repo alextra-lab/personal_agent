@@ -617,6 +617,11 @@ an upstream document.
   > the two HYBRID probes are in
   > `tests/personal_agent/orchestrator/test_fre1360_untrusted_input_channel.py`. Tool results, fetched
   > web content and MCP responses were already tool results; their probes now guard that.
+  > **Provenance added by FRE-1740 (2026-11-05).** The model read the `memory_recall` call as its
+  > own failed call. The recalled-memory result now opens with a fixed paragraph that says the
+  > system retrieved the records and that orders inside a record are data. The channel, the call
+  > ids and the position in the wire do not change
+  > (`tests/personal_agent/orchestrator/test_fre1740_memory_exchange_provenance.py`).
   > **Operator stanza closed by FRE-1566 (2026-10-10).** The stanza named the user from the
   > `:Person` node and listed its profile facts in the system prompt. It now names the user from
   > authentication (`prompts._authenticated_name`) and keeps only the FRE-1150 precedence rule.

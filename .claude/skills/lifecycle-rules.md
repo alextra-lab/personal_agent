@@ -110,10 +110,11 @@ A paid run is any eval, probe or fixture recording that calls a paid API (model,
 
 - Before the run, post a preflight on the ticket: the environment, a 1-to-2 item trace, and the
   projected calls, time and cost.
-- The preflight checks the remaining credit or quota of every paid API that the run calls, against
-  the projected calls with margin. A rate-limit header is not a credit balance. If a balance cannot
-  be read, the preflight says so. A run that could use up credit that production shares does not
-  start.
+- The preflight asks the owner if every paid API that the run calls has room for the projected
+  calls with margin, by prepaid credit or by monthly limit. A rate-limit header does not answer
+  this. A run that could use up credit that production shares does not start. Record only that the
+  owner confirmed room, with the date. Never store a balance, a limit, a recharge setting, a card
+  or an account name on a ticket, in the repo, in memory or in a log (owner, 2026-11-05).
 - If the ticket or the preflight says that the run waits for the owner's go, the run starts only
   after that go is recorded on the ticket, quoted and dated. A go given in a seat session is
   recorded on the ticket first.

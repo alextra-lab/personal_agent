@@ -105,17 +105,17 @@ Production has no row in `settings_overrides` or `user_constraint_preferences` (
 
 ### 4. Credit check per vendor
 
-**No balance was read in this build.** No read-only balance call is available here, and this build makes no paid call. A rate-limit header is not a balance. The owner must read each balance before the first go, and the go must quote it.
+**The owner confirms room.** No read-only balance call is available here, and a rate-limit header does not answer this. Before the first go, the owner confirms that each vendor has room for the projected calls, by prepaid credit or by monthly limit. Record only that the owner confirmed room, with the date. Never store a balance, a limit, a recharge setting, a card or an account name on the ticket or in this repo.
 
-| Vendor | Used by | Shares production's credit | Projected | Balance |
-|---|---|---|---|---|
-| OpenAI | Extraction, MemAudit, Scout | Yes | About $3 | Owner reads the dashboard |
-| Anthropic | Span extraction, summaries | Yes | About $8 | Owner reads the dashboard |
-| OVH | Embeddings | Yes | Under $1 | Owner reads the dashboard |
-| Voyage | Reranker | Yes | Under $1 | Owner reads the dashboard |
-| Exa, Brave | `web_search`, through production's searxng | **Yes** | About 330 calls, $2 | Owner reads the dashboards |
+| Vendor | Used by | Shares production's credit | Projected |
+|---|---|---|---|
+| OpenAI | Extraction, MemAudit, Scout | Yes | About $3 |
+| Anthropic | Span extraction, summaries | Yes | About $8 |
+| OVH | Embeddings | Yes | Under $1 |
+| Voyage | Reranker | Yes | Under $1 |
+| Exa, Brave | `web_search`, through production's searxng | **Yes** | About 330 calls, $2 |
 
-FRE-1641 used up the Exa and Brave credit that production shares, so read those two first. Stop the run on any vendor credit or quota error.
+FRE-1641 used up the Exa and Brave credit that production shares, so check those two first. Stop the run on any vendor credit or quota error.
 
 ### 5. The run
 

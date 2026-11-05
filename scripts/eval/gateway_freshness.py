@@ -75,7 +75,11 @@ def compute_build_fingerprint(repo_root: Path) -> str:
         if target.is_file():
             files.append(target)
         elif target.is_dir():
-            files.extend(f for f in target.rglob("*") if f.is_file())
+            # Bytecode never reaches the image (.dockerignore). A local import writes it, so
+            # hashing it reports a stale gateway when no build input changed.
+            files.extend(
+                f for f in target.rglob("*") if f.is_file() and "__pycache__" not in f.parts
+            )
 
     hasher = hashlib.sha256()
     for f in sorted(files, key=lambda p: p.relative_to(repo_root).as_posix()):

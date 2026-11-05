@@ -30,6 +30,8 @@ import pytest_asyncio
 
 from personal_agent.memory.models import Claim, Stance
 from personal_agent.memory.service import MemoryService
+from personal_agent.second_brain.consolidator import _build_claim
+from personal_agent.second_brain.entity_extraction import _finalize_extraction
 
 pytestmark = pytest.mark.integration
 
@@ -128,6 +130,59 @@ async def test_ac1_wrong_first_fact_is_correctable(owner_service: MemoryService)
     assert superseded["invalid_at"] is not None
     assert superseded["superseded_by"] is not None
     assert superseded["reason"] == "correction"
+
+
+def _producer_claim(
+    content: str, facet: str, user_message: str, observed_at: datetime, update_kind: str = "new"
+) -> Claim:
+    """A Claim built by the real producer path: ``_finalize_extraction`` then ``_build_claim``."""
+    result: dict[str, object] = {
+        "entities": [],
+        "stances": [],
+        "claims": [
+            {"content": content, "facet": facet, "update_kind": update_kind, "stated_by": "user"}
+        ],
+    }
+    _finalize_extraction(
+        result,
+        trace_id="trace-1739",
+        session_id="session-1739",
+        turn_timestamp=observed_at,
+        user_message=user_message,
+        assistant_response="Noted.",
+    )
+    claim = _build_claim(list(result["claims"])[0])  # type: ignore[arg-type]
+    assert claim is not None
+    return claim
+
+
+@pytest.mark.asyncio
+async def test_fre1739_user_correction_leaves_no_active_claim_with_the_old_value(
+    owner_service: MemoryService,
+) -> None:
+    """FRE-1739 AC-3 on the real writer: "France", then the user corrects to "United States"."""
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=lambda t, **_kw: [1.0, 0.0]),
+    ):
+        await owner_service.assert_claim(
+            _producer_claim("The user is in France.", "current_country", "I'm in France.", _T0),
+            user_id=_OWNER_UID,
+        )
+        await owner_service.assert_claim(
+            _producer_claim(
+                "The user is in the United States.",
+                "current_country",
+                "I'm in the United States, not France.",
+                _T1,
+                update_kind="correction",
+            ),
+            user_id=_OWNER_UID,
+        )
+
+    current = await _current_claims(owner_service)
+    assert [c["content"] for c in current] == ["The user is in the United States."]
+    assert not any("France" in c["content"] for c in current)
 
 
 @pytest.mark.asyncio

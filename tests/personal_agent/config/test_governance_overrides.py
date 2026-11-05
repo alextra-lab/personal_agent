@@ -11,6 +11,7 @@ from personal_agent.config.governance_loader import (
     TOOL_PATH_FIELDS,
     GovernanceConfigError,
     LiveGovernanceConfig,
+    apply_governance_overrides,
     file_governance_config,
     load_governance_config,
     validate_governance_override,
@@ -167,3 +168,47 @@ def test_a_reload_that_fails_keeps_the_last_config(tool_name: str) -> None:
     replace_overrides({f"tool.{tool_name}": {"loop_max_consecutive": 2}})
 
     assert live.get() is good
+
+
+def _tool_row(tool_name: str) -> dict[str, object]:
+    """Return the row that the PWA sends: every field except the path lists."""
+    policy = file_governance_config().tools[tool_name]
+    return policy.model_dump(mode="json", exclude=set(TOOL_PATH_FIELDS))
+
+
+def test_fre1733_one_changed_field_of_the_whole_row_stores_one_field(tool_name: str) -> None:
+    file_value = file_governance_config().tools[tool_name].loop_max_consecutive
+
+    stored = validate_governance_override(
+        f"tool.{tool_name}", {**_tool_row(tool_name), "loop_max_consecutive": file_value + 3}
+    )
+
+    assert stored == {"loop_max_consecutive": file_value + 3}
+
+
+def test_fre1733_every_unchanged_tool_row_stores_nothing() -> None:
+    for name in file_governance_config().tools:
+        assert validate_governance_override(f"tool.{name}", _tool_row(name)) == {}, name
+
+
+def test_fre1733_a_later_file_change_to_another_field_takes_effect(tool_name: str) -> None:
+    config = file_governance_config()
+    policy = config.tools[tool_name]
+    stored = validate_governance_override(
+        f"tool.{tool_name}",
+        {**_tool_row(tool_name), "loop_max_consecutive": policy.loop_max_consecutive + 3},
+    )
+    changed_policy = policy.model_copy(
+        update={"loop_max_per_signature": policy.loop_max_per_signature + 1}
+    )
+    changed_file = config.model_copy(update={"tools": {**config.tools, tool_name: changed_policy}})
+
+    applied = apply_governance_overrides(changed_file, {f"tool.{tool_name}": stored})
+
+    assert applied.tools[tool_name].loop_max_consecutive == policy.loop_max_consecutive + 3
+    assert applied.tools[tool_name].loop_max_per_signature == policy.loop_max_per_signature + 1
+
+
+def test_fre1733_an_empty_object_is_refused_and_not_read_as_a_clear(tool_name: str) -> None:
+    with pytest.raises(GovernanceConfigError, match="non-empty"):
+        validate_governance_override(f"tool.{tool_name}", {})

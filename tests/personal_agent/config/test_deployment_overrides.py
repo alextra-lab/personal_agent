@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
+from personal_agent.config import model_loader
 from personal_agent.config.model_loader import (
     ModelConfigError,
     file_deployment_fields,
@@ -59,7 +62,88 @@ def test_every_deployment_passes_its_own_file_fields() -> None:
         fields = file_deployment_fields(key)
         assert isinstance(fields, dict)
         assert "endpoint" not in fields
-        validate_deployment_override(key, fields)
+        # FRE-1733: an unchanged Save differs from the file in no field.
+        assert validate_deployment_override(key, fields) == {}
+
+
+def test_the_order_of_a_set_field_is_not_a_change() -> None:
+    """A frozenset dumps in an order that the hash seed and the insertion order decide (FRE-1733)."""
+    config = load_model_config()
+    key, definition = next(
+        (name, model)
+        for name, model in config.models.items()
+        if model.reasoning_effort_domain and len(model.reasoning_effort_domain) > 2
+    )
+    domain = definition.reasoning_effort_domain
+    assert domain is not None
+
+    for order in itertools.permutations(sorted(domain)):
+        stored = validate_deployment_override(key, {"reasoning_effort_domain": list(order)})
+        assert stored == {}, order
+
+
+def test_a_stored_domain_equals_the_live_row_in_any_set_order() -> None:
+    """The menu compares a stored row and the live row as lists (FRE-1733)."""
+    config = load_model_config()
+    key, definition = next(
+        (name, model)
+        for name, model in config.models.items()
+        if model.reasoning_effort_domain and len(model.reasoning_effort_domain) > 2
+    )
+    domain = definition.reasoning_effort_domain
+    assert domain is not None
+    narrowed = sorted(domain)[:-1]
+
+    for order in itertools.permutations(narrowed):
+        stored = validate_deployment_override(key, {"reasoning_effort_domain": list(order)})
+        assert stored == {"reasoning_effort_domain": narrowed}, order
+    live = definition.model_copy(update={"reasoning_effort_domain": frozenset(narrowed)})
+    assert live.model_dump(mode="json")["reasoning_effort_domain"] == narrowed
+    assert isinstance(definition.model_dump()["reasoning_effort_domain"], frozenset)
+
+
+def test_one_changed_field_of_the_whole_row_stores_one_field(key: str) -> None:
+    """The PWA sends the whole row (FRE-1733 AC-4)."""
+    fields = file_deployment_fields(key)
+    assert isinstance(fields, dict)
+    timeout = fields["default_timeout"]
+    assert isinstance(timeout, int)
+
+    stored = validate_deployment_override(key, {**fields, "default_timeout": timeout + 11})
+
+    assert stored == {"default_timeout": timeout + 11}
+
+
+def test_a_later_file_change_to_another_field_takes_effect(key: str) -> None:
+    """A stored row holds the edited field only, so the file still owns the rest (FRE-1733 AC-4)."""
+    fields = file_deployment_fields(key)
+    assert isinstance(fields, dict)
+    timeout, max_tokens = fields["default_timeout"], fields["max_tokens"]
+    assert isinstance(timeout, int) and isinstance(max_tokens, int)
+    stored = validate_deployment_override(key, {**fields, "default_timeout": timeout + 11})
+    read = model_loader._read_catalog_content
+
+    def _changed_file(path: Path) -> dict[str, object]:
+        content = read(path)
+        models = content["models"]
+        assert isinstance(models, dict)
+        return {**content, "models": {**models, key: {**models[key], "max_tokens": max_tokens + 1}}}
+
+    def _forget_catalogs() -> None:
+        model_loader._load_model_config_at_path.cache_clear()
+        model_loader._load_model_config_with_overrides.cache_clear()
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(model_loader, "_read_catalog_content", _changed_file)
+        _forget_catalogs()
+        try:
+            replace_overrides({f"deployment.{key}": stored})
+            definition = load_model_config().models[key]
+        finally:
+            _forget_catalogs()
+
+    assert definition.default_timeout == timeout + 11
+    assert definition.max_tokens == max_tokens + 1
 
 
 @pytest.mark.parametrize(

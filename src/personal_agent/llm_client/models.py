@@ -8,7 +8,14 @@ from enum import Enum
 from typing import Literal
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from personal_agent.llm_client.priority import InferencePriority
 
@@ -719,6 +726,12 @@ class ModelDefinition(BaseModel):
             ),
         )
     )
+
+    @field_serializer("reasoning_effort_domain", when_used="json")
+    def _sorted_effort_domain(self, domain: frozenset[str] | None) -> list[str] | None:
+        """Dump in a fixed order. A stored row and the live row compare as lists (FRE-1733)."""
+        return sorted(domain) if domain is not None else None
+
     modes: dict[str, ModeSpec] = Field(
         default_factory=dict,
         description=(

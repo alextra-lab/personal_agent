@@ -515,19 +515,24 @@ class CostGate:
                     ReservationStatus.ACTIVE.value,
                 )
 
+                # FRE-1733: one transaction takes all these locks, so the whole batch updates in
+                # ascending id order. Updating per reservation can hold 10 and wait for 3, while a
+                # reserve holds 3 and waits for 10.
+                refunds: dict[int, Decimal] = {}
                 for row in expired:
-                    counter_ids = await self._settle_counter_ids(conn, row)
-                    for cid in counter_ids:
-                        await conn.execute(
-                            """
-                            UPDATE budget_counters
-                               SET running_total = running_total - $1,
-                                   updated_at = NOW()
-                             WHERE id = $2
-                            """,
-                            row["amount_usd"],
-                            cid,
-                        )
+                    for cid in await self._settle_counter_ids(conn, row):
+                        refunds[cid] = refunds.get(cid, Decimal(0)) + row["amount_usd"]
+                for cid in sorted(refunds):
+                    await conn.execute(
+                        """
+                        UPDATE budget_counters
+                           SET running_total = running_total - $1,
+                               updated_at = NOW()
+                         WHERE id = $2
+                        """,
+                        refunds[cid],
+                        cid,
+                    )
 
         if expired:
             log.info("cost_gate_reaper_swept", count=len(expired))

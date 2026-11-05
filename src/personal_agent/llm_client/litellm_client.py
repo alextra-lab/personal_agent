@@ -1653,17 +1653,35 @@ class LiteLLMClient:
                         # executor's step_llm_call) cancels this call directly. CancelledError
                         # is a BaseException, not an Exception, so it would otherwise skip the
                         # except Exception below entirely and leak this reservation until the
-                        # cost-gate reaper sweeps it at TTL. Resolve it the same as any other
-                        # failed exit, then propagate the cancellation — never swallow it.
+                        # cost-gate reaper sweeps it at TTL. FRE-1733: the request may have reached
+                        # the provider, which can still bill it, so commit the estimate and do not
+                        # refund. This can overcount a call that the provider did not bill. Then
+                        # propagate the cancellation — never swallow it.
                         try:
-                            await gate.refund(reservation_id, trace_id=trace_id)
-                        except Exception as refund_exc:  # noqa: BLE001
+                            await gate.commit(
+                                reservation_id,
+                                reservation_amount,
+                                trace_id=trace_id,
+                                session_id=trace_ctx.session_id,
+                            )
+                        except Exception as commit_exc:  # noqa: BLE001
                             log.error(
-                                "litellm_refund_after_cancel_failed",
+                                "litellm_commit_after_cancel_failed",
                                 trace_id=trace_id,
                                 session_id=trace_ctx.session_id,
                                 reservation_id=str(reservation_id),
-                                error=str(refund_exc),
+                                error=str(commit_exc),
+                            )
+                        else:
+                            log.warning(
+                                "litellm_cancelled_call_committed_estimate",
+                                model=self._litellm_model,
+                                budget_role=self.budget_role,
+                                reservation_id=str(reservation_id),
+                                estimate_usd=float(reservation_amount),
+                                note="can overcount a call that the provider did not bill",
+                                trace_id=trace_id,
+                                session_id=trace_ctx.session_id,
                             )
                         raise
                     except Exception as e:

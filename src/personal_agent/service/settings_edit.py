@@ -78,6 +78,7 @@ from personal_agent.cost_gate.policy import (
 )
 from personal_agent.exceptions import SeshatEffortConfigError
 from personal_agent.llm_client.models import INHERIT_DEPLOYMENT
+from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.orchestrator.constraint_options import build_provider_availability
 from personal_agent.service.auth import RequestUser
 from personal_agent.service.database import AsyncSessionLocal
@@ -368,7 +369,8 @@ async def set_override(
 
     Returns:
         The value that was stored. A preset holds every field, and a cap is a float. A hidden
-        setting returns ``"set"``.
+        setting returns ``"set"``. A deployment, a role estimate or a tool holds the fields that
+        differ from the file. With no such field, the row is removed and this returns ``{}``.
 
     Raises:
         SettingEditRefused: With the reason. Nothing is stored.
@@ -383,6 +385,12 @@ async def set_override(
             trace_id=trace_id,
         )
         raise
+    if stored_value == {} and _stores_changed_fields(parameter):
+        # Every sent field equals the file, so no override is needed (FRE-1733). The validators
+        # refuse an empty value. An empty row reads as an override that holds nothing. This runs
+        # outside the lock, which Clear takes.
+        await clear_override(db, parameter, changed_by=changed_by, trace_id=trace_id)
+        return stored_value
     hidden = _is_hidden_parameter(parameter)
     repo = SettingsOverridesRepository(db)
     async with _edit_lock:
@@ -411,6 +419,34 @@ async def set_override(
     return returned
 
 
+def _stores_changed_fields(parameter: str) -> bool:
+    """Return whether a parameter stores only the fields that differ from the file (FRE-1733)."""
+    return parameter.startswith(
+        (DEPLOYMENT_PARAMETER_PREFIX, ROLE_ESTIMATE_PARAMETER_PREFIX, TOOL_PARAMETER_PREFIX)
+    )
+
+
+def _register_pricing(parameter: str, trace_id: str) -> None:
+    """Register the price of each priced deployment again, after a deployment edit (FRE-1733).
+
+    Budget counts read the litellm cost table. A failure logs an error and does not undo the edit.
+    The next edit or the next start repairs the table. Registration only adds or overwrites. A price
+    that an edit or a Clear removes, and the key of an old ``id`` or ``provider``, stay until a restart.
+    """
+    if not parameter.startswith(DEPLOYMENT_PARAMETER_PREFIX):
+        return
+    try:
+        register_model_pricing(load_model_config())
+    except Exception as exc:
+        log.error(
+            "model_pricing_registration_failed",
+            parameter=parameter,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            trace_id=trace_id,
+        )
+
+
 async def _after_edit(parameter: str, trace_id: str) -> None:
     """Bring the process up to the committed edit. The table is already right."""
     if parameter.startswith(SETTING_PARAMETER_PREFIX):
@@ -418,6 +454,7 @@ async def _after_edit(parameter: str, trace_id: str) -> None:
         if parameter.removeprefix(SETTING_PARAMETER_PREFIX) in _ROUND_CEILING_FIELDS:
             # The cached presets depend on the ceiling, and their cache key does not hold it.
             forget_effort_overrides()
+    _register_pricing(parameter, trace_id)
     await _mirror_caps(parameter, trace_id)
 
 

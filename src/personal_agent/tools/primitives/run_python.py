@@ -2,7 +2,7 @@
 
 Runs arbitrary Python scripts inside a hardened Docker container.  The
 container is non-root, read-only root filesystem, no network by default, and
-limited to a scratch bind-mount at ``/sandbox``.
+limited to a scratch mount at ``/sandbox``.
 
 See :mod:`sandbox` for the low-level Docker invocation and security model.
 
@@ -152,7 +152,7 @@ async def run_python_executor(
         - ``exit_code`` (int): Container exit code. A non-zero exit is a normal result.
         - ``stdout`` (str): Captured stdout (possibly truncated to 25 KiB).
         - ``stderr`` (str): Captured stderr (possibly truncated to 25 KiB).
-        - ``scratch_files`` (list[str]): Host paths of files in scratch dir.
+        - ``scratch_files`` (list[str]): Paths of files in scratch dir, as the gateway sees them.
         - ``truncated`` (bool): True when output was truncated.
 
     Raises:

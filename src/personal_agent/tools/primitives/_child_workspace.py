@@ -26,6 +26,10 @@ CHILD_UID = 65534
 CHILD_GID = 65534
 CHILD_IDS = (CHILD_UID, CHILD_GID)
 WORKSPACE_ROOT = Path("/app/agent_workspace")
+# The ``run_python`` scratch root, inside the workspace. Root owns it and the trace directories in
+# it, so the child cannot replace a trace directory that the sandbox mounts (FRE-1736).
+SANDBOX_DIRECTORY = "sandbox"
+ROOT_IDS = (0, 0)
 # A root itself keeps its owner: ``/tmp`` stays root's. ``prepare_workspace`` gives the workspace.
 CHILD_ROOTS: tuple[Path, ...] = (WORKSPACE_ROOT, Path("/tmp"))
 
@@ -43,7 +47,8 @@ def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
     """Give the workspace tree to the child's account, at gateway startup.
 
     No child runs at that time. A symbolic link is changed itself and is not followed. An entry
-    that the child owns already, or a file with a second name, stays as it is.
+    that the child owns already, or a file with a second name, stays as it is. The ``sandbox``
+    directory goes to root instead, and the walk does not enter it (FRE-1736).
 
     Args:
         root: The workspace directory.
@@ -54,24 +59,29 @@ def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
     failed = 0
     second_names = 0
 
-    def give(entry: Path) -> None:
+    def give(entry: Path, ids: tuple[int, int] = CHILD_IDS) -> None:
         nonlocal changed, failed, second_names
         try:
             status = os.lstat(entry)
             if _names_another_file(status):
                 second_names += 1
                 return
-            if (status.st_uid, status.st_gid) == CHILD_IDS:
+            if (status.st_uid, status.st_gid) == ids:
                 return
-            os.chown(entry, CHILD_UID, CHILD_GID, follow_symlinks=False)
+            os.chown(entry, *ids, follow_symlinks=False)
             changed += 1
         except OSError:
             failed += 1  # for example, a file that a run removed in this walk
 
+    sandbox = root / SANDBOX_DIRECTORY
     give(root)
     for directory, subdirs, files in os.walk(root, followlinks=False):
+        if Path(directory) == sandbox:
+            subdirs.clear()  # the trace directories are not the child's to own
+            continue
         for name in (*subdirs, *files):
-            give(Path(directory, name))
+            entry = Path(directory, name)
+            give(entry, ROOT_IDS if entry == sandbox else CHILD_IDS)
     log.info("child_workspace_prepared", changed=changed, failed=failed, second_names=second_names)
 
 

@@ -7,6 +7,7 @@ conversation text using local reasoning models (Qwen 8B, LFM 1.2B) or Claude 4.5
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
@@ -177,6 +178,13 @@ CLAIMS — first-person SITUATIONAL FACTS about the user's own life/relationship
               "correction" when the user is FIXING an earlier mistake ("actually…", "I was
               wrong", "not X, it's Y"); "evolution" when the fact CHANGED ("now…", "as of…",
               "we moved to…", "extended to…"); "new" otherwise (the default).
+    stated_by — who stated the fact in THIS conversation: "user" when the User's message states
+              it; "assistant" when only the Assistant's text states it — an assumption, a
+              guess, an inference, a suggestion, or something the Assistant looked up
+              ("since you're in Paris I'll assume a French branch" is the ASSISTANT's
+              assumption, not a fact the user told you). When both speakers state it, "user".
+              When the User accepts or confirms what the Assistant proposed ("yes, go with the
+              Lyon office", "correct"), the User now states it: "user".
     description — optional one sentence of context
 
 Do NOT put any provenance, timestamp, id, or record-date on stances or claims — the system
@@ -234,6 +242,8 @@ EXTRACTION RULES (follow strictly):
       "new"        — the default: a passing mention with no correction or defining intent.
     Emit "new" whenever unsure. This signal is about the entity's DESCRIPTION only — never a
     stance or a claim.
+15. Set each claim's "stated_by" from the conversation text, never from what you think is true.
+    A claim whose only source is the Assistant's text, with no User confirmation, gets "assistant".
 
 GOOD EXAMPLES:
   ✓ {{"name": "Paris", "type": "Location", "output_kind": "knowledge", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
@@ -242,7 +252,7 @@ GOOD EXAMPLES:
   ✓ {{"name": "GraphRAG", "type": "MethodOrConcept", "output_kind": "knowledge", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
   ✓ {{"name": "Neo4j", "type": "TechnicalArtifact", "output_kind": "knowledge", "class": "World", "description": "A graph database management system storing data as nodes and typed relationships", "description_update_kind": "enrichment"}}  ← the turn substantively defines it
   ✓ stance: {{"subject": "owner", "target": "Toyota RAV4 Hybrid", "affect": "loves the hybrid powertrain", "mastery": null, "description": "User strongly prefers the RAV4 Hybrid's drivetrain"}}
-  ✓ claim:  {{"subject": "owner", "content": "The user's current car lease ends in March.", "description": "Situational constraint driving purchase timing"}}
+  ✓ claim:  {{"subject": "owner", "content": "The user's current car lease ends in March.", "stated_by": "user", "description": "Situational constraint driving purchase timing"}}
 
 BAD EXAMPLES (never produce these):
   ✗ {{"name": "User", "type": "Person", ...}}
@@ -261,6 +271,8 @@ BAD EXAMPLES (never produce these):
         ← "discussed as" framing; write "A calcium channel blocker used to treat high blood pressure"
   ✗ {{"name": "Toyota RAV4 Hybrid", ..., "description": "a car the user loves"}}   ← stance flattened; emit a stance
   ✗ (silently omitting "my lease ends in March")                                   ← emit it as a claim
+  ✗ {{"subject": "owner", "content": "The user wants a French branch under IDCC 2120.", "stated_by": "user"}}
+        ← the User never said it; the Assistant wrote "I'll assume a French agence" → "stated_by": "assistant"
   ✗ {{"name": "my lease ends in March", "type": "Event", ...}}                     ← situational fact is a claim, not an entity
   ✗ {{"subject": "owner", "target": "...", "provenance": {{...}}}}                 ← never emit provenance; the system adds it
 
@@ -306,6 +318,7 @@ Return ONLY valid JSON (no markdown fences, no explanation):
       "content": "One self-contained declarative sentence about the user's situation",
       "facet": "lower_snake_case slot key, or empty string",
       "update_kind": "new|correction|evolution",
+      "stated_by": "user|assistant",
       "description": "Optional one sentence of context"
     }}
   ]
@@ -340,9 +353,9 @@ TYPE & CLAIM DISAMBIGUATION EXEMPLARS (few-shot — study these boundary calls):
 
   CLAIMS — first-person situational facts are UNDER-emitted; never drop them:
     - "I just started a new job at a fintech startup" -> emit a claim:
-        {"subject":"owner","content":"The user recently started a job at a fintech startup.","facet":"employer","update_kind":"new"}
+        {"subject":"owner","content":"The user recently started a job at a fintech startup.","facet":"employer","update_kind":"new","stated_by":"user"}
     - "We're relocating next month" -> emit a claim:
-        {"subject":"owner","content":"The user is relocating next month.","facet":"current_city","update_kind":"evolution"}
+        {"subject":"owner","content":"The user is relocating next month.","facet":"current_city","update_kind":"evolution","stated_by":"user"}
     - Near-miss (NOT a claim): an impersonal geographic fact ("that city is in the south") is
       World knowledge -> a Location entity, not a claim. A claim is a first-person SITUATIONAL fact.
 
@@ -801,6 +814,50 @@ def _attribute_authorship(
     return "agent"
 
 
+def _drop_assistant_stated_claims(
+    claims: Sequence[dict[str, Any]],
+    *,
+    trace_id: UUID | str | None = None,
+    session_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Remove the claims that only the assistant stated (FRE-1739).
+
+    The extractor sees both speakers. Before this fix it turned the assistant's own
+    assumption ("I'll assume a French agence") into a claim about the user. Such a claim is
+    stored as a fact the user told us, and a later correction does not match it because the
+    extractor names the corrected fact with a different facet.
+
+    The extractor labels each claim with ``stated_by``. This function reads the label only to
+    remove a claim, never to raise trust, so ADR-0098 AC-9 holds. A missing or unknown label
+    keeps the claim, so a model that ignores the field loses no claim. A word-overlap rule
+    was rejected: it dropped a user paraphrase ("meetings" in the text, "meeting" in the claim).
+
+    The two checks answer different questions. ``stated_by`` decides whether a claim is stored.
+    ``asserted_by`` (from :func:`_attribute_authorship`) decides how much a stored claim is
+    trusted. Neither one reads or sets the other.
+
+    Args:
+        claims: The stamped claim dicts.
+        trace_id: Originating capture's trace_id, for the drop signal (ADR-0074 §I3).
+        session_id: Originating capture's session_id, for the drop signal.
+
+    Returns:
+        The claims whose ``stated_by`` is not ``"assistant"``, in the original order.
+    """
+    kept: list[dict[str, Any]] = []
+    for claim in claims:
+        if str(claim.get("stated_by") or "").strip().lower() == "assistant":
+            log.info(
+                "claim_dropped_assistant_stated",
+                facet=claim.get("facet", ""),
+                trace_id=str(trace_id) if trace_id else None,
+                session_id=session_id,
+            )
+            continue
+        kept.append(claim)
+    return kept
+
+
 def _coerce_mastery(value: Any) -> float | None:
     """Coerce a model-emitted mastery value to a clamped float or None.
 
@@ -1019,7 +1076,9 @@ def _finalize_extraction(
             session_id=session_id,
         )
         claim["provenance"] = dict(provenance)
-    result["claims"] = claims
+    result["claims"] = _drop_assistant_stated_claims(
+        claims, trace_id=trace_id, session_id=session_id
+    )
 
 
 async def extract_entities_and_relationships(

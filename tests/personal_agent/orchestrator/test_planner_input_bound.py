@@ -16,6 +16,7 @@ from personal_agent.orchestrator.expansion_controller import (
     _DIGEST_HEADER,
     build_planner_user_message,
 )
+from personal_agent.orchestrator.untrusted_channel import recalled_memory_result
 
 _TOTAL = 64_000
 _HISTORY = 60_000
@@ -124,7 +125,8 @@ def test_the_bound_counts_the_digest_header_exactly() -> None:
             )
         )
     ) - len(_build("q", []).content)
-    assert digest_block == len(_DIGEST_HEADER) + len(digest)
+    # FRE-1740: the block also carries the provenance paragraph and the blank line after it.
+    assert digest_block == len(recalled_memory_result(_DIGEST_HEADER + digest))
     query_fits = "q" * (_TOTAL - _TAIL_OVERHEAD - digest_block)
     built = _build(query_fits, [], digest=digest)
     assert len(_whole(built)) == _TOTAL
@@ -161,7 +163,7 @@ def test_order_is_history_then_query_then_digest() -> None:
     query_at = built.content.index("Query: the question")
     assert history_at < query_at
     assert "DIGEST-LINE" not in built.content
-    assert built.digest_block == f"{_DIGEST_HEADER}DIGEST-LINE"
+    assert built.digest_block == recalled_memory_result(f"{_DIGEST_HEADER}DIGEST-LINE")
 
 
 def test_three_turn_history_precedes_the_query() -> None:

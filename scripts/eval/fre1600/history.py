@@ -57,7 +57,11 @@ from scripts.eval.fre1537.replay import with_nonce
 from scripts.eval.fre1592.channels import Head, append_row, call, done, fence, request
 from scripts.eval.fre1592.inventory import Counter
 
-from personal_agent.orchestrator.untrusted_channel import MEMORY_RECALL_TOOL, harness_tool_exchange
+from personal_agent.orchestrator.untrusted_channel import (
+    MEMORY_RECALL_TOOL,
+    harness_tool_exchange,
+    recalled_memory_result,
+)
 
 SESSION = Path(__file__).with_name("session.yaml")
 ARMS = ("today", "control", "no_tools", "preserve")
@@ -152,7 +156,9 @@ def first_messages(turn: Turn) -> list[Message]:
         The ``<turn_context>`` user message, then the memory_recall call and its result.
     """
     call_msg, result = harness_tool_exchange(
-        call_id=f"call_mem_t{turn.index}", tool_name=MEMORY_RECALL_TOOL, content=turn.memory
+        call_id=f"call_mem_t{turn.index}",
+        tool_name=MEMORY_RECALL_TOOL,
+        content=recalled_memory_result(turn.memory),
     )
     return [{"role": "user", "content": fence(turn.user)}, call_msg, result]
 

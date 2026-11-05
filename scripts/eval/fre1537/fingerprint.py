@@ -29,7 +29,9 @@ if TYPE_CHECKING:
 MANAGED_BUILD = "managed (provider reports no build)"
 MANAGED_QUANT = "managed (not reported)"
 BARE_RESPONSE_FORMAT = {"type": "json_object"}
-DIGEST_CARRIER = "tool_result"  # FRE-1360: the planner digest rides a memory_recall tool result
+# FRE-1360: the planner digest rides a memory_recall tool result. FRE-1740: that result opens
+# with a provenance paragraph, so a run from before it is a different configuration.
+DIGEST_CARRIER = "tool_result+provenance"
 _QUANT = re.compile(r"(?:UD-)?(?:I?Q\d(?:_[A-Z0-9]+)+|BF16|F16|F32)", re.IGNORECASE)
 # The fields whose change makes two runs different configurations.
 _IDENTITY_PATHS = (

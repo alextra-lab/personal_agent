@@ -20,7 +20,10 @@ from scripts.eval.fre1600.history import (
     tool_messages,
 )
 
-from personal_agent.orchestrator.untrusted_channel import MEMORY_RECALL_TOOL
+from personal_agent.orchestrator.untrusted_channel import (
+    MEMORY_RECALL_TOOL,
+    recalled_memory_result,
+)
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +48,8 @@ def test_first_call_is_the_production_shape(turns: list[history.Turn]) -> None:
     assert str(user["content"]).endswith(turns[0].user)
     assert call["tool_calls"][0]["function"]["name"] == MEMORY_RECALL_TOOL  # type: ignore[index]
     assert result["role"] == "tool"
-    assert result["content"] == turns[0].memory
+    # FRE-1740: production opens the memory result with the provenance paragraph.
+    assert result["content"] == recalled_memory_result(turns[0].memory)
 
 
 def test_today_stores_raw_user_text_and_reply_only(turns: list[history.Turn]) -> None:

@@ -122,6 +122,7 @@ from personal_agent.orchestrator.untrusted_channel import (
     harness_call_id,
     harness_tool_exchange,
     is_harness_tool_result,
+    recalled_memory_result,
 )
 from personal_agent.request_gateway.budget import estimate_tokens
 from personal_agent.request_gateway.memory_status import (
@@ -7768,7 +7769,7 @@ async def step_llm_call(
                     *harness_tool_exchange(
                         call_id=ctx.memory_result_call_id,
                         tool_name=MEMORY_RECALL_TOOL,
-                        content=memory_section,
+                        content=recalled_memory_result(memory_section),
                     ),
                 ]
 

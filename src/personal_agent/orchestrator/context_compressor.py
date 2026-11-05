@@ -23,6 +23,7 @@ from personal_agent.config import ModelRoleError, resolve_role_model_key
 from personal_agent.llm_client.factory import get_llm_client_for_key
 from personal_agent.llm_client.types import LLMClientError, ModelRole
 from personal_agent.orchestrator.context_window import estimate_message_tokens
+from personal_agent.orchestrator.untrusted_channel import MEMORY_RECALL_PROVENANCE
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -412,7 +413,9 @@ def _pre_pass_tool_outputs(
             "_replaced": True,
             "tool_call_id": msg.get("tool_call_id", ""),
             "size_chars": len(content),
-            "shape": _shape_descriptor(content),
+            # FRE-1740: a recalled-memory result opens with a fixed paragraph, which would
+            # fill the 120-character shape and hide what the result holds.
+            "shape": _shape_descriptor(content.removeprefix(f"{MEMORY_RECALL_PROVENANCE}\n\n")),
         }
         replaced = dict(msg)
         replaced["content"] = json.dumps(descriptor_payload, sort_keys=True)

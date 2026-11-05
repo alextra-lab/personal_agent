@@ -26,6 +26,7 @@ from personal_agent.orchestrator.untrusted_channel import (
     WORKER_REPORTS_TOOL,
     harness_call_id,
     harness_tool_exchange,
+    recalled_memory_result,
 )
 from tests.personal_agent.orchestrator.test_fre1489_volatile_duplication import (
     _assert_forward_extension,
@@ -125,7 +126,10 @@ class TestAc1RecalledMemory:
         wires = await _drive_loop(ctx, 1, monkeypatch)
         memory_results = [m for m in wires[0] if m.get("name") == MEMORY_RECALL_TOOL]
         assert len(memory_results) == 1
-        assert memory_results[0]["content"] == MEMORY_STATE_LINES[ctx.memory_status.status]
+        # FRE-1740: the result opens with the provenance paragraph, then the state line.
+        assert memory_results[0]["content"] == recalled_memory_result(
+            MEMORY_STATE_LINES[ctx.memory_status.status]
+        )
         for message in wires[0]:
             if message.get("role") in ("system", "user"):
                 assert MEMORY_STATE_LINES[ctx.memory_status.status] not in _message_text(message)
@@ -453,7 +457,8 @@ class TestAc3RecallPreserved:
             else f"{rendered}\n\n{MEMORY_STATE_LINES[status]}"
         )
         (result,) = [m for m in wires[0] if m.get("name") == MEMORY_RECALL_TOOL]
-        assert result["content"] == expected
+        # FRE-1740: the renderer's bytes follow the provenance paragraph unchanged.
+        assert result["content"] == recalled_memory_result(expected)
 
         # The evidence record admits the same identities, in the same order.
         assert ctx.turn_evidence is not None

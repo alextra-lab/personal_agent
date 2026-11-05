@@ -56,7 +56,11 @@ from scripts.eval.fre1592.inventory import _check_deployment_context, _component
 
 from personal_agent.orchestrator.prompts import render_current_datetime_block
 from personal_agent.orchestrator.skills import get_all_skills
-from personal_agent.orchestrator.untrusted_channel import MEMORY_RECALL_TOOL, harness_tool_exchange
+from personal_agent.orchestrator.untrusted_channel import (
+    MEMORY_RECALL_TOOL,
+    harness_tool_exchange,
+    recalled_memory_result,
+)
 from personal_agent.tools.contract import render_content
 from personal_agent.tools.types import ToolErrorDetail
 
@@ -110,7 +114,9 @@ def memory_exchange() -> list[Message]:
         The assistant call and its tool result.
     """
     call, result = harness_tool_exchange(
-        call_id="call_mem_fre1592", tool_name=MEMORY_RECALL_TOOL, content="Memory: no records."
+        call_id="call_mem_fre1592",
+        tool_name=MEMORY_RECALL_TOOL,
+        content=recalled_memory_result("Memory: no records."),
     )
     return [call, result]
 

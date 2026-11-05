@@ -33,7 +33,7 @@ Run `full-pilot-20261105`, user_015 (simulated user data).
   claim labelled `assistant`. The label can only remove a claim, never raise trust, so ADR-0098 AC-9 holds. A missing or
   unknown label keeps the claim (fail open).
 
-Cost effect: the prompt template grows by 922 characters (about 230 tokens) per extraction call, and each claim adds about 4 output tokens. No extra call.
+Cost effect: the prompt template grows by 1094 characters (about 270 tokens) per extraction call, and each claim adds about 4 output tokens. No extra call.
 The prompt hash that the FRE-630 harness reads changes.
 
 Known limit: the offline tests prove the drop, not the model's labelling. A replay of the pilot pair (episode 2, turn 2)
@@ -50,6 +50,7 @@ through the live extractor shows the labelling. That is a paid call, so it waits
 ## Out of scope (stated in the handoff)
 
 - Stances use the same extraction input. The same defect may apply to stance `affect`. Not in the pilot evidence.
+- Stances use the same extraction input and are not filtered. The count of dropped claims is the count of `claim_dropped_assistant_stated` log events.
 - Facet drift between two user-stated claims can still block supersession. Not seen in the pilot. A fix changes
   ADR-0098 D2 matching and needs an ADR.
 - The FRE-630 harness scores claim-emission recall with this prompt. It was not rerun (paid).

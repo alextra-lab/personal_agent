@@ -115,6 +115,7 @@ def test_assistant_only_status_claim_is_dropped() -> None:
 
 
 def test_label_is_read_case_and_space_insensitively() -> None:
+    """A label such as " Assistant " still drops the claim."""
     stamped = _finalize(
         [{"content": _ASSUMPTION, "facet": "jurisdiction_assumption", "stated_by": " Assistant "}],
         _EP2_USER,
@@ -128,6 +129,7 @@ def test_extraction_prompt_asks_for_the_speaker_label() -> None:
     prompt = _build_extraction_prompt("hello", "hi")
     assert prompt.count("stated_by") >= 3
     assert "I'll assume" in prompt  # the BAD example of the pilot defect
+    assert "accepts or confirms" in prompt  # a user confirmation of a proposal is "user"
 
 
 # ------------------------------------------------------------------------------- AC-4
@@ -196,7 +198,9 @@ def test_missing_or_unknown_label_keeps_the_claim() -> None:
 # ------------------------------------------------------------------------------- AC-3
 
 
-def _record(claim_id: str, content: str, facet: str, confidence: float, embedding: list[float]):
+def _record(
+    claim_id: str, content: str, facet: str, confidence: float, embedding: list[float]
+) -> ClaimRecord:
     return ClaimRecord(
         claim_id=claim_id,
         content=content,

@@ -183,6 +183,8 @@ CLAIMS — first-person SITUATIONAL FACTS about the user's own life/relationship
               guess, an inference, a suggestion, or something the Assistant looked up
               ("since you're in Paris I'll assume a French branch" is the ASSISTANT's
               assumption, not a fact the user told you). When both speakers state it, "user".
+              When the User accepts or confirms what the Assistant proposed ("yes, go with the
+              Lyon office", "correct"), the User now states it: "user".
     description — optional one sentence of context
 
 Do NOT put any provenance, timestamp, id, or record-date on stances or claims — the system
@@ -241,7 +243,7 @@ EXTRACTION RULES (follow strictly):
     Emit "new" whenever unsure. This signal is about the entity's DESCRIPTION only — never a
     stance or a claim.
 15. Set each claim's "stated_by" from the conversation text, never from what you think is true.
-    A claim whose only source is the Assistant's text gets "assistant" (it is then discarded).
+    A claim whose only source is the Assistant's text, with no User confirmation, gets "assistant".
 
 GOOD EXAMPLES:
   ✓ {{"name": "Paris", "type": "Location", "output_kind": "knowledge", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
@@ -829,6 +831,10 @@ def _drop_assistant_stated_claims(
     remove a claim, never to raise trust, so ADR-0098 AC-9 holds. A missing or unknown label
     keeps the claim, so a model that ignores the field loses no claim. A word-overlap rule
     was rejected: it dropped a user paraphrase ("meetings" in the text, "meeting" in the claim).
+
+    The two checks answer different questions. ``stated_by`` decides whether a claim is stored.
+    ``asserted_by`` (from :func:`_attribute_authorship`) decides how much a stored claim is
+    trusted. Neither one reads or sets the other.
 
     Args:
         claims: The stamped claim dicts.

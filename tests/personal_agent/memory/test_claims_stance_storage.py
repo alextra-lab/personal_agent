@@ -186,6 +186,69 @@ async def test_fre1739_user_correction_leaves_no_active_claim_with_the_old_value
 
 
 @pytest.mark.asyncio
+async def test_fre1739_pilot_sequence_leaves_no_france_claim(
+    owner_service: MemoryService,
+) -> None:
+    """FRE-1739 pilot sequence on the real writer, with the facets that the pilot used.
+
+    Turn 1: the assistant assumes France. The extractor emits that claim under
+    ``jurisdiction_assumption`` and labels it ``assistant``. Turn 2: the user says "I'm in the
+    United States" and the extractor emits ``current_country``. The facets differ, so the
+    writer cannot supersede the first claim. Before the fix, both claims stayed current. The
+    test writes every claim that the extractor stage returns, as the consolidator does.
+    """
+
+    def _embed(text: str, **_kw: object) -> list[float]:
+        return [1.0, 0.0] if "French" in text or "France" in text else [0.6, 0.8]
+
+    def _stage(claims: list[dict[str, object]], user_message: str, observed_at: datetime):
+        result: dict[str, object] = {"entities": [], "stances": [], "claims": claims}
+        _finalize_extraction(
+            result,
+            trace_id="trace-1739",
+            session_id="session-1739",
+            turn_timestamp=observed_at,
+            user_message=user_message,
+            assistant_response="Since you're on Europe/Paris I'll assume a French agence.",
+        )
+        return [_build_claim(c) for c in result["claims"]]  # type: ignore[attr-defined]
+
+    turn_1 = _stage(
+        [
+            {
+                "content": "The user wants a French branch under IDCC 2120.",
+                "facet": "jurisdiction_assumption",
+                "stated_by": "assistant",
+            }
+        ],
+        "I'm in banking and I need a branch pressure test.",
+        _T0,
+    )
+    turn_2 = _stage(
+        [
+            {
+                "content": "The user is in the United States.",
+                "facet": "current_country",
+                "update_kind": "correction",
+                "stated_by": "user",
+            }
+        ],
+        "I'm in the United States, not a French branch.",
+        _T1,
+    )
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=_embed),
+    ):
+        for claim in [*turn_1, *turn_2]:
+            assert claim is not None
+            await owner_service.assert_claim(claim, user_id=_OWNER_UID)
+
+    current = await _current_claims(owner_service)
+    assert [c["content"] for c in current] == ["The user is in the United States."]
+
+
+@pytest.mark.asyncio
 async def test_ac2_evolution_is_bitemporal_not_destructive(owner_service: MemoryService) -> None:
     with patch(
         "personal_agent.memory.service.generate_embedding",

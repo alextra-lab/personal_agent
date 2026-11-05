@@ -20,8 +20,9 @@ your own light pass for what a diff-scoped review misses: scope creep, doc drift
 acceptance-criteria adherence. Bounce rules:
 - Real-logic diff (src / script / behavioural config) with no self-review summary → bounce.
 - `src`-logic / schema / security / cost diff with no codex plan-review noted → bounce (mis-tiered).
-- Diff class `escalated` with no owner `/code-review ultra` on the thread → ask the owner
-  before merging (their typed, billed invocation — never run it yourself).
+- Diff class `escalated` with no `/code-review high` result on the ticket → order the working
+  seat to run it (`SendMessage`), and hold the merge until the comment arrives. Do not ask the
+  owner for ultra. Master never runs ultra.
 - Fold-ins that support the ticket are expected; bounce one only if it's risky or unrelated.
 
 ## 3 — Gate

@@ -71,8 +71,8 @@ Any diff file outside `docs/architecture_decisions/**/*.md` that is a runnable a
 (script, SQL migration, CI workflow, notebook, anything under `scripts/`/`sandbox/`/`src/`)
 carries build's review obligations: commit first, run `feature-dev:code-reviewer` +
 `security-review` on `git diff origin/main...HEAD`, fix confirmed findings on-branch, and apply
-build's diff-class triggers (escalate → flag for owner `/code-review ultra` in the PR body +
-handoff). A fenced code block inside the ADR's own markdown does not count; ambiguous → treat
+build's diff-class triggers (escalate → run `/code-review high <PR>` and post the result on the
+ticket, as build Step 6 states). A fenced code block inside the ADR's own markdown does not count; ambiguous → treat
 as executable.
 
 ## 4 — PR

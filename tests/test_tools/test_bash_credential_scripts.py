@@ -1,6 +1,6 @@
 """On ``cloud``, a plain call of a reviewed script gets its credential. No other form does (FRE-1732).
 
-The spawn is mocked, because the root outcome needs a root parent. That outcome is in
+The spawn is mocked, because the account change needs a root parent. That outcome is in
 ``scripts/eval/probe_bash_credential_isolation.py``, in the gateway image. The first two tests
 also run a real child with the account change removed, so CI shows what the environment holds.
 """
@@ -20,7 +20,13 @@ from personal_agent.tools.primitives._governance import (
     PathRefusalError,
     _check_path_governance,
 )
-from personal_agent.tools.primitives.bash import CHILD_SETPRIV_ARGV, bash_executor
+from personal_agent.tools.primitives.bash import (
+    CHILD_SETPRIV_ARGV,
+    SCRIPT_CHILD_GID,
+    SCRIPT_CHILD_UID,
+    SCRIPT_SETPRIV_ARGV,
+    bash_executor,
+)
 
 _CTX = TraceContext.new_trace()
 _CYPHER = "skills/graph-inspection/scripts/cypher.py"
@@ -97,10 +103,12 @@ async def test_seeded_the_same_command_shows_the_value_with_no_isolation(command
 async def test_a_plain_script_call_gets_its_credential_and_no_other(
     script: str, secret: str, prefix: str
 ) -> None:
-    """No shell, a fixed interpreter and script, and only the names that this script reads."""
+    """Its own account, no shell, a fixed interpreter and script, and only the names it reads."""
     argv, kwargs = await _spawn(f"python3 {prefix}{script} 'arg one'")
 
-    assert argv == (sys.executable, "-I", f"/app/{script}", "arg one")
+    assert argv == (*SCRIPT_SETPRIV_ARGV, sys.executable, "-I", f"/app/{script}", "arg one")
+    assert "--reuid=65533" in argv
+    assert "--no-new-privs" in argv
     assert kwargs["cwd"] == "/app"
     env = kwargs["env"]
     assert isinstance(env, dict)
@@ -120,7 +128,7 @@ async def test_a_redirection_that_stays_plain_has_no_effect_on_the_script_call(
     """These forms stay one plain call. No shell runs, so the words carry no redirection."""
     argv, _ = await _spawn(f"python3 {_CYPHER} q {suffix}")
 
-    assert argv == (sys.executable, "-I", f"/app/{_CYPHER}", "q")
+    assert argv == (*SCRIPT_SETPRIV_ARGV, sys.executable, "-I", f"/app/{_CYPHER}", "q")
 
 
 @pytest.mark.parametrize("tool", ["write", "edit"])
@@ -143,6 +151,9 @@ def test_the_image_creates_the_child_home_for_the_child_under_a_root_parent() ->
     dockerfile = (Path(__file__).parents[2] / "Dockerfile.gateway").read_text()
 
     assert f"install -d -o nobody -g nogroup -m 700 {env['HOME']}" in dockerfile
+    assert f"--uid {SCRIPT_CHILD_UID}" in dockerfile
+    assert f"--gid {SCRIPT_CHILD_GID}" in dockerfile
+    assert SCRIPT_CHILD_UID != 65534
     assert env["HOME"].startswith("/var/lib/")
     assert env["TMPDIR"] == "/tmp"
     assert not {"CURL_HOME", "XDG_CONFIG_HOME"} & set(env)

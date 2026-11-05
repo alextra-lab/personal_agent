@@ -52,12 +52,16 @@ def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
         return
     changed = 0
     failed = 0
+    second_names = 0
 
     def give(entry: Path) -> None:
-        nonlocal changed, failed
+        nonlocal changed, failed, second_names
         try:
             status = os.lstat(entry)
-            if _names_another_file(status) or (status.st_uid, status.st_gid) == CHILD_IDS:
+            if _names_another_file(status):
+                second_names += 1
+                return
+            if (status.st_uid, status.st_gid) == CHILD_IDS:
                 return
             os.chown(entry, CHILD_UID, CHILD_GID, follow_symlinks=False)
             changed += 1
@@ -68,7 +72,7 @@ def prepare_workspace(root: Path = WORKSPACE_ROOT) -> None:
     for directory, subdirs, files in os.walk(root, followlinks=False):
         for name in (*subdirs, *files):
             give(Path(directory, name))
-    log.info("child_workspace_prepared", changed=changed, failed=failed)
+    log.info("child_workspace_prepared", changed=changed, failed=failed, second_names=second_names)
 
 
 def path_for_root_open(path: Path) -> Path:

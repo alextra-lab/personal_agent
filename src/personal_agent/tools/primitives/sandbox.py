@@ -374,11 +374,12 @@ def _list_scratch_files(path: Path) -> list[str]:
     try:
         fd = open_no_symlinks(path_for_root_open(path), os.O_RDONLY | os.O_DIRECTORY)
         try:
-            return sorted(
-                str(path / name)
-                for name in os.listdir(fd)
-                if stat.S_ISREG(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode)
-            )
+            files: list[str] = []
+            for name in os.listdir(fd):
+                with suppress(FileNotFoundError):  # one removed file does not lose the others
+                    if stat.S_ISREG(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode):
+                        files.append(str(path / name))
+            return sorted(files)
         finally:
             os.close(fd)
     except OSError:

@@ -443,7 +443,6 @@ async def read_executor(
             next_action="Check the path with bash ls or find, then read an existing file.",
         )
 
-    actual_size = resolved.stat().st_size
     tail_cap = max_bytes if max_bytes is not None else LEGACY_TAIL_CAP
     requested_limit = limit if limit is not None else DEFAULT_LINE_LIMIT
     effective_limit = max(requested_limit, 1)  # a non-positive limit would skip content
@@ -452,6 +451,7 @@ async def read_executor(
     try:
         # The path can change to a link after the checks above, and this process is root.
         with os.fdopen(open_file_no_symlinks(resolved, os.O_RDONLY), "rb") as fh:
+            actual_size = os.fstat(fh.fileno()).st_size
             # ADR-0156 D9.4, second check, before any byte is read: the opened file is
             # the file recorded at grant time. This refuses a rename-over and a symlink
             # swapped in after the grant, including between the first check and the open.

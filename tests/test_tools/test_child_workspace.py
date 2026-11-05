@@ -815,6 +815,42 @@ def test_the_sandbox_lists_no_files_behind_a_link(tmp_path: Path) -> None:
         assert sandbox._list_scratch_files(tmp_path / "missing") == []
 
 
+def test_one_removed_file_does_not_lose_the_scratch_listing(tmp_path: Path) -> None:
+    """The child can remove a file during the listing. The other names stay."""
+    from personal_agent.tools.primitives import sandbox
+
+    (tmp_path / "kept.txt").write_text("x")
+    real_listdir = os.listdir
+
+    with (
+        patch.object(workspace, "settings") as settings,
+        patch.object(
+            sandbox.os,
+            "listdir",
+            side_effect=lambda fd: [*real_listdir(fd), "removed.txt"],
+        ),
+    ):
+        settings.deployment_profile = "cloud"
+        assert sandbox._list_scratch_files(tmp_path) == [str(tmp_path / "kept.txt")]
+
+
+@pytest.mark.asyncio
+async def test_read_reports_the_size_of_the_file_that_it_opened(tmp_path: Path) -> None:
+    """The size comes from the open file, so a swap cannot show the size of another file."""
+    target = tmp_path / "target.txt"
+    target.write_text("plain\n")
+
+    with patch.object(Path, "stat", side_effect=AssertionError("no stat by path for the size")):
+        with (
+            patch("personal_agent.tools.primitives.read._check_path_governance"),
+            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "is_file", return_value=True),
+        ):
+            result = await read_executor(str(target), ctx=_CTX)
+
+    assert result["size_bytes"] == len("plain\n")
+
+
 @pytest.mark.asyncio
 async def test_a_failed_scratch_directory_still_gives_what_it_created(tmp_path: Path) -> None:
     """The next call finds the parents in place, so it cannot give them."""

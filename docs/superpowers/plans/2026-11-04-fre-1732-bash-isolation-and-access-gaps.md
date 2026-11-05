@@ -20,13 +20,13 @@ The repository is public. Measured results stay on the ticket.
 - `nobody` with the secret in its environment: a parallel `cat /proc/<pid>/environ` as `nobody` can read it.
 - No secret: the two scripts stop working.
 
-So on the `cloud` profile only, a command that is exactly one plain call of one of these two scripts runs as root, with no shell:
+So on the `cloud` profile only, a command that is exactly one plain call of one of these two scripts runs as a second unprivileged account, `seshat-scripts`, with no shell. `nobody` cannot read that account's environment, and the account has no root, no capabilities and no Docker socket:
 
-- The argv is `sys.executable -I /app/<script> <parsed words>`, with `cwd` set to `/app`. Bash does not read the command, and `PATH` does not choose the interpreter.
+- The argv is `setpriv ... sys.executable -I /app/<script> <parsed words>`, with `cwd` set to `/app`. Bash does not read the command, and `PATH` does not choose the interpreter.
 - The environment is a fixed `PATH`, the locale names, and the names that this script reads. It has no `HOME` or `TMPDIR`, because `nobody` can write `/tmp`.
 - `probe_services.py` calls `psql -X`, so `psql` reads no start-up file.
 - The check uses `parse_bash`. It needs no parser refusal, one top-level subcommand with no refusal, literal words, `python3` first, the script word exactly `skills/...` or `/app/skills/...`, and subcommand text equal to the whole command.
-- A pipe, a list, an assignment, a redirection, an expansion or a trailing `&` fails the check, so that command runs as `nobody` with no secret.
+- A pipe, a list, an assignment, a redirection to a file, an expansion or a trailing `&` fails the check, so that command runs as `nobody` with no secret.
 - `eval` keeps `nobody` for every command (FRE-1505).
 
 Reviewed scripts that need no secret run as `nobody`.

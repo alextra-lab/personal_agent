@@ -68,7 +68,10 @@ def probe_postgres(env: Mapping[str, str]) -> tuple[bool, str]:
     """
     url = env.get("AGENT_DATABASE_URL", "")
     if not url:
-        return False, "AGENT_DATABASE_URL is not set in this environment"
+        return False, (
+            "AGENT_DATABASE_URL is not set in this environment. "
+            "In the gateway, run this script as the whole command, with no pipe or &&."
+        )
     parts = urlsplit(url.replace("postgresql+asyncpg://", "postgresql://", 1))
     password = unquote(parts.password or "")
     child_env = {**os.environ, "PGPASSWORD": password, "PGCONNECT_TIMEOUT": str(_TIMEOUT_S)}

@@ -28,10 +28,10 @@ Security model
   ``user``/``group``/``extra_groups`` spawn kwargs (FRE-1518). On ``cloud`` the child owns
   ``/app/agent_workspace`` (:mod:`._child_workspace`).
 * Two reviewed skill scripts need a credential (FRE-1732). On ``cloud``, when the whole command
-  is one plain call of such a script, the script runs as root with no shell, from a fixed
-  interpreter and path, and with only the names that it reads. ``nobody`` cannot read a root
-  process's environment, and the model does not control this process. Any other form, such as
-  a pipe, runs as ``nobody`` with no credential.
+  is one plain call of such a script, the script runs with no shell, from a fixed interpreter and
+  path, and with only the names that it reads. It runs as a second unprivileged account,
+  ``seshat-scripts``: ``nobody`` cannot read its environment, and it has no root, no capabilities
+  and no Docker socket. Any other form, such as a pipe, runs as ``nobody`` with no credential.
 
 FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation) ·
 FRE-1518 (isolation on the served event loop) · FRE-1732 (isolation on every deployment) · FRE-1574 (one permission model) ·
@@ -91,24 +91,35 @@ CHILD_ENV_NAMES: frozenset[str] = frozenset(
 )
 _CHILD_HOME = "/var/lib/seshat-bash-home"
 _CHILD_TMPDIR = "/tmp"
-# setpriv (util-linux) changes identity and then execs bash, so the spawned PID is bash.
+
+
+# setpriv (util-linux) changes identity and then execs the program, so the spawned PID is it.
 # All capability sets are cleared, and no_new_privs stops a setuid binary regaining root.
-CHILD_SETPRIV_ARGV: tuple[str, ...] = (
-    "/usr/bin/setpriv",
-    f"--reuid={CHILD_UID}",
-    f"--regid={CHILD_GID}",
-    "--clear-groups",
-    "--inh-caps=-all",
-    "--ambient-caps=-all",
-    "--bounding-set=-all",
-    "--no-new-privs",
-    "--",
-)
+def _setpriv_argv(uid: int, gid: int) -> tuple[str, ...]:
+    return (
+        "/usr/bin/setpriv",
+        f"--reuid={uid}",
+        f"--regid={gid}",
+        "--clear-groups",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--bounding-set=-all",
+        "--no-new-privs",
+        "--",
+    )
+
+
+CHILD_SETPRIV_ARGV = _setpriv_argv(CHILD_UID, CHILD_GID)
+# The account in Dockerfile.gateway for a script that holds a credential. It is not ``nobody``, so
+# a ``nobody`` child cannot read /proc/<pid>/environ of the script.
+SCRIPT_CHILD_UID = 65533
+SCRIPT_CHILD_GID = 65533
+SCRIPT_SETPRIV_ARGV = _setpriv_argv(SCRIPT_CHILD_UID, SCRIPT_CHILD_GID)
 
 # FRE-1732: the reviewed skill scripts that need a credential, and the names that each one reads.
-# The root process that runs one takes the interpreter, the script and PATH from here, not from
-# the command. It gets no HOME or TMPDIR, because ``nobody`` can write /tmp, and tools read
-# start-up files from those places. A new entry needs a review of the script's arguments.
+# The process that runs one takes the interpreter, the script and PATH from here, not from the
+# command. It gets no HOME or TMPDIR, because ``nobody`` can write /tmp, and tools read start-up
+# files from those places. A new entry needs a review of the script's arguments.
 _APP_DIR = "/app"
 _OVERFLOW_ROOT = Path("/tmp/agent_scratch")
 _SPACES = re.compile(r"\s+")
@@ -292,7 +303,7 @@ def _credential_script_call(command: str) -> tuple[list[str], dict[str, str]] | 
         command: The raw command string.
 
     Returns:
-        The argv and environment for the root process, or ``None``.
+        The argv and environment for the script's own account, or ``None``.
     """
     parsed = parse_bash(command)
     if parsed.refusal is not None or len(parsed.top_level) != 1:
@@ -314,7 +325,7 @@ def _credential_script_call(command: str) -> tuple[list[str], dict[str, str]] | 
     }
     env["PATH"] = _SCRIPT_CHILD_PATH
     # -I: no PYTHON* variable, and neither the script's directory nor the user's is on sys.path.
-    return [sys.executable, "-I", f"{_APP_DIR}/{script}", *words[2:]], env
+    return [*SCRIPT_SETPRIV_ARGV, sys.executable, "-I", f"{_APP_DIR}/{script}", *words[2:]], env
 
 
 def _truncate_to_bytes(s: str, max_bytes: int) -> str:
@@ -438,7 +449,7 @@ async def bash_executor(
         trace_id=trace_id,
         command=command,
         timeout_seconds=timeout_seconds,
-        credential_isolation=isolated and script_call is None,
+        credential_isolation=isolated,
         credential_script=script_call is not None,
     )
 

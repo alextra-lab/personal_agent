@@ -69,22 +69,20 @@ _DEV_TOKEN = TokenInfo(
 )
 
 
-def _expand_env_var(value: str) -> str:
+def _expand_env_var(value: str) -> str | None:
     """Expand ``${VAR_NAME}`` patterns using os.environ.
 
     Args:
         value: Raw value string, potentially containing ``${VAR}`` references.
 
     Returns:
-        Expanded string. An unset variable stays as its literal reference, and
-        :func:`load_token_config` refuses that entry.
+        Expanded string, or ``None`` when a reference is unset or blank, or the result is blank.
+        This file's literal text must never work as a token (FRE-1732).
     """
-
-    def replace(match: re.Match[str]) -> str:
-        var_name = match.group(1)
-        return os.environ.get(var_name, match.group(0))
-
-    return _ENV_REFERENCE.sub(replace, value)
+    if any(not os.environ.get(name, "").strip() for name in _ENV_REFERENCE.findall(value)):
+        return None
+    expanded = _ENV_REFERENCE.sub(lambda match: os.environ[match.group(1)], value)
+    return expanded if expanded.strip() else None
 
 
 def load_token_config(path: Path) -> dict[str, TokenInfo]:
@@ -117,14 +115,11 @@ def load_token_config(path: Path) -> dict[str, TokenInfo]:
         rate_limit_raw: str | int = entry.get("rate_limit", 100)
 
         if not name or not secret_raw:
-            log.warning("gateway_access_config_invalid_entry", entry=entry)
+            log.warning("gateway_access_config_invalid_entry", fields=sorted(entry))
             continue
 
         secret = _expand_env_var(str(secret_raw))
-        # The file is public, so an unset reference must never work as a token (FRE-1732). A literal
-        # stays possible for a private dev file. A test keeps the public file free of literals.
-        references = _ENV_REFERENCE.findall(str(secret_raw))
-        if not secret.strip() or any(not os.environ.get(ref, "").strip() for ref in references):
+        if secret is None:
             log.warning("gateway_access_token_unset", name=name)
             continue
 

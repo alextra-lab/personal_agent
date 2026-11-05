@@ -131,3 +131,15 @@ def test_the_repo_config_holds_no_literal_secret() -> None:
     for entry in tokens:
         assert entry["secret"].startswith("${"), entry["name"]
         assert entry["secret"].endswith("}"), entry["name"]
+
+
+def test_an_invalid_entry_logs_no_secret(tmp_path: Path) -> None:
+    """An entry with no name can hold a literal secret, so the log names only its fields."""
+    path = tmp_path / "access.yaml"
+    path.write_text('tokens:\n  - secret: "fre1732-literal-secret"\n    scopes: [knowledge:read]\n')
+
+    with patch("personal_agent.gateway.auth.log") as log:
+        assert load_token_config(path) == {}
+
+    assert "fre1732-literal-secret" not in str(log.warning.call_args)
+    assert log.warning.call_args.kwargs["fields"] == ["scopes", "secret"]

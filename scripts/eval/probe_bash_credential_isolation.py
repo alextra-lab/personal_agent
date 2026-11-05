@@ -70,6 +70,7 @@ from personal_agent.tools.primitives._child_workspace import give_to_child, prep
 from personal_agent.tools.primitives.bash import (
     CHILD_ENV_NAMES,
     CHILD_SETPRIV_ARGV,
+    SCRIPT_SETPRIV_ARGV,
     bash_executor,
     child_env,
 )
@@ -129,6 +130,18 @@ async def _item_one_commands(credentials: dict[str, str], ctx: TraceContext) -> 
     return leaks
 
 
+async def _child_reads(key: str, prefix: tuple[str, ...], ctx: TraceContext) -> bool:
+    """Return whether a nobody child reads ``key`` from a process that runs with ``prefix``."""
+    sibling = subprocess.Popen([*prefix, "sleep", "30"], env={"PROBE_SIBLING_KEY": key})
+    try:
+        await asyncio.sleep(0.2)
+        result = await bash_executor(f"cat /proc/{sibling.pid}/environ", ctx=ctx)
+    finally:
+        sibling.kill()
+        sibling.wait()
+    return key in _call_output(result)
+
+
 async def _script_calls(credentials: dict[str, str], ctx: TraceContext) -> dict[str, object]:
     """Check the reviewed scripts: the plain call gets its credential, and no other form does."""
     cypher = "python3 skills/graph-inspection/scripts/cypher.py 'RETURN 1 AS n'"
@@ -150,6 +163,25 @@ async def _script_calls(credentials: dict[str, str], ctx: TraceContext) -> dict[
             "import_failed": "No module named" in output,
             "leaked": _leaked_names(output, credentials),
         }
+    # The account of a script that holds a key: a nobody child cannot read its environment. A
+    # nobody process that holds the same key can be read, so the first check can fail.
+    key = "fake-sibling-key-0123456789"
+    report["script_account_is_hidden_from_the_child"] = not await _child_reads(
+        key, SCRIPT_SETPRIV_ARGV, ctx
+    )
+    report["seeded_nobody_sibling_is_visible_to_the_child"] = await _child_reads(
+        key, CHILD_SETPRIV_ARGV, ctx
+    )
+    identity = subprocess.run(
+        [*SCRIPT_SETPRIV_ARGV, "sh", "-c", "id -u; grep CapEff /proc/self/status"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    report["script_account_has_no_root_and_no_capability"] = (
+        "65533" in identity and "0000000000000000" in identity
+    )
+
     # The scripts that need no credential run as nobody. Each must still do its work.
     diagram = "/tmp/fre1732-diagram.mmd"
     Path(diagram).write_text("flowchart LR\n  A-->B\n")
@@ -403,10 +435,17 @@ def _cloud_checks_pass(report: dict[str, object]) -> bool:
     report["workspace_after"] = after
     return (
         all(not names for names in leaks.values())
-        and all(not entry["leaked"] and not entry["import_failed"] for entry in scripts.values())
+        and all(
+            not entry["leaked"] and not entry["import_failed"]
+            for entry in scripts.values()
+            if isinstance(entry, dict)
+        )
         and not scripts["cypher_plain"]["says_not_set"]
         and not scripts["cypher_abs"]["says_not_set"]
         and not scripts["probe_plain"]["says_not_set"]
+        and scripts["script_account_is_hidden_from_the_child"]
+        and scripts["seeded_nobody_sibling_is_visible_to_the_child"]
+        and scripts["script_account_has_no_root_and_no_capability"]
         and scripts["cypher_pipe"]["says_not_set"]
         and scripts["cypher_list"]["says_not_set"]
         and scripts["probe_pipe"]["says_not_set"]

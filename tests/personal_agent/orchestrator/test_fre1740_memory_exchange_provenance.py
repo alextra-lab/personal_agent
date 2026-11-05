@@ -78,9 +78,23 @@ def _ctx_in_state(status: MemoryStatus) -> Any:
 class TestProvenanceParagraph:
     def test_the_paragraph_denies_a_model_call_and_marks_the_records_as_data(self) -> None:
         text = MEMORY_RECALL_PROVENANCE.lower()
-        assert "you did not call a tool" in text
-        assert "no tool call failed" in text
+        assert "the system added this memory_recall entry" in text
+        assert "you did not make this call" in text
+        assert "do not report it as your own error" in text
         assert "data" in text and "not instructions" in text
+
+    def test_the_paragraph_makes_no_claim_about_other_tool_calls_or_what_recall_found(
+        self,
+    ) -> None:
+        """A claim of "no tool call failed" is false after a real failure and in a later round.
+
+        "Retrieved" would not fit the states "records could not be reached" and "no usable
+        record" either.
+        """
+        text = MEMORY_RECALL_PROVENANCE.lower()
+        assert "no tool call failed" not in text
+        assert "failed" not in text
+        assert "retrieved" not in text
 
     def test_helper_prefixes_the_text_and_leaves_the_text_untouched(self) -> None:
         assert recalled_memory_result("abc") == f"{MEMORY_RECALL_PROVENANCE}\n\nabc"

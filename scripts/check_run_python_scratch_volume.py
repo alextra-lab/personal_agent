@@ -88,8 +88,13 @@ def inner() -> int:
             result = results[key]
             check(result["exit_code"] == 0, f"{key}: the call succeeds")
             check(result["scratch_files"] == [str(path)], f"{key}: scratch_files lists the file")
-            check(path.is_file() and path.read_text() == text, f"{key}: the gateway reads the content")
-            check(path.is_file() and path.stat().st_uid == 1000, f"{key}: the sandbox user owns the file")
+            check(
+                path.is_file() and path.read_text() == text, f"{key}: the gateway reads the content"
+            )
+            check(
+                path.is_file() and path.stat().st_uid == 1000,
+                f"{key}: the sandbox user owns the file",
+            )
             check(f"['{name}']" in str(result["stdout"]), f"{key}: the sandbox sees only its file")
         check(
             (sandbox.stat().st_uid, sandbox.stat().st_gid) == (0, 0),
@@ -186,5 +191,7 @@ if __name__ == "__main__":
     )
     arguments = parser.parse_args()
     sys.exit(
-        inner() if arguments.inner else driver(arguments.sandbox_image, arguments.gateway_image, arguments.src)
+        inner()
+        if arguments.inner
+        else driver(arguments.sandbox_image, arguments.gateway_image, arguments.src)
     )

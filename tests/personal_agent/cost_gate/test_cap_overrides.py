@@ -253,3 +253,8 @@ def test_fre1733_a_later_file_change_to_another_field_takes_effect() -> None:
 
     assert applied.roles["main_inference"].safety_factor == 1.5
     assert applied.roles["main_inference"].default_output_tokens == 777
+
+
+def test_fre1733_an_empty_object_is_refused_and_not_read_as_a_clear() -> None:
+    with pytest.raises(BudgetConfigError, match="non-empty"):
+        validate_role_estimate_override(_budget_with_role(), "role_estimate.main_inference", {})

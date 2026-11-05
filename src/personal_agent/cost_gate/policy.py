@@ -205,6 +205,8 @@ def validate_role_estimate_override(
     role = parameter.removeprefix(ROLE_ESTIMATE_PARAMETER_PREFIX)
     if role not in config.roles:
         raise BudgetConfigError(f"the role {role} is not in the budget file")
+    if value == {}:
+        raise BudgetConfigError(f"{parameter} takes a non-empty object")
     edited = _role_with_value(role, config.roles[role], value)
     dump = edited.model_dump(mode="json")
     assert isinstance(value, dict)

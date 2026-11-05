@@ -1,7 +1,7 @@
 """Session message writes on real rows of the test Postgres (FRE-1733 AC-1, AC-5).
 
-``_chat_impl`` loads the session and then waits for the prior turn's write. These tests land a write
-during that wait, and they run concurrent appends.
+``_chat_impl`` must hold the reply that the prior turn's write adds. These tests land a write during
+that wait, and they run concurrent appends. The old code loaded the session before the wait.
 
 Marker: ``integration`` — excluded from ``make test`` because it needs a live DB.
 """
@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -25,7 +26,7 @@ from sqlalchemy.pool import NullPool
 from personal_agent.config import settings as app_settings
 from personal_agent.events.redis_backend import RedisStreamBus
 from personal_agent.events.session_write_waiter import release_session_write_wait
-from personal_agent.service.app import chat
+from personal_agent.service.app import chat, get_deduplicator
 from personal_agent.service.auth import RequestUser
 from personal_agent.service.repositories.session_repository import SessionRepository
 
@@ -191,6 +192,57 @@ async def test_an_append_to_a_session_with_null_messages_starts_the_list(
         await SessionRepository(db).append_message(session_id, dict(_FIRST_USER))
 
     assert await _stored_messages(maker, session_id) == [_FIRST_USER]
+
+
+async def test_an_append_to_a_session_with_a_json_null_starts_the_list(
+    maker: async_sessionmaker[AsyncSession], seeded: tuple[UUID, UUID]
+) -> None:
+    """A JSON null is not SQL NULL, and ``'null'::jsonb || array`` keeps a null element."""
+    _, session_id = seeded
+    async with maker() as db:
+        await db.execute(
+            text("UPDATE sessions SET messages = 'null'::jsonb WHERE session_id = :sid"),
+            {"sid": session_id},
+        )
+        await db.commit()
+    async with maker() as db:
+        await SessionRepository(db).append_message(session_id, dict(_FIRST_USER))
+
+    assert await _stored_messages(maker, session_id) == [_FIRST_USER]
+
+
+async def test_a_session_deleted_during_the_wait_returns_404(
+    maker: async_sessionmaker[AsyncSession], seeded: tuple[UUID, UUID]
+) -> None:
+    """The load runs after the wait, so a deleted session is the endpoint's normal 404."""
+    user_id, session_id = seeded
+
+    async def _delete_during_the_wait(sid: str, *, trace_id: str) -> None:
+        async with maker() as other:
+            await other.execute(
+                text("DELETE FROM sessions WHERE session_id = :sid"), {"sid": UUID(sid)}
+            )
+            await other.commit()
+
+    bus = MagicMock(spec=RedisStreamBus)
+    async with maker() as db:
+        with (
+            patch("personal_agent.events.bus.get_event_bus", return_value=bus),
+            patch(
+                "personal_agent.events.session_write_waiter.await_previous_session_write",
+                _delete_during_the_wait,
+            ),
+            pytest.raises(HTTPException) as refused,
+        ):
+            await chat(
+                message="second question",
+                session_id=str(session_id),
+                request_user=RequestUser(user_id=user_id, email="fre1733@test.invalid"),
+                db=db,
+            )
+    get_deduplicator().release(str(session_id), "second question")
+
+    assert refused.value.status_code == 404
 
 
 async def test_an_append_to_an_unknown_session_returns_none(

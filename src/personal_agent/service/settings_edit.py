@@ -386,8 +386,9 @@ async def set_override(
         )
         raise
     if stored_value == {} and _stores_changed_fields(parameter):
-        # Every field equals the file, so no override is needed (FRE-1733). An empty row reads as an
-        # override that holds nothing. This runs outside the lock, which Clear takes.
+        # Every sent field equals the file, so no override is needed (FRE-1733). The validators
+        # refuse an empty value. An empty row reads as an override that holds nothing. This runs
+        # outside the lock, which Clear takes.
         await clear_override(db, parameter, changed_by=changed_by, trace_id=trace_id)
         return stored_value
     hidden = _is_hidden_parameter(parameter)
@@ -426,10 +427,11 @@ def _stores_changed_fields(parameter: str) -> bool:
 
 
 def _register_pricing(parameter: str, trace_id: str) -> None:
-    """Keep the litellm cost table equal to the deployments, after a deployment edit (FRE-1733).
+    """Register the price of each priced deployment again, after a deployment edit (FRE-1733).
 
-    Budget counts read that table. A failure logs an error and does not undo the edit. The next edit
-    or the next start repairs the table.
+    Budget counts read the litellm cost table. A failure logs an error and does not undo the edit.
+    The next edit or the next start repairs the table. Registration only adds or overwrites. A price
+    that an edit or a Clear removes, and the key of an old ``id`` or ``provider``, stay until a restart.
     """
     if not parameter.startswith(DEPLOYMENT_PARAMETER_PREFIX):
         return

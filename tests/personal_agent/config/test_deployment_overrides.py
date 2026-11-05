@@ -82,6 +82,26 @@ def test_the_order_of_a_set_field_is_not_a_change() -> None:
         assert stored == {}, order
 
 
+def test_a_stored_domain_equals_the_live_row_in_any_set_order() -> None:
+    """The menu compares a stored row and the live row as lists (FRE-1733)."""
+    config = load_model_config()
+    key, definition = next(
+        (name, model)
+        for name, model in config.models.items()
+        if model.reasoning_effort_domain and len(model.reasoning_effort_domain) > 2
+    )
+    domain = definition.reasoning_effort_domain
+    assert domain is not None
+    narrowed = sorted(domain)[:-1]
+
+    for order in itertools.permutations(narrowed):
+        stored = validate_deployment_override(key, {"reasoning_effort_domain": list(order)})
+        assert stored == {"reasoning_effort_domain": narrowed}, order
+    live = definition.model_copy(update={"reasoning_effort_domain": frozenset(narrowed)})
+    assert live.model_dump(mode="json")["reasoning_effort_domain"] == narrowed
+    assert isinstance(definition.model_dump()["reasoning_effort_domain"], frozenset)
+
+
 def test_one_changed_field_of_the_whole_row_stores_one_field(key: str) -> None:
     """The PWA sends the whole row (FRE-1733 AC-4)."""
     fields = file_deployment_fields(key)

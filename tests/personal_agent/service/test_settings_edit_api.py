@@ -817,6 +817,21 @@ def test_fre1733_an_unchanged_row_with_no_override_writes_nothing(store: _Store)
     assert store.audit == []
 
 
+@pytest.mark.parametrize(
+    "parameter",
+    [f"tool.{next(iter(file_governance_config().tools))}", "role_estimate.main_inference"],
+)
+def test_fre1733_an_empty_put_keeps_a_stored_row(store: _Store, parameter: str) -> None:
+    """A client that sends ``{}`` gets a refusal, the same as on a deployment row."""
+    store.overrides[parameter] = {"a_stored_field": 1}
+
+    resp = _client().put(_URL, json={"parameter": parameter, "value": {}})
+
+    assert resp.status_code == 422
+    assert parameter in store.overrides
+    assert store.audit == []
+
+
 def test_fre1733_a_setting_that_stores_an_empty_object_keeps_its_row(store: _Store) -> None:
     """The row is removed for the three field families only. A setting can hold ``{}``."""
     parameter = "setting.sub_agent_rounds_by_thoroughness"

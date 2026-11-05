@@ -207,3 +207,8 @@ def test_fre1733_a_later_file_change_to_another_field_takes_effect(tool_name: st
 
     assert applied.tools[tool_name].loop_max_consecutive == policy.loop_max_consecutive + 3
     assert applied.tools[tool_name].loop_max_per_signature == policy.loop_max_per_signature + 1
+
+
+def test_fre1733_an_empty_object_is_refused_and_not_read_as_a_clear(tool_name: str) -> None:
+    with pytest.raises(GovernanceConfigError, match="non-empty"):
+        validate_governance_override(f"tool.{tool_name}", {})

@@ -2625,6 +2625,9 @@ async def _chat_impl(
             raise HTTPException(status_code=409, detail="Message already being processed")
 
     repo = SessionRepository(db)
+    from personal_agent.events.bus import get_event_bus
+    from personal_agent.events.redis_backend import RedisStreamBus
+    from personal_agent.events.session_write_waiter import await_previous_session_write
 
     # --- Phase: session_db_lookup ---
     if session_id:
@@ -2632,6 +2635,14 @@ async def _chat_impl(
             parsed_session_id = UUID(session_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="session_id must be a valid UUID") from exc
+        # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
+        # FRE-1733: this runs before the load, as in /chat/stream. Loaded first, the session does
+        # not hold the reply that lands during the wait. A new session has no prior write.
+        sid = str(parsed_session_id)
+        if isinstance(get_event_bus(), RedisStreamBus):
+            await await_previous_session_write(sid, trace_id=trace_id)
+        elif sid in _pending_append_tasks:
+            await _pending_append_tasks.pop(sid)
         session = await repo.get(parsed_session_id, user_id=request_user.user_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -2653,24 +2664,11 @@ async def _chat_impl(
             seshat_effort=effort_level,
         )
 
-    # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
     sid = str(session.session_id)
     # ADR-0107 D5: `chat()` bound session_id from the raw (possibly-None, for a
     # new-session request) parameter before the session existed — re-bind now
     # that the real id is known, so downstream logs never carry a null session_id.
     structlog.contextvars.bind_contextvars(session_id=sid)
-    from personal_agent.events.bus import get_event_bus
-    from personal_agent.events.redis_backend import RedisStreamBus
-    from personal_agent.events.session_write_waiter import await_previous_session_write
-
-    if isinstance(get_event_bus(), RedisStreamBus):
-        await await_previous_session_write(sid, trace_id=trace_id)
-    elif sid in _pending_append_tasks:
-        await _pending_append_tasks.pop(sid)
-    # FRE-1733: the load above ran before the wait, and a second select does not overwrite a loaded
-    # attribute. Without this, the turn does not see the reply that landed during the wait.
-    if session_id:
-        await db.refresh(session)
 
     # --- Phase: session_hydration ---
     prior_messages, messages_dropped_by_window = _apply_history_window(

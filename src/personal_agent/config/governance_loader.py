@@ -244,6 +244,8 @@ def validate_governance_override(parameter: str, value: JsonValue) -> JsonValue:
         name = parameter.removeprefix(TOOL_PARAMETER_PREFIX)
         if name not in config.tools:
             raise GovernanceConfigError(f"the tool {name} is not in the governance file")
+        if value == {}:
+            raise GovernanceConfigError(f"{parameter} takes a non-empty object")
         edited = _tool_with_value(config.tools[name], value)
         policy = edited.model_dump(mode="json")
         assert isinstance(value, dict)

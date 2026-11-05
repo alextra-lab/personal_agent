@@ -51,9 +51,10 @@ return session
 The message goes inside a one-item array, so a message is always one new element. The read before
 the write goes away. The validation of assistant fields stays.
 
-File: `src/personal_agent/service/app.py`, `_chat_impl`: after the wait, and only for an existing
-session, call `await db.refresh(session)`. The ownership check stays before the wait. A new session
-has no prior write. The refresh is a smaller change than moving the wait above the load.
+File: `src/personal_agent/service/app.py`, `_chat_impl`: wait for the prior write before the load,
+as `/chat/stream` does. A new session has no prior write. A first version kept the load first and
+called `db.refresh` after the wait. `/code-review high` found that it raised on a session deleted
+during the wait, and that it held a transaction across the wait.
 
 Tests: 20 concurrent appends on separate sessions all survive, in the same file. A session that holds
 a stale identity map appends without a loss. The returned session holds the new message.
@@ -127,7 +128,8 @@ integration tests of this ticket on the test stack, then self-review and the PR.
 
 ## Known limits
 
-- A deployment with no file price keeps an edited price in `litellm.model_cost` after Clear, until a
-  restart. `register_model_pricing` skips a definition with no price, and litellm has no remove call.
+- A price that an edit or a Clear removes stays in `litellm.model_cost` until a restart, and so does
+  the key of an old `id` or `provider`. `register_model_pricing` skips a definition with no price,
+  and litellm has no remove call.
 - A row that names a field equal to a later file value stays stored until the next edit. It has no
   effect.

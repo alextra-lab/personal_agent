@@ -203,11 +203,12 @@ class SessionRepository:
 
         # FRE-1733: one statement, so two appends cannot lose each other, and a session object that
         # this db session loaded earlier cannot write its old list back. The one-item array keeps
-        # the message one element.
+        # the message one element. The CASE covers SQL NULL and a stored JSON null.
         await self.db.execute(
             text(
                 "UPDATE sessions "
-                "SET messages = COALESCE(messages, '[]'::jsonb) || CAST(:message AS jsonb), "
+                "SET messages = CASE jsonb_typeof(messages) WHEN 'array' THEN messages "
+                "ELSE '[]'::jsonb END || CAST(:message AS jsonb), "
                 # ADR-0098 D4/D6 (FRE-860) — writing messages reactivates a
                 # previously soft-pruned session; clear the tombstone.
                 "last_active_at = :now, purged_at = NULL "
@@ -220,10 +221,13 @@ class SessionRepository:
             },
         )
         await self.db.commit()
-        session = await self.get(session_id)
-        if session is not None:
-            await self.db.refresh(session)
-        return session
+        # A plain select does not overwrite the attributes of an object that is already loaded.
+        result = await self.db.execute(
+            select(SessionModel)
+            .where(SessionModel.session_id == session_id)
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
 
     async def delete(self, session_id: UUID) -> bool:
         """Delete session (internal — no ownership check).

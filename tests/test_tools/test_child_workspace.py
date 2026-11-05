@@ -788,6 +788,23 @@ def test_a_refused_file_with_a_second_name_is_not_emptied(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_read_names_a_second_name_when_it_refuses(tmp_path: Path) -> None:
+    """The refusal text for ``read`` does not claim that the path changed only."""
+    target = tmp_path / "file.txt"
+    target.write_text("one two")
+    os.link(target, tmp_path / "second_name.txt")
+
+    with (
+        patch("personal_agent.tools.primitives.read._check_path_governance"),
+        pytest.raises(ReadError) as refused,
+    ):
+        await read_executor(str(target), ctx=_CTX)
+
+    assert refused.value.retryable is False
+    assert "second name" in refused.value.message
+
+
+@pytest.mark.asyncio
 async def test_read_write_and_edit_still_work_on_a_plain_file(tmp_path: Path) -> None:
     """The second-name refusal does not stop the three tools on a normal file."""
     target = tmp_path / "file.txt"

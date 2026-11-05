@@ -2286,6 +2286,8 @@ class LiteLLMClient:
                                 async for chunk in stream:
                                     # Any chunk is a sign of life — reasoning and prefill
                                     # reports included. Separate from the content fold below.
+                                    # Only chunks that litellm yields reach this line. It drops
+                                    # a role-only delta after the first chunk (FRE-1738).
                                     inflight.touch(inflight_key)
                                     dumped = chunk.model_dump()
                                     if progress_sink is not None:

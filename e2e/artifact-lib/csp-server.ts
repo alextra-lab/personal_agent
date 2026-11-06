@@ -16,7 +16,7 @@
 import { createServer, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, normalize, extname } from 'node:path';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -39,11 +39,15 @@ interface Manifest {
 /**
  * Start a CSP static server rooted at `rootDir` (the built fixtures directory).
  * Resolves once listening; `origin` is `http://127.0.0.1:<port>`.
+ *
+ * The CSP template comes from `manifestPath`, which defaults to `build-manifest.json` in
+ * `rootDir`. The dev-agent images (FRE-1682) pass a manifest that lives outside the served root.
  */
-export async function startCspServer(rootDir: string): Promise<CspServer> {
-  const manifest = JSON.parse(
-    await readFile(join(rootDir, 'build-manifest.json'), 'utf-8'),
-  ) as Manifest;
+export async function startCspServer(
+  rootDir: string,
+  manifestPath: string = join(rootDir, 'build-manifest.json'),
+): Promise<CspServer> {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as Manifest;
 
   const server: Server = createServer(async (req, res) => {
     const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

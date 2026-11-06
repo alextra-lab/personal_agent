@@ -1,0 +1,3 @@
+{
+  "csp_header_template": "default-src 'none'; script-src 'unsafe-inline' {ORIGIN}; style-src 'unsafe-inline' {ORIGIN}; img-src data: {ORIGIN}; font-src data: {ORIGIN}; connect-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors https://agent.example.com; webrtc 'block'; sandbox allow-scripts"
+}

@@ -584,6 +584,37 @@ services:
       caddy:
         condition: service_healthy
 
+  # ── Egress proxy of the dev-agent network (ADR-0159 D4.5; FRE-1682) ───────────────────────────
+  # The development agent's containers run on `dev-agent`, an internal network with no route out.
+  # They are started per job by the gateway, not by compose. This proxy is the one exit: HTTPS to
+  # registry.npmjs.org and nothing else (docker/dev-agent/squid.conf). It holds no credential, no
+  # volume and no port. It sets no container_name, so a test project can run beside production.
+  dev-agent-proxy:
+    build:
+      context: docker/dev-agent
+      dockerfile: Dockerfile.proxy
+    image: seshat-dev-proxy:0.1
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,size=16m
+    mem_limit: 128m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      dev-agent:
+        aliases:
+          - dev-agent-proxy
+      dev-agent-egress: {}
+
 volumes:
   # PostgreSQL data (persisted)
   postgres_data_cloud:
@@ -672,3 +703,13 @@ networks:
     ipam:
       config:
         - subnet: 172.25.0.0/16
+
+  # The development agent's network (ADR-0159 D4.1). `internal: true` gives it no route to the
+  # internet, the data stores, Caddy or the gateway. Only dev-agent-proxy joins it from compose.
+  dev-agent:
+    driver: bridge
+    internal: true
+
+  # The proxy's way out. Only dev-agent-proxy joins it.
+  dev-agent-egress:
+    driver: bridge

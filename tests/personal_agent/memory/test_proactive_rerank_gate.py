@@ -249,6 +249,7 @@ class TestAC3TheGatedValueIsTheRerankersOwnOutput:
         assert out.candidates == []
         assert _reasons(out) == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
 
+
 class TestAC4NoScoreNoAdmissionOnOrder:
     @pytest.mark.asyncio
     async def test_reranker_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:

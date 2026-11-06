@@ -422,7 +422,7 @@ embedding:
 reranker:
   kind: reranker
   provider: voyage                                 # Managed Voyage endpoint
-  id: "rerank-3"                                 # Model ID at Voyage
+  id: "rerank-3"                                   # Model ID at Voyage
   endpoint: "https://api.voyageai.com/v1"
   context_length: 32000
   max_concurrency: 5

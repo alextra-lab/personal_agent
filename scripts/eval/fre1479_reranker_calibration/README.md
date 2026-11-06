@@ -43,7 +43,7 @@ non-match as the negative.
 Every one must pass before a number is reported.
 
 **P1 — cross-implementation, entity documents only.** `separation_benchmark.py`'s
-`voyage-rerank-3` arm (`INDEPENDENT_ARM`; it must name the serving model, because the artifact takes its model label from it) is an independently authored pipeline: its own corpus build
+`voyage-rerank-3` arm is an independently authored pipeline: its own corpus build
 (`"{name}: {description}"`), its own HTTP client, its own response parser. Compared on
 FRE-694's three aggregates at FRE-694's own 0.02 tolerance.
 

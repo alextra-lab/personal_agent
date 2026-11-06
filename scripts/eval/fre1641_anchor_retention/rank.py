@@ -1,8 +1,8 @@
 """Rank each page fixture with the four arms of ADR-0158 D4.
 
 The ranking is ``personal_agent.tools.passages.rank_passages``, the code T3 ships (D1.8). This
-module supplies only the rerank call: Voyage ``rerank-*`` (the model the ``reranker`` role names) over HTTP, with the key from the
-secrets store. It records no vendor cost to Postgres and has no fallback, unlike
+module supplies only the rerank call: Voyage over HTTP, with the model that the ``reranker`` role
+names and the key from the secrets store. It records no vendor cost to Postgres and has no fallback, unlike
 ``memory.reranker.rerank``: the harness writes nothing, and it measures the serving model alone.
 
 The call is cached by its exact input, so R4 reuses the R1 or R3 work of the same page and costs

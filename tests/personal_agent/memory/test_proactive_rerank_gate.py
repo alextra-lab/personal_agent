@@ -243,7 +243,6 @@ class TestAC3TheGatedValueIsTheRerankersOwnOutput:
         assert out.candidates == []
         assert _reasons(out) == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
 
-
     def test_a_score_from_the_previous_model_is_unavailable_not_admitted(self) -> None:
         """FRE-1745: a bound is never applied to a score from another model, even a Voyage one."""
         out = _build([_entity_row()], {("entity", "Kubernetes"): _value(0.99, PREVIOUS_MODEL)})

@@ -1005,12 +1005,14 @@ models:
   # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
   reranker:
     kind: reranker
-    # Voyage rerank-2.5 — managed reranker API (FRE-851). PRIMARY: ~250ms,
-    # quality-equivalent to the Mac 4B (FRE-695 J=0.73 vs 0.747, inside n=54
-    # noise). Falls back to reranker_fallback (Mac-tunnel 4B) on error/timeout,
-    # then to passthrough on total failure (memory/reranker.py).
+    # Voyage rerank-3 — managed reranker API (FRE-851; moved from rerank-2.5 by
+    # FRE-1745: Voyage's docs list rerank-3 as highest accuracy, same endpoint,
+    # context and price). PRIMARY: ~250ms on rerank-2.5 (FRE-695 J=0.73 vs 0.747
+    # for the Mac 4B, inside n=54 noise). Falls back to reranker_fallback
+    # (Mac-tunnel 4B) on error/timeout, then to passthrough on total failure
+    # (memory/reranker.py).
     provider: voyage
-    id: "rerank-2.5"
+    id: "rerank-3"
     endpoint: "https://api.voyageai.com/v1"
     context_length: 32000
     max_concurrency: 5

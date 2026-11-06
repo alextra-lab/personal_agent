@@ -26,7 +26,7 @@ from personal_agent.config.calibration import (
 from personal_agent.config.config_guard import check_broad_recall_bound_calibration
 from personal_agent.config.settings import AppConfig
 
-SERVING = "rerank-2.5"
+SERVING = "rerank-3"
 
 
 def _artifact(**overrides: Any) -> dict[str, Any]:
@@ -207,3 +207,52 @@ class TestTheCommittedArtifact:
         share = admitted / len(calibration.positive_scores)
         assert share >= 0.90, f"bound admits only {share:.1%} of the whole positive set"
         assert calibration.bound > calibration.negative_median_rerank
+
+
+class TestTheRerankerBindingAndItsThreeBounds:
+    """FRE-1745 — the serving reranker, its three artifacts and its three defaults agree.
+
+    A bound belongs to the model that produced its scores (ADR-0148 D4). Moving the
+    ``reranker`` binding without the artifacts, or the artifacts without the setting
+    defaults, leaves a gate that compares scores against a number from another scale.
+    """
+
+    _PATHS = {
+        "broad_recall_relevance_bound.json": "broad_recall_relevance_bound",
+        "entity_match_relevance_bound.json": "entity_match_relevance_bound",
+        "proactive_rerank_relevance_bound.json": "proactive_memory_rerank_relevance_bound",
+    }
+
+    @pytest.mark.parametrize(("filename", "setting"), sorted(_PATHS.items()))
+    def test_artifact_and_default_describe_the_serving_reranker(
+        self, filename: str, setting: str
+    ) -> None:
+        from personal_agent.config.calibration import repository_root
+        from personal_agent.config.model_loader import resolve_role_definition
+
+        serving = resolve_role_definition("reranker")
+        assert serving is not None
+        assert serving.id == "rerank-3"
+
+        calibration = load_reranker_calibration(repository_root(), filename)
+        assert calibration is not None
+        assert calibration.component.model == serving.id
+        assert calibration.bound is not None
+        assert getattr(AppConfig(), setting) == calibration.bound
+        admitted = sum(1 for s in calibration.positive_scores if s >= calibration.bound)
+        assert admitted / len(calibration.positive_scores) >= 0.90
+
+    def test_the_repository_guard_reports_no_finding_for_any_of_the_three(self) -> None:
+        from personal_agent.config.calibration import repository_root
+        from personal_agent.config.config_guard import (
+            check_entity_match_bound_calibration,
+            check_proactive_rerank_bound_calibration,
+        )
+
+        root = repository_root()
+        findings = [
+            *check_broad_recall_bound_calibration(root),
+            *check_entity_match_bound_calibration(root),
+            *check_proactive_rerank_bound_calibration(root),
+        ]
+        assert findings == []

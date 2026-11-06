@@ -3,8 +3,10 @@
 Measures the **serving reranker** on the **proactive path's own candidates**, commits the bound
 the proactive gate compares against, and measures the latency the gate adds per proactive call.
 
-Result of the 2026-10-04 run: bound **0.338891** on `rerank-2.5`, admitting 93.6% of 110
-labelled positives. See `docs/research/2026-10-04-fre-1545-proactive-reranker-calibration.md`.
+Result of the 2026-11-06 run (FRE-1745): bound **0.344176** on `rerank-3`, admitting 93.6% of 110
+labelled positives. See `docs/research/2026-11-06-fre-1745-rerank-3-calibration.md`. The
+2026-10-04 run on `rerank-2.5` gave bound 0.338891 and the same share
+(`docs/research/2026-10-04-fre-1545-proactive-reranker-calibration.md`).
 
 ## Why this exists
 

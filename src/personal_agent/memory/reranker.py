@@ -2,7 +2,7 @@
 """Cross-attention reranker for Seshat memory retrieval.
 
 Re-scores top-K candidates from the hybrid search pipeline. PRIMARY target is
-Voyage rerank-2.5 (managed API); on error/timeout, falls back to the Mac-tunnel
+Voyage rerank-3 (managed API); on error/timeout, falls back to the Mac-tunnel
 Qwen3-Reranker-4B (MLX, via the SLM endpoint — settings.slm_base_url);
 on total failure, degrades to passthrough (FRE-851).
 
@@ -305,7 +305,7 @@ async def rerank(
 ) -> list[RerankResult]:
     """Re-score documents using cross-attention reranker.
 
-    PRIMARY target is Voyage rerank-2.5 (managed API). On error or timeout,
+    PRIMARY target is Voyage rerank-3 (managed API). On error or timeout,
     falls back to the Mac-tunnel Qwen3-Reranker-4B; if that also fails (or
     the reranker is disabled/misconfigured), returns documents in original
     order with default scores (graceful degradation, FRE-851).

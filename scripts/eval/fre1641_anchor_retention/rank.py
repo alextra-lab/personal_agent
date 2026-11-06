@@ -1,9 +1,9 @@
 """Rank each page fixture with the four arms of ADR-0158 D4.
 
 The ranking is ``personal_agent.tools.passages.rank_passages``, the code T3 ships (D1.8). This
-module supplies only the rerank call: Voyage ``rerank-2.5`` over HTTP, with the key from the
-secrets store. It records no vendor cost to Postgres and has no fallback, unlike
-``memory.reranker.rerank``: the harness writes nothing, and it measures ``rerank-2.5`` alone.
+module supplies only the rerank call: Voyage over HTTP, with the model that the ``reranker`` role
+names and the key from the secrets store. It records no vendor cost to Postgres and has no fallback, unlike
+``memory.reranker.rerank``: the harness writes nothing, and it measures the serving model alone.
 
 The call is cached by its exact input, so R4 reuses the R1 or R3 work of the same page and costs
 no second call. The latency charged to an arm is its local compute time plus the wall time of
@@ -67,7 +67,7 @@ def voyage_key() -> str:
 
 
 class VoyageRerank:
-    """A cached, rate-limited ``rerank-2.5`` call that records tokens and wall time."""
+    """A cached, rate-limited Voyage rerank call that records tokens and wall time."""
 
     def __init__(
         self, client: httpx.AsyncClient, model: RerankModel, key: str, concurrency: int = 4

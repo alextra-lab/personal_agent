@@ -29,11 +29,15 @@ from personal_agent.request_gateway.context import _format_broad_recall_context
 
 #: The serving reranker, as ``config/models.yaml:541`` names it. The gate compares against the
 #: calibrated artifact's component, so a score from anything else is not a relevance value.
-SERVING = "rerank-2.5"
+SERVING = "rerank-3"
 
 #: The fallback reranker (``config/models.yaml:557``). Real scores, different scale -- FRE-695:
 #: "reranker score scales are arbitrary and not comparable across arms".
 FALLBACK = "Qwen/Qwen3-Reranker-4B-mxfp8"
+
+#: The model that served before FRE-1745 (rerank-2.5). Its scores sit on a scale that the
+#: rerank-3 bound does not describe.
+PREVIOUS = "rerank-2.5"
 
 
 def _service() -> MemoryService:
@@ -318,6 +322,15 @@ class TestNoRelevanceValueNeverAdmitsOnOrder:
         entity = _entity_row("e1", "Kafka") | {"relevance_score": 0.99, "relevance_model": FALLBACK}
         items, _, discards = _format_broad_recall_context(_broad([entity]))
         assert items == [], "a high score from an uncalibrated arm still admitted"
+        assert [d[2] for d in discards] == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
+
+    @pytest.mark.asyncio
+    async def test_a_score_from_the_previous_model_is_not_admitted(self, monkeypatch) -> None:
+        """FRE-1745: a bound is never applied to a score from another model, even a Voyage one."""
+        _arm_bound(monkeypatch, 0.50)
+        entity = _entity_row("e1", "Kafka") | {"relevance_score": 0.99, "relevance_model": PREVIOUS}
+        items, _, discards = _format_broad_recall_context(_broad([entity]))
+        assert items == [], "a rerank-2.5 score still admitted against a rerank-3 bound"
         assert [d[2] for d in discards] == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
 
     @pytest.mark.asyncio

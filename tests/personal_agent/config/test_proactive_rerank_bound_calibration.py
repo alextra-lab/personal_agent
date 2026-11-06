@@ -25,7 +25,7 @@ from personal_agent.config.config_guard import check_proactive_rerank_bound_cali
 from personal_agent.config.model_loader import resolve_role_definition
 from personal_agent.config.settings import AppConfig
 
-SERVING = "rerank-2.5"
+SERVING = "rerank-3"
 
 
 @pytest.fixture(scope="module")
@@ -78,7 +78,7 @@ class TestAC5TheBoundTracesToTheArtifact:
         assert serving is not None
         assert committed.component.role == "reranker"
         assert committed.component.model == serving.id
-        assert committed.measured_on.isoformat() == "2026-10-04"
+        assert committed.measured_on.isoformat() == "2026-11-06"
         assert (repo_root() / committed.probe_set).is_file()
         assert committed.incompatible is False
 

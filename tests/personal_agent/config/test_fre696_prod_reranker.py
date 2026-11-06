@@ -23,11 +23,11 @@ import yaml
 from personal_agent.config.settings import AppConfig
 
 
-def test_reranker_is_voyage_rerank_2_5() -> None:
-    """The "reranker" role's PRIMARY target is Voyage rerank-2.5 (FRE-851)."""
+def test_reranker_is_voyage_rerank_3() -> None:
+    """The "reranker" role's PRIMARY target is Voyage rerank-3 (FRE-851, moved by FRE-1745)."""
     cfg = yaml.safe_load(Path("config/models.yaml").read_text())
     reranker = cfg["models"]["reranker"]
-    assert reranker["id"] == "rerank-2.5"
+    assert reranker["id"] == "rerank-3"
     assert reranker["endpoint"] == "https://api.voyageai.com/v1"
 
 

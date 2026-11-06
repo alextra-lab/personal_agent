@@ -115,7 +115,7 @@ class TestAc3EnrichmentInherits:
                             "name": "Sailing",
                             "description": "",
                             "relevance_score": 0.8,
-                            "relevance_model": "rerank-2.5",
+                            "relevance_model": "rerank-3",
                         }
                     ]
                 },
@@ -168,7 +168,7 @@ class TestAc5PartialFailureIsNotAbsence:
                             "name": "Sailing",
                             "description": "a real record",
                             "relevance_score": 0.8,
-                            "relevance_model": "rerank-2.5",
+                            "relevance_model": "rerank-3",
                         }
                     ]
                 },

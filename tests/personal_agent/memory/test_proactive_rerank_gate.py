@@ -44,6 +44,11 @@ from personal_agent.request_gateway.context import (
 from personal_agent.request_gateway.memory_status import RecallOutcome
 from personal_agent.request_gateway.types import Complexity, IntentResult, TaskType
 
+SERVING_MODEL = "rerank-3"
+
+#: The model that served before FRE-1745. Its scores sit on a scale the rerank-3 bound does not describe.
+PREVIOUS_MODEL = "rerank-2.5"
+
 FALLBACK_MODEL = "Qwen/Qwen3-Reranker-4B-mxfp8"
 
 
@@ -113,7 +118,7 @@ def _reasons(out: ProactiveMemorySuggestions) -> list[DropReason]:
     return [d.drop_reason for d in out.discarded]
 
 
-def _fake_rerank(scores: Sequence[float], model: str | None = "rerank-2.5") -> AsyncMock:
+def _fake_rerank(scores: Sequence[float], model: str | None = SERVING_MODEL) -> AsyncMock:
     """A ``rerank`` stand-in returning ``scores`` by input index, sorted descending."""
 
     async def _call(*, query: str, documents: Sequence[str], **_: Any) -> list[RerankResult]:
@@ -180,7 +185,7 @@ class TestAC2TheGateRejectsAnIrrelevantRecentItem:
         """Below the bound is rejected; at the bound is kept (the `>=` convention)."""
         assert calibration.bound is not None
         rows = [_entity_row(vector_score=embedder_non_match)]
-        relevance = {("entity", "Kubernetes"): _value(calibration.bound, "rerank-2.5")}
+        relevance = {("entity", "Kubernetes"): _value(calibration.bound, SERVING_MODEL)}
         assert [c.payload["name"] for c in _build(rows, relevance).candidates] == ["Kubernetes"]
 
 
@@ -197,8 +202,8 @@ class TestAC3TheGatedValueIsTheRerankersOwnOutput:
         values = await score_proactive_relevance(rows, "a query", trace_id="t")
 
         assert values == {
-            ("entity", "Alpha"): _value(0.10, "rerank-2.5"),
-            ("entity", "Beta"): _value(0.90, "rerank-2.5"),
+            ("entity", "Alpha"): _value(0.10, SERVING_MODEL),
+            ("entity", "Beta"): _value(0.90, SERVING_MODEL),
         }
         kwargs = fake.await_args.kwargs
         assert kwargs["documents"] == ["Alpha first", "Beta second"]
@@ -238,6 +243,12 @@ class TestAC3TheGatedValueIsTheRerankersOwnOutput:
         assert out.candidates == []
         assert _reasons(out) == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
 
+
+    def test_a_score_from_the_previous_model_is_unavailable_not_admitted(self) -> None:
+        """FRE-1745: a bound is never applied to a score from another model, even a Voyage one."""
+        out = _build([_entity_row()], {("entity", "Kubernetes"): _value(0.99, PREVIOUS_MODEL)})
+        assert out.candidates == []
+        assert _reasons(out) == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
 
 class TestAC4NoScoreNoAdmissionOnOrder:
     @pytest.mark.asyncio
@@ -373,7 +384,7 @@ class TestAC6TheRejectionIsSeparable:
         old = "2020-01-01T00:00:00+00:00"
         rows = [_entity_row(vector_score=0.5, timestamp=old)]
         relevance = {
-            ("entity", "Kubernetes"): _value(calibration.negative_median_rerank, "rerank-2.5")
+            ("entity", "Kubernetes"): _value(calibration.negative_median_rerank, SERVING_MODEL)
         }
         out = _build(rows, relevance)
         assert _reasons(out) == [DropReason.RECALL_RELEVANCE_BOUND]
@@ -387,7 +398,7 @@ class TestAC6TheRejectionIsSeparable:
         )
         rows = [_entity_row(vector_score=0.5, timestamp="2020-01-01T00:00:00+00:00")]
         relevance = {
-            ("entity", "Kubernetes"): _value(calibration.negative_median_rerank, "rerank-2.5")
+            ("entity", "Kubernetes"): _value(calibration.negative_median_rerank, SERVING_MODEL)
         }
         assert _reasons(_build(rows, relevance)) == [DropReason.RECALL_SCORE_THRESHOLD]
 

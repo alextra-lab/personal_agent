@@ -37,7 +37,7 @@ strongest non-match as the negative.
 THE PARITY GATE (all three checks must pass before any number is reported)
 --------------------------------------------------------------------------
 * **P1 -- cross-implementation, entity documents only.** ``separation_benchmark.py``'s
-  ``voyage-rerank-2.5`` arm is an independently authored pipeline with its own corpus build
+  ``voyage-rerank-3`` arm is an independently authored pipeline with its own corpus build
   (``"{name}: {description}"``), its own HTTP client and its own response parser. Its three
   aggregates are compared against the production path's at FRE-694's own 0.02 tolerance.
   This is what catches shared corpus, formatting or aggregation error, and it is what a
@@ -182,7 +182,7 @@ DEFAULT_PROBE = "scripts/eval/fre435_memory_recall/semantic_probe.yaml"
 DEFAULT_ARTIFACT = "config/calibration/broad_recall_relevance_bound.json"
 
 #: The independently authored comparison arm for parity check P1.
-INDEPENDENT_ARM = "voyage-rerank-2.5"
+INDEPENDENT_ARM = "voyage-rerank-3"
 
 
 def _expected_names(case: ProbeCase) -> frozenset[str]:

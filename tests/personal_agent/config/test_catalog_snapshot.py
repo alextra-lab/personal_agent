@@ -284,6 +284,13 @@ chose the swap after the FRE-1668 pilot: Sol built all 3 rich pages, Sonnet 5 an
 of 3 each. **No other role binding, concurrency cell or price changed.**
 ``test_fre1691_artifact_builder_sol.py`` asserts the binding.
 
+**Rebaselined an eighteenth time, deliberately, for FRE-1745.** Hand-edited, not regenerated, for the
+same reasons as the fourteenth. One explicit delta: **the ``id`` of the ``binding|reranker`` cell
+moves from ``rerank-2.5`` to ``rerank-3``.** Provider, endpoint, context length, timeout,
+concurrency and price are equal on both (Voyage lists the same endpoint, context and price per
+token). **No other role binding, concurrency cell or price changed.**
+``test_fre696_prod_reranker.py`` asserts the binding.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

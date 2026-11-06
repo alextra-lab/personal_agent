@@ -694,13 +694,14 @@ class AppConfig(BaseSettings):
     # arms", which is why ADR-0148 D4 carries one bound per path rather than one number.
     # The same reasoning forbids applying this bound to the reranker *fallback* model's
     # scores: the admission gate checks which model produced a score before comparing it.
-    # Measured 2026-09-10 against Voyage rerank-2.5 over the FRE-670 probe set: it rejects
-    # the negative median (0.337891) and admits 93.3% of the 119 labelled positives, clearing
-    # D4's 90%. Both document populations clear it separately too -- entity 93.0%, turn 93.5%
-    # -- so neither shape is dragging the other. See
+    # Measured 2026-11-06 against Voyage rerank-3 over the FRE-670 probe set (FRE-1745; the
+    # 2026-09-10 figures on rerank-2.5 were bound 0.338891, negative median 0.337891, 93.3%
+    # admitted): it rejects the negative median (0.343176) and admits 93.3% of the 119
+    # labelled positives, clearing D4's 90%. Both document populations clear it separately
+    # too -- entity 94.7%, turn 91.9% -- so neither shape is dragging the other. See
     # docs/research/2026-09-10-fre-1479-reranker-relevance-calibration.md.
     broad_recall_relevance_bound: float | None = Field(
-        default=0.338891,
+        default=0.344176,
         ge=0.0,
         le=1.0,
         description=(
@@ -735,13 +736,15 @@ class AppConfig(BaseSettings):
     # --artifact config/calibration/entity_match_relevance_bound.json. It reproduced that
     # run exactly -- bound 0.338891, 93.3% of 119 labelled positives admitted (entity 93.0%,
     # turn 93.5%), negative median 0.337891 -- which is a reproducibility result about the
-    # endpoint, not independent evidence about this path's population. See
+    # endpoint, not independent evidence about this path's population. FRE-1745 (2026-11-06)
+    # took the same shortcut on Voyage rerank-3: one FRE-1479 run wrote this artifact and the
+    # broad-recall artifact -- bound 0.344176, 93.3% admitted, negative median 0.343176. See
     # docs/research/2026-09-11-fre-1480-entity-match-relevance-value.md.
     #
     # NOT comparable to `proactive_memory_relevance_bound`, which lives in normalized Neo4j
     # embedding space (FRE-695: reranker scales are "arbitrary and not comparable").
     entity_match_relevance_bound: float | None = Field(
-        default=0.338891,
+        default=0.344176,
         ge=0.0,
         le=1.0,
         description=(
@@ -1543,7 +1546,7 @@ class AppConfig(BaseSettings):
     voyage_api_key: str | None = Field(
         default=None,
         description=(
-            "Voyage AI API key for the reranker role's Voyage rerank-2.5 primary "
+            "Voyage AI API key for the reranker role's Voyage rerank-3 primary "
             "target (FRE-851). None degrades that path to the Mac-tunnel fallback."
         ),
         json_schema_extra={"secret": True},
@@ -2286,12 +2289,13 @@ class AppConfig(BaseSettings):
     # NOT comparable to the embedder bound (FRE-695). It binds the same candidates the
     # embedder bound does -- zero entity overlap and zero topic hits -- ahead of the score
     # combination. Measured on the proactive path's own candidate population, not copied
-    # from broad recall: same scorer, different population. Measured 2026-10-04 against
-    # Voyage rerank-2.5 over the FRE-670 probe set: it rejects the negative median
-    # (0.337891) and admits 93.6% of the 110 labelled positives (entity 93.0%, episode
-    # 94.3%). See docs/research/2026-10-04-fre-1545-proactive-reranker-calibration.md.
+    # from broad recall: same scorer, different population. Measured 2026-11-06 against
+    # Voyage rerank-3 over the FRE-670 probe set (FRE-1745; the 2026-10-04 figures on
+    # rerank-2.5 were bound 0.338891, negative median 0.337891, 93.6% admitted): it rejects
+    # the negative median (0.343176) and admits 93.6% of the 110 labelled positives (entity
+    # 94.7%, episode 92.5%). See docs/research/2026-10-04-fre-1545-proactive-reranker-calibration.md.
     proactive_memory_rerank_relevance_bound: float | None = Field(
-        default=0.338891,
+        default=0.344176,
         ge=0.0,
         le=1.0,
         description=(

@@ -9,7 +9,7 @@ Steps, in order (the run directory is ``<data-dir>/<run-id>``, outside git):
     # ... post the preflight on the ticket and wait for the owner's go ...
     $R record-fetch     # production download_text → fetch.jsonl.gz
     $R record-search    # 5 instances × every replay → search_<L>.jsonl.gz
-    $R rank             # 4 arms per supported page, Voyage rerank-2.5 → ranks.jsonl.gz
+    $R rank             # 4 arms per supported page, the serving Voyage reranker → ranks.jsonl.gz
     $R searxng-down     # stop the instances, delete the settings copies; prod StartedAt (after)
     $R score            # offline → report.json, report.md
 

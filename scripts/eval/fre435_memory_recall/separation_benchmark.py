@@ -558,6 +558,12 @@ RERANKER_ARMS: dict[str, dict[str, str]] = {
         "auth": "voyage",
         "engine": "Voyage cloud",
     },
+    "voyage-rerank-3": {
+        "endpoint": "https://api.voyageai.com/v1",
+        "model": "rerank-3",
+        "auth": "voyage",
+        "engine": "Voyage cloud",
+    },
     "voyage-rerank-2.5-lite": {
         "endpoint": "https://api.voyageai.com/v1",
         "model": "rerank-2.5-lite",

@@ -48,7 +48,7 @@ seshat-gateway dependencies (all on cloud-sim bridge network):
 
 seshat-gateway external dependencies (managed endpoints):
   OVH AI Endpoints     (Qwen3-Embedding-8B — semantic search)
-  Voyage AI            (rerank-2.5 — ranked retrieval)
+  Voyage AI            (rerank-3 — ranked retrieval)
   Anthropic/OpenAI     (cloud models bound in config/model_roles.yaml)
 
 Network: cloud-sim bridge, subnet 172.25.0.0/16 (address space only — no service is pinned to a
@@ -422,7 +422,7 @@ embedding:
 reranker:
   kind: reranker
   provider: voyage                                 # Managed Voyage endpoint
-  id: "rerank-2.5"                                 # Model ID at Voyage
+  id: "rerank-3"                                 # Model ID at Voyage
   endpoint: "https://api.voyageai.com/v1"
   context_length: 32000
   max_concurrency: 5

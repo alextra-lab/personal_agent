@@ -32,11 +32,15 @@ from personal_agent.request_gateway.context import RELEVANCE_UNAVAILABLE_CAUSE
 from personal_agent.request_gateway.memory_status import MemoryStatus
 
 #: The serving reranker, as ``config/models.yaml`` names it.
-SERVING = "rerank-2.5"
+SERVING = "rerank-3"
 
 #: The fallback reranker. Real scores, a different scale — FRE-695: reranker scales are
 #: "arbitrary and not comparable across arms", so the bound describes neither the other.
 FALLBACK = "Qwen/Qwen3-Reranker-4B-mxfp8"
+
+#: The model that served before FRE-1745 (rerank-2.5). Its scores sit on a scale that the
+#: rerank-3 bound does not describe.
+PREVIOUS = "rerank-2.5"
 
 
 def _core() -> MemoryService:
@@ -283,7 +287,7 @@ async def _drive(
     episodes: list[dict[str, Any]] | None = None,
     relevance_scored: bool = True,
     gate_enabled: bool = True,
-    bound: float | None = 0.338891,
+    bound: float | None = 0.344176,
     calibrated: str | None = SERVING,
 ) -> Any:
     """Drive the entity-match arm of ``assemble_context`` and return the assembled context.
@@ -420,6 +424,15 @@ class TestNoRelevanceValueIsUnavailableNotAbsence:
     async def test_a_fallback_model_score_is_not_a_relevance_value(self, monkeypatch) -> None:
         """A different reranker's real score sits on a scale this bound does not describe."""
         result = await _drive(monkeypatch, entities=[_entity(0.80, model=FALLBACK)])
+        assert result.memory_context is None
+        assert result.memory_status.status is MemoryStatus.UNAVAILABLE
+
+    @pytest.mark.asyncio
+    async def test_a_score_from_the_previous_model_is_not_a_relevance_value(
+        self, monkeypatch
+    ) -> None:
+        """FRE-1745: a bound is never applied to a score from another model, even a Voyage one."""
+        result = await _drive(monkeypatch, entities=[_entity(0.80, model=PREVIOUS)])
         assert result.memory_context is None
         assert result.memory_status.status is MemoryStatus.UNAVAILABLE
 

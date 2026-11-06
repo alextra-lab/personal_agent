@@ -68,7 +68,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 18 | `attachment_max_images_per_turn` | `AGENT_ATTACHMENT_MAX_IMAGES_PER_TURN` | `int` | `4` |  | — |
 | 19 | `attachment_max_total_payload_bytes` | `AGENT_ATTACHMENT_MAX_TOTAL_PAYLOAD_BYTES` | `int` | `15728640` |  | — |
 | 20 | `brave_search_cost_per_call_usd` | `AGENT_BRAVE_SEARCH_COST_PER_CALL_USD` | `float` | `0.005` |  | — |
-| 21 | `broad_recall_relevance_bound` | `AGENT_BROAD_RECALL_RELEVANCE_BOUND` | `float \| None` | `0.338891` |  | — |
+| 21 | `broad_recall_relevance_bound` | `AGENT_BROAD_RECALL_RELEVANCE_BOUND` | `float \| None` | `0.344176` |  | — |
 | 22 | `broad_recall_relevance_gate_enabled` | `AGENT_BROAD_RECALL_RELEVANCE_GATE_ENABLED` | `bool` | `True` |  | — |
 | 23 | `build_fingerprint` | `AGENT_BUILD_FINGERPRINT` | `str \| None` | `None` |  | — |
 | 24 | `cache_erosion_probe_enabled` | `AGENT_CACHE_EROSION_PROBE_ENABLED` | `bool` | `True` |  | — |
@@ -126,7 +126,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 76 | `enable_second_brain` | `AGENT_ENABLE_SECOND_BRAIN` | `bool` | `False` |  | ✅ |
 | 77 | `entity_extraction_fewshot_exemplars_enabled` | `AGENT_ENTITY_EXTRACTION_FEWSHOT_EXEMPLARS_ENABLED` | `bool` | `False` |  | — |
 | 78 | `entity_extraction_timeout_seconds` | `AGENT_ENTITY_EXTRACTION_TIMEOUT_SECONDS` | `int` | `90` |  | — |
-| 79 | `entity_match_relevance_bound` | `AGENT_ENTITY_MATCH_RELEVANCE_BOUND` | `float \| None` | `0.338891` |  | — |
+| 79 | `entity_match_relevance_bound` | `AGENT_ENTITY_MATCH_RELEVANCE_BOUND` | `float \| None` | `0.344176` |  | — |
 | 80 | `entity_match_relevance_gate_enabled` | `AGENT_ENTITY_MATCH_RELEVANCE_GATE_ENABLED` | `bool` | `True` |  | — |
 | 81 | `environment` | `AGENT_ENVIRONMENT` | `Environment` | `<Environment.PRODUCTION: 'production'>` |  | — |
 | 82 | `error_monitor_enabled` | `AGENT_ERROR_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
@@ -265,7 +265,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 215 | `proactive_memory_recency_half_life_days` | `AGENT_PROACTIVE_MEMORY_RECENCY_HALF_LIFE_DAYS` | `float` | `30.0` |  | ✅ |
 | 216 | `proactive_memory_relevance_bound` | `AGENT_PROACTIVE_MEMORY_RELEVANCE_BOUND` | `float \| None` | `None` |  | — |
 | 217 | `proactive_memory_relevance_gate_enabled` | `AGENT_PROACTIVE_MEMORY_RELEVANCE_GATE_ENABLED` | `bool` | `True` |  | — |
-| 218 | `proactive_memory_rerank_relevance_bound` | `AGENT_PROACTIVE_MEMORY_RERANK_RELEVANCE_BOUND` | `float \| None` | `0.338891` |  | — |
+| 218 | `proactive_memory_rerank_relevance_bound` | `AGENT_PROACTIVE_MEMORY_RERANK_RELEVANCE_BOUND` | `float \| None` | `0.344176` |  | — |
 | 219 | `proactive_memory_vector_top_k` | `AGENT_PROACTIVE_MEMORY_VECTOR_TOP_K` | `int` | `20` |  | ✅ |
 | 220 | `proactive_memory_w_embedding` | `AGENT_PROACTIVE_MEMORY_W_EMBEDDING` | `float` | `0.45` |  | ✅ |
 | 221 | `proactive_memory_w_entity` | `AGENT_PROACTIVE_MEMORY_W_ENTITY` | `float` | `0.25` |  | ✅ |

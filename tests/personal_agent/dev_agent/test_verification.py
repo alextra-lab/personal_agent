@@ -177,9 +177,9 @@ class TestInspect:
         inspect = copy.deepcopy(_inspect_for(profile))
         mounts = inspect["Mounts"]
         assert isinstance(mounts, list)
-        lib = next(m for m in mounts if m["Destination"] == "/lib")
+        lib = next(m for m in mounts if m["Destination"] == "/srv/artifact-lib")
         lib["RW"] = True
-        assert any("/lib" in v for v in _violations(profile, inspect))
+        assert any("/srv/artifact-lib" in v for v in _violations(profile, inspect))
 
     def test_a_read_only_workspace_is_reported(self) -> None:
         profile = load_profiles().agent

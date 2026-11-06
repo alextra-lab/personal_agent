@@ -211,10 +211,11 @@ def _own_ip() -> str:
 _GOOD_PAGE = """<!doctype html><title>good</title><button id="b">go</button><p id="out">idle</p>
 <script>document.getElementById('b').addEventListener('click',()=>{
 document.getElementById('out').textContent='clicked';});</script>"""
-# connect-src is 'none', so the fetch is a CSP violation that Chromium logs as a console error.
+# connect-src is 'none', so this same-origin fetch is blocked. Without the CSP it succeeds, so only
+# the policy can cause the console error.
 _BAD_PAGE = """<!doctype html><title>bad</title><button id="b">go</button><p id="out">idle</p>
 <script>document.getElementById('b').addEventListener('click',()=>{
-fetch('http://127.0.0.1:9/x').catch(()=>{});document.getElementById('out').textContent='clicked';});</script>"""
+fetch(location.origin+'/good.html').catch(()=>{});document.getElementById('out').textContent='clicked';});</script>"""
 
 
 def _serve(root: Path) -> subprocess.Popen[str]:

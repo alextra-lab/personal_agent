@@ -47,7 +47,7 @@ control. A probe that never reaches anything proves nothing, so the control must
   `Dockerfile.browser` hold the same value. A test fails if they differ. OpenCode 2.x is the npm package
   `@opencode/cli`. The command prints `opencode v<version>`.
 - **Permission file.** `/etc/opencode/opencode.json` is `{}` (`OPENCODE_CONFIG` points to it). No rule matches, so OpenCode asks, and a headless job cannot answer. FRE-1684 replaces the file with the D2.4 permission file.
-- **`/lib/` for the CSP server.** The server serves one root. To serve the toolkit, link it into the root: `ln -s /lib <root>/lib`.
+- **Toolkit mount.** The read-only toolkit volume mounts at `/srv/artifact-lib`. Do not mount at `/lib`: on the base image `/lib` is a symlink to `usr/lib`, and a volume there replaces the system libraries. The CSP server serves one root. To serve the toolkit under `/lib/`, link it into the root: `ln -s /srv/artifact-lib <root>/lib`.
 - **Console message `webrtc`.** The production CSP has a `webrtc` directive. Chromium does not know it. It logs
   `Unrecognized Content-Security-Policy directive 'webrtc'` as a console error on every page. The publish check
   (D7.4, "zero console errors") must ignore that one message.

@@ -35,7 +35,7 @@ agent:
     - {path: /devagent-home, size_mb: 256, mode: "0700", exec: true}
   mounts:
     - {target: /workspace, read_only: false}
-    - {target: /lib, read_only: true}
+    - {target: /srv/artifact-lib, read_only: true}
   env_fixed:
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     HOME: /devagent-home
@@ -62,15 +62,15 @@ check:
   no_new_privileges: true
   init: true
   tmpfs:
-    - {path: /tmp, size_mb: 512, mode: "1777", exec: false}
-    - {path: /devagent-home, size_mb: 128, mode: "0700", exec: true}
+    # D7.3: one bounded tmpfs for writable scratch. HOME is inside it.
+    - {path: /tmp, size_mb: 640, mode: "1777", exec: false}
   mounts:
     - {target: /input/dist, read_only: true}
     - {target: /input/tests, read_only: true}
-    - {target: /lib, read_only: true}
+    - {target: /srv/artifact-lib, read_only: true}
   env_fixed:
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    HOME: /devagent-home
+    HOME: /tmp
     LANG: C.UTF-8
     LC_ALL: C.UTF-8
     TZ: UTC

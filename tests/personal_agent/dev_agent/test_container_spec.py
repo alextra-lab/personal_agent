@@ -16,7 +16,7 @@ from personal_agent.dev_agent.container_spec import (
     load_profiles,
 )
 
-_VOLUMES = {"/workspace": "job-ws-1", "/lib": "toolkit-1"}
+_VOLUMES = {"/workspace": "job-ws-1", "/srv/artifact-lib": "toolkit-1"}
 
 
 @pytest.fixture(scope="module")
@@ -63,7 +63,7 @@ class TestAgentProfileIsD33:
 
     def test_toolkit_mount_is_read_only(self, profiles: ContainerProfiles) -> None:
         readonly = {m.target for m in profiles.agent.mounts if m.read_only}
-        assert readonly == {"/lib"}
+        assert readonly == {"/srv/artifact-lib"}
 
     def test_environment_is_a_declared_allowlist(self, profiles: ContainerProfiles) -> None:
         agent = profiles.agent
@@ -86,7 +86,7 @@ class TestCheckAndHandoffProfiles:
         assert check.cap_drop == ("ALL",)
         assert check.no_new_privileges is True
         assert [m.read_only for m in check.mounts] == [True] * len(check.mounts)
-        assert len(check.tmpfs) >= 1
+        assert [t.path for t in check.tmpfs] == ["/tmp"]  # D7.3: one bounded tmpfs
 
     def test_handoff_has_check_limits_and_hostile_repo_defaults(
         self, profiles: ContainerProfiles
@@ -121,7 +121,10 @@ class TestCreateArgs:
 
     def test_mounts_are_named_volumes_only(self, profiles: ContainerProfiles) -> None:
         args = _agent_args(profiles)
-        assert sorted(_flag_values(args, "-v")) == ["job-ws-1:/workspace", "toolkit-1:/lib:ro"]
+        assert sorted(_flag_values(args, "-v")) == [
+            "job-ws-1:/workspace",
+            "toolkit-1:/srv/artifact-lib:ro",
+        ]
         assert "docker.sock" not in " ".join(args)
 
     def test_none_network_ignores_the_network_name(self, profiles: ContainerProfiles) -> None:
@@ -155,7 +158,7 @@ class TestCreateArgs:
                 name="n",
                 network_name="net",
                 labels={},
-                volumes={"/lib": "toolkit-1"},
+                volumes={"/srv/artifact-lib": "toolkit-1"},
             )
 
     @pytest.mark.parametrize("source", ["/var/run/docker.sock", "./rel", "a/b", "/host/path"])
@@ -168,7 +171,7 @@ class TestCreateArgs:
                 name="n",
                 network_name="net",
                 labels={},
-                volumes={"/workspace": source, "/lib": "toolkit-1"},
+                volumes={"/workspace": source, "/srv/artifact-lib": "toolkit-1"},
             )
 
 

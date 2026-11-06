@@ -445,7 +445,13 @@ def check_browser(session: Session, profiles: ContainerProfiles) -> dict[str, ob
     ]
     if good.get("text") != "clicked" or good_errors or not good:
         found.append(f"good page: {good or result.stderr[-300:]}")
-    if bad.get("text") != "clicked" or not bad.get("errors"):
+    bad_errors = bad.get("errors")
+    csp_errors = [
+        e
+        for e in (bad_errors if isinstance(bad_errors, list) else [])
+        if "Content Security Policy" in str(e)
+    ]
+    if bad.get("text") != "clicked" or not csp_errors:
         found.append("seeded negative: the page that violates the CSP produced no console error")
     return {"pages": report.get("pages"), "violations": found}
 
@@ -457,34 +463,64 @@ _HOSTILE_SETUP = (
 )
 
 
+_WRAPPER_SCRIPT = _REPO / "docker" / "dev-agent" / "handoff-bundle.sh"
+_WRAPPER_FLAG = re.compile(r"^\s*-c\s+(\S+?)\s*\\?$", re.MULTILINE)
+
+
+def wrapper_git_flags(script_text: str) -> list[str]:
+    """Return the ``-c key=value`` overrides of ``handoff-bundle.sh``, as plain ``key=value``."""
+    return [m.group(1).replace("'", "") for m in _WRAPPER_FLAG.finditer(script_text)]
+
+
+def _marker_listing(image: str, volume: str) -> str:
+    return docker(
+        "run", "--rm", "-v", f"{volume}:/out:ro", "--entrypoint", "ls", image, "/out"
+    ).stdout
+
+
 def check_handoff(session: Session, profiles: ContainerProfiles) -> dict[str, object]:
-    """The wrapper bundles a branch of a workspace that has hostile local config, and runs nothing."""
+    """The wrapper bundles a branch of a workspace that has hostile local config.
+
+    ``git bundle create`` does not read the index, so ``core.fsmonitor`` does not fire on it,
+    with or without the wrapper. A check on the bundle command alone could not fail. So the
+    check has three parts:
+
+    * control: plain ``git status`` in the hostile repo runs the config command (the marker appears);
+    * the wrapper's own ``-c`` overrides, applied to that same ``git status``, stop it;
+    * the wrapper in the hardened handoff container writes a valid bundle and no marker.
+    """
     image = profiles.handoff.image
     workspace = _volume(session, "handoff-ws")
     control_out = _volume(session, "handoff-out-control")
+    flags_out = _volume(session, "handoff-out-flags")
     out = _volume(session, "handoff-out")
     docker("run", "--rm", "-v", f"{workspace}:/workspace", "-v", f"{control_out}:/out", "--entrypoint", "sh",
            image, "-c", _HOSTILE_SETUP)  # fmt: skip
-    # Control: plain git in the hostile repo does run the config command. Without this, the
-    # "no marker" result below proves nothing.
-    docker("run", "--rm", "--network", "none", "-v", f"{workspace}:/workspace:ro", "-v", f"{control_out}:/out",
-           "--entrypoint", "git", image, "-C", "/workspace", "-c", "safe.directory=*", "status",
-           check=False)  # fmt: skip
-    control_marker = docker(
-        "run", "--rm", "-v", f"{control_out}:/out:ro", "--entrypoint", "ls", image, "/out"
-    ).stdout
+
+    def git_status(out_volume: str, extra: Sequence[str]) -> None:
+        docker("run", "--rm", "--network", "none", "-v", f"{workspace}:/workspace:ro", "-v", f"{out_volume}:/out",
+               "--entrypoint", "git", image, "-C", "/workspace", *extra, "status", check=False)  # fmt: skip
+
+    git_status(control_out, ["-c", "safe.directory=*"])
+    flags = wrapper_git_flags(_WRAPPER_SCRIPT.read_text(encoding="utf-8"))
+    flag_args = [arg for flag in flags for arg in ("-c", flag)]
+    git_status(flags_out, flag_args)
+    control_marker = _marker_listing(image, control_out)
+    flags_marker = _marker_listing(image, flags_out)
     result = run_container(
         session, profiles.handoff, kind="handoff", command=["job/test"], network_name="none",
         volumes={"/workspace": workspace, "/out": out},
     )  # fmt: skip
-    listing = docker(
-        "run", "--rm", "-v", f"{out}:/out:ro", "--entrypoint", "ls", image, "/out"
-    ).stdout
+    listing = _marker_listing(image, out)
     found: list[str] = []
     if "PWNED" not in control_marker:
         found.append(
-            "control: plain git did not run the hostile config, so the check proves nothing"
+            "control: plain git status did not run the hostile config, so the check proves nothing"
         )
+    if "core.fsmonitor=false" not in flags:
+        found.append("the wrapper no longer sets core.fsmonitor=false")
+    if "PWNED" in flags_marker:
+        found.append("the wrapper's -c overrides did not stop the hostile config")
     if result.exit_code != 0:
         found.append(f"handoff exited {result.exit_code}: {result.stderr[-300:]}")
     if "job.bundle" not in listing:
@@ -492,7 +528,9 @@ def check_handoff(session: Session, profiles: ContainerProfiles) -> dict[str, ob
     if "PWNED" in listing:
         found.append("the hostile repo config ran inside the handoff wrapper")
     return {
+        "wrapper_flags": flags,
         "control_marker_seen": "PWNED" in control_marker,
+        "marker_with_wrapper_flags": "PWNED" in flags_marker,
         "output_files": listing.split(),
         "violations": found,
     }

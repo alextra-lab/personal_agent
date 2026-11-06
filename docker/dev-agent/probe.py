@@ -165,6 +165,7 @@ def probe_via_proxy(proxy_url: str, host: str, port: int, timeout: float, kind: 
             if kind == "tcp":
                 return Outcome(True, "proxy", "connected", f"tunnel {code}")
             context = ssl.create_default_context()
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             with context.wrap_socket(sock, server_hostname=host) as tls:
                 tls.sendall(
                     f"GET /-/ping HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode()

@@ -355,6 +355,10 @@ class SessionRepository:
         Returns:
             Matching sessions ordered by last_active_at DESC.
         """
+        if "\x00" in query:
+            # Postgres text cannot hold a NUL, and JSONB rejects one in stored text: no match,
+            # and the bound parameter would raise.
+            return []
         pattern = f"%{_escape_like(query)}%"
         has_match = text(_MESSAGE_TEXT_MATCH).bindparams(pattern=pattern)
         stmt = (

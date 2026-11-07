@@ -276,3 +276,14 @@ async def test_a_term_with_every_special_character_matches_only_itself(
 
     assert await _search(maker, r"a\b%_c", owner) == [exact]
     assert await _search(maker, "!", owner) == [exact]
+
+
+async def test_a_nul_character_in_the_term_never_matches_and_never_raises(
+    maker: async_sessionmaker[AsyncSession], users: tuple[UUID, UUID]
+) -> None:
+    """Postgres text cannot hold a NUL, and stored JSONB text cannot either, so nothing matches."""
+    owner, _ = users
+    await _seed(maker, owner, [_user("some text")])
+
+    assert await _search(maker, "\x00", owner) == []
+    assert await _search(maker, "some\x00text", owner) == []

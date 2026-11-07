@@ -282,9 +282,28 @@ class GitMirror:
             raise DevAgentRepoError(
                 f"{folder}/ passes the cap of {max_files} files or {max_bytes} B"
             )
+        if not entries:
+            return {}
+        # One process for all blobs. Each answer is "<sha> blob <size>\n<bytes>\n", in order.
+        batch = await self._git(
+            "cat-file",
+            "--batch",
+            stdin="".join(f"{sha}\n" for _, sha in entries).encode(),
+            max_stdout=max_bytes + 128 * len(entries),
+        )
         files: dict[str, bytes] = {}
+        out, at = batch.stdout, 0
         for path, sha in entries:
-            files[path] = (await self._git("cat-file", "blob", sha, max_stdout=max_bytes)).stdout
+            try:
+                end = out.index(b"\n", at)
+                got_sha, kind, size = out[at:end].decode().split()
+            except ValueError:
+                raise DevAgentRepoError(f"cat-file gave no blob for {path}") from None
+            if got_sha != sha or kind != "blob":
+                raise DevAgentRepoError(f"cat-file answered {kind} for {path}")
+            start = end + 1
+            files[path] = out[start : start + int(size)]
+            at = start + int(size) + 1
         return files
 
     async def fetch(self, remote: GitRemote, ref: str) -> str | None:

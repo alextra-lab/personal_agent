@@ -161,6 +161,9 @@ async def push_artifact_event(job: DevJob, written: Mapping[str, object]) -> Non
     Args:
         job: The job.
         written: The result of ``artifact_write_executor``.
+
+    Raises:
+        RuntimeError: If the transport did not persist the event.
     """
     # Imported here: the transport imports the service layer, which the dev-agent modules do not
     # need at import time.
@@ -174,9 +177,10 @@ async def push_artifact_event(job: DevJob, written: Mapping[str, object]) -> Non
         "title": written.get("title"),
     }
     session = str(job.session_id)
-    await _push_event(
-        StateUpdateEvent(key="dev_job_artifact", value=value, session_id=session), session
-    )
+    event = StateUpdateEvent(key="dev_job_artifact", value=value, session_id=session)
+    if not await _push_event(event, session):
+        # The transport reports a failed persist by its result, not by an exception.
+        raise RuntimeError("the dev_job_artifact event was not persisted")
 
 
 class GitHubRepoPipeline:
@@ -392,11 +396,20 @@ class GitHubRepoPipeline:
 
     async def _result_files(
         self, job: DevJob, commit: str, *, with_tests: bool
-    ) -> tuple[bytes, dict[str, bytes]]:
+    ) -> tuple[bytes, dict[str, bytes], str | None]:
         """Read the page, and the tests if asked, at ``commit`` from a clean mirror.
 
         The job branch on GitHub must still be at ``commit``: the bytes are those of the result
         that the handoff pushed, never of the workspace (D9.9).
+
+        Args:
+            job: The job, with ``repo``.
+            commit: The result commit.
+            with_tests: Also read ``tests/``.
+
+        Returns:
+            The page, the test files, and why ``tests/`` cannot be used (over a cap), or ``None``.
+            A ``tests/`` that cannot be used fails the repo tests step, not the job.
 
         Raises:
             DevJobRefusedError: ``no_result``, ``result_moved`` or ``result_unreadable``.
@@ -417,15 +430,17 @@ class GitHubRepoPipeline:
                 raise DevJobRefusedError("result_unreadable") from exc
             if head != commit:
                 raise DevJobRefusedError("result_moved")
+            tests: dict[str, bytes] = {}
+            tests_problem: str | None = None
             try:
                 page = await mirror.read_page(commit)
-                tests = (
-                    await mirror.files_under(
-                        commit, "tests", max_files=MAX_TEST_FILES, max_bytes=MAX_TEST_BYTES
-                    )
-                    if with_tests
-                    else {}
-                )
+                if with_tests:
+                    try:
+                        tests = await mirror.files_under(
+                            commit, "tests", max_files=MAX_TEST_FILES, max_bytes=MAX_TEST_BYTES
+                        )
+                    except DevAgentRepoError as exc:
+                        tests_problem = str(exc)[:300]
             except DevAgentRepoError as exc:
                 log.warning(
                     "dev_job_result_unreadable",
@@ -434,7 +449,7 @@ class GitHubRepoPipeline:
                     trace_id=job.trace_id.hex,
                 )
                 raise DevJobRefusedError("result_unreadable") from exc
-        return page, tests
+        return page, tests, tests_problem
 
     async def check(self, job: DevJob, result_commit: str, fence: Fence) -> bool:
         """Run the publish check on the result and store its result on the job (D7.3–D7.5).
@@ -460,7 +475,7 @@ class GitHubRepoPipeline:
         if self._checker is None:
             raise DevJobRefusedError("check_unavailable")
         checker = self._checker
-        page, tests = await self._result_files(job, result_commit, with_tests=True)
+        page, tests, tests_problem = await self._result_files(job, result_commit, with_tests=True)
         page_problem = page_problem_of(page)
         inputs = check_inputs_tar(page, tests)
 
@@ -493,7 +508,14 @@ class GitHubRepoPipeline:
             raise DevJobRefusedError("check_unavailable") from exc
         finally:
             await self._remove_check(job, fence)
-        result = check_result(setup, page_steps, tests_steps, manifest, page_problem=page_problem)
+        result = check_result(
+            setup,
+            page_steps,
+            tests_steps,
+            manifest,
+            page_problem=page_problem,
+            tests_problem=tests_problem,
+        )
         await self._record_check(job, fence, result)
         return result.passed
 
@@ -566,7 +588,7 @@ class GitHubRepoPipeline:
             return await JobStore.preallocate_artifact(conn, fence.lease, uuid4())
 
         artifact_id = await fence.run("preallocate_artifact", preallocate)
-        page, _ = await self._result_files(job, job.result_commit, with_tests=False)
+        page, _, _ = await self._result_files(job, job.result_commit, with_tests=False)
         try:
             content = page.decode("utf-8")
         except UnicodeDecodeError as exc:

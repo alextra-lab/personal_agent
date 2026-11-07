@@ -119,6 +119,7 @@ class FakeR2:
     def __init__(self, hang: Hang) -> None:
         self.objects: dict[str, bytes] = {}
         self.puts = 0
+        self.fail_puts = 0
         self.hang = hang
 
     async def put(
@@ -131,6 +132,9 @@ class FakeR2:
         trace_id: str | None = None,
     ) -> None:
         await self.hang.point("before_upload")
+        if self.fail_puts:
+            self.fail_puts -= 1
+            raise ConnectionError("seeded: R2 unreachable")
         self.puts += 1
         self.objects[r2_key] = content
         await self.hang.point("after_upload")

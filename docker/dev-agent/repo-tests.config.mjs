@@ -5,6 +5,8 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: '/tmp/work/tests',
+  // The test contract of the page template's AGENTS.md.
+  testMatch: '**/*.@(spec|test).mjs',
   outputDir: '/tmp/work/results',
   workers: 1,
   retries: 0,

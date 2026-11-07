@@ -92,65 +92,79 @@ function since(record, mark) {
   ];
 }
 
+// Values for inputs that take a typed value. Each one is valid for its type.
+const FILL_VALUES = {
+  number: '7', date: '2026-01-15', time: '09:30', 'datetime-local': '2026-01-15T09:30',
+  month: '2026-01', week: '2026-W03', color: '#336699',
+};
+
+function withoutHash(href) {
+  return href.split('#')[0];
+}
+
+// Operate one control. Returns false when there is nothing to operate (hidden, disabled,
+// readonly, a file input, a select with one option), true when it was operated. Throws when an
+// action on an operable control fails.
+async function operateOne(el) {
+  if (!(await el.isVisible()) || !(await el.isEnabled())) return false;
+  const [tag, type, role, readonly] = await el.evaluate((e) => [
+    e.tagName.toLowerCase(), (e.getAttribute('type') || 'text').toLowerCase(),
+    e.getAttribute('role'), e.readOnly === true,
+  ]);
+  const opts = { timeout: ACTION_TIMEOUT_MS };
+  if (tag === 'button' || role === 'button' || (tag === 'input' &&
+      ['button', 'submit', 'reset', 'image', 'checkbox', 'radio'].includes(type))) {
+    await el.click(opts);
+  } else if (tag === 'select') {
+    const index = await el.evaluate((s) =>
+      [...s.options].findIndex((o, n) => n !== s.selectedIndex && !o.disabled));
+    if (index < 0) return false;
+    await el.selectOption({ index }, opts);
+  } else if (readonly || (tag === 'input' && type === 'file')) {
+    return false;
+  } else if (tag === 'input' && type === 'range') {
+    await el.evaluate((r) => {
+      const max = r.max === '' ? '100' : r.max;
+      const min = r.min === '' ? '0' : r.min;
+      r.value = r.value === max ? min : max;
+      r.dispatchEvent(new Event('input', { bubbles: true }));
+      r.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  } else {
+    await el.fill(tag === 'input' && FILL_VALUES[type] ? FILL_VALUES[type] : 'Seshat', opts);
+  }
+  return true;
+}
+
 // The generic interaction (D7.4). Deterministic: the same page gets the same actions, in document
-// order, with fixed values. No model call.
+// order, with fixed values. No model call. An action that fails gets one more try on a fresh load
+// of the page, so a dialog or overlay that an earlier action opened does not fail a later control.
+// It fails the step only when it fails on the fresh page too.
 async function operate(page, url) {
   const failures = [];
   const controls = page.locator('button, input, select, textarea, [role=button]');
   const total = Math.min(await controls.count(), MAX_CONTROLS);
   let operated = 0;
   for (let i = 0; i < total; i += 1) {
-    const el = controls.nth(i);
-    let kind = '';
     try {
-      if (!(await el.isVisible()) || !(await el.isEnabled())) continue;
-      const [tag, type, role] = await el.evaluate((e) => [
-        e.tagName.toLowerCase(), (e.getAttribute('type') || 'text').toLowerCase(), e.getAttribute('role'),
-      ]);
-      kind = tag === 'input' ? `input[type=${type}]` : tag;
-      const opts = { timeout: ACTION_TIMEOUT_MS };
-      if (tag === 'button' || role === 'button' || (tag === 'input' &&
-          ['button', 'submit', 'reset', 'image', 'checkbox', 'radio'].includes(type))) {
-        await el.click(opts);
-      } else if (tag === 'select') {
-        const index = await el.evaluate((s) => {
-          const other = [...s.options].findIndex((o, n) => n !== s.selectedIndex && !o.disabled);
-          return other;
-        });
-        if (index < 0) continue;
-        await el.selectOption({ index }, opts);
-      } else if (tag === 'input' && type === 'range') {
-        await el.evaluate((r) => {
-          const max = r.max === '' ? '100' : r.max;
-          const min = r.min === '' ? '0' : r.min;
-          r.value = r.value === max ? min : max;
-          r.dispatchEvent(new Event('input', { bubbles: true }));
-          r.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-      } else if (tag === 'input' && type === 'file') {
-        continue;
-      } else if (tag === 'input' && type === 'number') {
-        await el.fill('7', opts);
-      } else if (tag === 'input' && type === 'date') {
-        await el.fill('2026-01-15', opts);
-      } else if (tag === 'input' && type === 'color') {
-        await el.fill('#336699', opts);
-      } else {
-        await el.fill('Seshat', opts);
+      if (await operateOne(controls.nth(i))) operated += 1;
+    } catch {
+      try {
+        await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+        await page.waitForTimeout(300);
+        if (await operateOne(controls.nth(i))) operated += 1;
+      } catch (e) {
+        failures.push(`not operated: control ${i}: ${String(e).split('\n')[0]}`);
       }
-      operated += 1;
-    } catch (e) {
-      // A visible, enabled control that cannot be operated (covered by an overlay, never
-      // actionable) is a fail: the step must operate every control (D7.4).
-      failures.push(`not operated: control ${i} ${kind}: ${String(e).split('\n')[0]}`);
     }
     await page.waitForTimeout(100);
-    if (page.url() !== url) {
+    // A hash change stays on the page. Any other URL change leaves it.
+    if (withoutHash(page.url()) !== url) {
       return { operated, failures, navigated: page.url() };
     }
   }
   await page.waitForTimeout(500);
-  return { operated, failures, navigated: page.url() !== url ? page.url() : null };
+  return { operated, failures, navigated: withoutHash(page.url()) !== url ? page.url() : null };
 }
 
 async function pageMode() {

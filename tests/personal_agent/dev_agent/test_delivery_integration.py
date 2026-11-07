@@ -14,6 +14,7 @@ import tarfile
 
 import pytest
 
+from personal_agent.dev_agent import repo_pipeline
 from personal_agent.dev_agent.jobs import JobState
 from personal_agent.exceptions import DevAgentLaunchError
 
@@ -80,9 +81,28 @@ class TestCheckVerdict:
             page = tar.extractfile("dist/index.html")
             assert page is not None
             checked = page.read()
+            helper = tar.extractfile("tests/helper.mjs")
+            assert helper is not None and helper.read() == b"h"
         assert names == ["dist/index.html", "tests/helper.mjs", "tests/page.spec.mjs"]
         row = await delivery.row(job.id)
         assert checked == delivery.committed_page(row["repo"], job.id)
+
+    async def test_a_tests_folder_over_its_cap_ends_failed_check_with_a_stored_result(
+        self, delivery: Delivery, make_job: MakeJob, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """/code-review finding 7: the check judges it, and the result is stored."""
+        monkeypatch.setattr(repo_pipeline, "MAX_TEST_FILES", 1)
+        job = await delivery.job(make_job, Seed(PAGE, tests={"a.spec.mjs": "a", "b.spec.mjs": "b"}))
+        sup = delivery.supervisor("sup-a", FakeChecker())
+        await sup.scan_once()
+        await wait_end(sup)
+
+        row = await delivery.row(job.id)
+        assert row["state"] == "failed_check"
+        stored = json.loads(row["check_result"])
+        assert stored["steps"][2]["passed"] is False
+        assert "cap" in stored["steps"][2]["messages"][0]
+        assert await delivery.artifact_rows(job.user_id) == []
 
 
 class TestDelivery:
@@ -110,6 +130,35 @@ class TestDelivery:
         assert [(job_id, w["artifact_id"]) for job_id, w in delivery.events] == [
             (job.id, str(artifact["id"]))
         ]
+
+    async def test_a_failed_delivery_is_retried_once_and_publishes_once(
+        self, delivery: Delivery, make_job: MakeJob
+    ) -> None:
+        """/code-review finding 4: an in-process error retries the idempotent delivery."""
+        job = await delivery.job(make_job, Seed(PAGE))
+        delivery.r2.fail_puts = 1
+        sup = delivery.supervisor("sup-a", FakeChecker())
+        await sup.scan_once()
+        await wait_end(sup)
+
+        assert (await delivery.row(job.id))["state"] == "succeeded"
+        assert len(await delivery.artifact_rows(job.user_id)) == 1
+        assert len(delivery.r2.objects) == 1
+
+    async def test_two_failed_deliveries_end_the_job_failed(
+        self, delivery: Delivery, make_job: MakeJob
+    ) -> None:
+        job = await delivery.job(make_job, Seed(PAGE))
+        delivery.r2.fail_puts = 2
+        sup = delivery.supervisor("sup-a", FakeChecker())
+        await sup.scan_once()
+        await wait_end(sup)
+
+        row = await delivery.row(job.id)
+        assert (row["state"], row["failure_reason"]) == (
+            "failed",
+            "delivery_failed: ConnectionError",
+        )
 
     @pytest.mark.parametrize(
         "point", ["before_upload", "after_upload", "after_row_insert", "before_end_state"]

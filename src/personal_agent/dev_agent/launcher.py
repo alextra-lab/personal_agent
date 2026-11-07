@@ -622,7 +622,7 @@ class DockerLauncher:
             raise DevAgentLaunchError("the launcher has no handoff profile")
         name = handoff_container_name(job_id)
         out = handoff_volume_name(job_id)
-        labels = {JOB_LABEL: str(job_id), SCOPE_LABEL: self._scope, f"{JOB_LABEL}.kind": "handoff"}
+        labels = self._job_labels(job_id, "handoff")
         await self._docker("rm", "-f", name)
         try:
             await self._require(
@@ -737,7 +737,8 @@ class DockerLauncher:
             The output of the run. A nonzero exit is returned, not raised.
 
         Raises:
-            DevAgentLaunchError: If the profile is not set or the container cannot be created.
+            DevAgentLaunchError: If the profile is not set, the container cannot be created, or
+                Docker cannot start it.
         """
         profile = self._check_profile().model_copy(update={"image": setup.image_id})
         name = check_container_name(job_id, mode)
@@ -756,6 +757,9 @@ class DockerLauncher:
             )
         finally:
             await asyncio.shield(self._docker("rm", "-f", name))
+        if result.returncode == 125 and not result.stderr.startswith("output passed"):
+            # Docker's own start error, not an exit of the check: the page was not judged.
+            raise DevAgentLaunchError(f"check start failed: {result.stderr.strip()[-300:]}")
         log.info(
             "dev_agent_check_run",
             job_id=str(job_id),

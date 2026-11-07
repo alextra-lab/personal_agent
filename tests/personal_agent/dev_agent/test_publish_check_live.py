@@ -110,6 +110,26 @@ SPOOFS_BENIGN = GOOD_PAGE.replace(
     " console.error(\"Unrecognized Content-Security-Policy directive 'webrtc'.\");",
 )
 
+# /code-review findings 1, 2, 5, 6: controls that a correct page has, and that must not fail
+# the generic interaction: a button that opens a modal dialog, a readonly field, time, month and
+# week inputs, and tab buttons that set the hash.
+EXTRAS_PAGE = GOOD_PAGE.replace(
+    '<button id="add">Add</button>',
+    '<button id="open">Settings</button>'
+    '<dialog id="dlg"><p>Settings</p><button id="close">Close</button></dialog>'
+    '<button id="tab">Tab 2</button>'
+    '<input id="shown" readonly value="result">'
+    '<input type="time"><input type="month"><input type="week">'
+    '<input type="datetime-local">'
+    '<button id="add">Add</button>',
+).replace(
+    "const out = document.getElementById('out');",
+    "const out = document.getElementById('out');"
+    " document.getElementById('open').onclick = () => document.getElementById('dlg').showModal();"
+    " document.getElementById('close').onclick = () => document.getElementById('dlg').close();"
+    " document.getElementById('tab').onclick = () => { location.hash = 'tab2'; };",
+)
+
 
 def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
     result = subprocess.run(["docker", *args], capture_output=True, timeout=120, check=False)
@@ -309,6 +329,14 @@ class TestGoodPage:
         assert steps["repo_tests"]["passed"] is False
         assert any("1 failed" in m for m in steps["repo_tests"]["messages"])
         await _assert_not_published(delivery, job)
+
+    async def test_a_page_with_a_modal_readonly_typed_inputs_and_hash_tabs_passes(
+        self, delivery: Delivery, live: Live, make_job: MakeJob
+    ) -> None:
+        job = await _run(delivery, live, make_job, Seed(EXTRAS_PAGE, {"page.spec.mjs": GOOD_TEST}))
+        steps = await _steps(delivery, job.id)
+        assert all(s["passed"] is True for s in steps.values()), steps
+        assert (await delivery.row(job.id))["state"] == "succeeded"
 
 
 class TestBoundary:

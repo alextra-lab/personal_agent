@@ -135,6 +135,17 @@ class TestResult:
         assert result.passed is False
         assert result.steps[0].messages[0] == why
 
+    def test_a_tests_folder_over_its_cap_fails_the_repo_tests_step(self) -> None:
+        """/code-review finding 7: a fail of the check, with every digest, not a failed job."""
+        page_steps, digest = parse_check_output("page", _out(_page()))
+        tests_steps, _ = parse_check_output("tests", _out(_tests()))
+        result = check_result(
+            SETUP, page_steps, tests_steps, digest, page_problem=None, tests_problem="too many"
+        )
+        assert result.passed is False
+        assert result.steps[2].messages[0] == "too many"
+        assert result.to_json()["csp_manifest_digest"] == f"sha256:{SHA}"
+
     def test_a_normal_page_has_no_problem(self) -> None:
         assert page_problem_of("<p>é</p>".encode()) is None
 

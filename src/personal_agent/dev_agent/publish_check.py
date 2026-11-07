@@ -247,6 +247,7 @@ def check_result(
     csp_manifest_digest: str | None,
     *,
     page_problem: str | None,
+    tests_problem: str | None = None,
 ) -> CheckResult:
     """Combine the two runs into the stored result.
 
@@ -256,6 +257,8 @@ def check_result(
         tests_steps: The steps of the tests run.
         csp_manifest_digest: The digest that the page run reported.
         page_problem: What :func:`page_problem_of` found. It fails the load step.
+        tests_problem: Why ``tests/`` could not be exported (over a cap). It fails the repo tests
+            step.
 
     Returns:
         The result.
@@ -264,8 +267,11 @@ def check_result(
     if page_problem is not None and steps and steps[0].name == "load":
         load = steps[0]
         steps[0] = CheckStep("load", False, _clip([page_problem, *load.messages]))
+    tests = list(tests_steps)
+    if tests_problem is not None and tests and tests[0].name == "repo_tests":
+        tests[0] = CheckStep("repo_tests", False, _clip([tests_problem, *tests[0].messages]))
     return CheckResult(
-        steps=(*steps, *tests_steps),
+        steps=(*steps, *tests),
         image_digest=setup.image_id,
         toolkit_digest=setup.toolkit_digest,
         csp_manifest_digest=csp_manifest_digest,

@@ -471,3 +471,24 @@ class TestPublishCheck:
         for name in [check_container_name(job, "page"), check_container_name(job, "tests")]:
             assert name in removed
         assert set(check_volume_names(job).values()) <= set(removed)
+
+    async def test_a_docker_start_error_is_not_a_page_fail(self) -> None:
+        """/code-review finding 3: exit 125 from Docker raises, so the job ends check_unavailable."""
+        fake, raw = _fake(), FakeBytes(start_status=125)
+        job = uuid4()
+        with pytest.raises(DevAgentLaunchError, match="check start failed"):
+            await _check_launcher(fake, raw).run_check(job, _SETUP, "page", 90.0)
+        assert fake.argvs()[-1] == ["docker", "rm", "-f", check_container_name(job, "page")]
+
+    async def test_the_output_cap_is_the_run_result(self) -> None:
+        """Exit 125 from the output cap is the run's own result: a fail of its steps."""
+        fake = _fake()
+
+        class Capped(FakeBytes):
+            async def __call__(self, args: Sequence[str], **kwargs: object) -> BytesResult:  # type: ignore[override]
+                if list(args[1:3]) == ["start", "-a"]:
+                    return BytesResult(125, b"", "output passed 1048576 bytes")
+                return await super().__call__(args, **kwargs)  # type: ignore[arg-type]
+
+        result = await _check_launcher(fake, Capped()).run_check(uuid4(), _SETUP, "tests", 200.0)
+        assert result.returncode == 125

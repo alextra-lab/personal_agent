@@ -599,6 +599,55 @@ CREATE TABLE IF NOT EXISTS dev_job_calls (
 
 CREATE INDEX IF NOT EXISTS idx_dev_job_calls_job ON dev_job_calls (job_id, created_at);
 
+-- The dev-agent job record and its fenced-action log (ADR-0159 D9 / FRE-1684). Mirrors
+-- docker/postgres/migrations/0039_dev_jobs.sql. seshat_dev_broker gets no grant on either table.
+CREATE TABLE IF NOT EXISTS dev_jobs (
+    id                  UUID PRIMARY KEY,
+    user_id             UUID NOT NULL,
+    session_id          UUID NOT NULL,
+    trace_id            UUID NOT NULL,
+    approval_request_id TEXT NOT NULL UNIQUE,
+    mode                TEXT NOT NULL CHECK (mode IN ('build', 'fix')),
+    task_text           TEXT NOT NULL,
+    source_artifact_id  UUID,
+    repo                TEXT,
+    base_commit         TEXT,
+    result_commit       TEXT,
+    result_artifact_id  UUID,
+    model_id            TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN (
+        'queued', 'running', 'checking', 'delivering', 'succeeded', 'failed', 'failed_check',
+        'cap_reached', 'cost_unknown', 'timed_out', 'cancelled'
+    )),
+    spend_usd           NUMERIC(12, 6),
+    check_result        JSONB,
+    lease_owner         TEXT,
+    lease_epoch         BIGINT NOT NULL DEFAULT 0,
+    lease_expires_at    TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL,
+    started_at          TIMESTAMPTZ,
+    ended_at            TIMESTAMPTZ,
+    failure_reason      TEXT,
+    CHECK (mode <> 'fix' OR source_artifact_id IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS dev_jobs_one_active ON dev_jobs ((true))
+    WHERE state IN ('queued', 'running', 'checking', 'delivering');
+
+CREATE TABLE IF NOT EXISTS dev_job_actions (
+    id          BIGSERIAL PRIMARY KEY,
+    job_id      UUID NOT NULL REFERENCES dev_jobs (id),
+    lease_epoch BIGINT NOT NULL,
+    lease_owner TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL,
+    -- Set when the action returns, in the same transaction: 'done', or 'error' if it raised.
+    outcome     TEXT CHECK (outcome IN ('done', 'error')),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_dev_job_actions_job ON dev_job_actions (job_id, id);
+
 -- ===========================================================================
 -- sysgraph schema (ADR-0105 D2/D3 / FRE-714)
 --

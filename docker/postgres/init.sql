@@ -628,6 +628,9 @@ CREATE TABLE IF NOT EXISTS dev_jobs (
     started_at          TIMESTAMPTZ,
     ended_at            TIMESTAMPTZ,
     failure_reason      TEXT,
+    -- D8.9 (FRE-1685, migration 0040): true when main moved to the result commit, false when main
+    -- was not an ancestor of the result, NULL when unknown or not tried.
+    main_moved          BOOLEAN,
     CHECK (mode <> 'fix' OR source_artifact_id IS NOT NULL)
 );
 

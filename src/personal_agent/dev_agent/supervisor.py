@@ -5,11 +5,13 @@ the lease with a :class:`LeaseKeeper`, and does every external action through a 
 
 A job's path:
 
-1. fenced ``issue_token`` → ``running`` → fenced ``start_container`` (sets ``started_at``);
+1. fenced ``issue_token`` → ``running`` → the pipeline's ``prepare`` (the repo and the workspace
+   clone, FRE-1685) → fenced ``start_container`` (sets ``started_at``);
 2. the adapter runs the task until it ends, the 30-minute limit passes, or the broker stops the
    token (``cap_reached`` / ``cost_unknown``, D5.8);
 3. fenced ``revoke_token`` and ``stop_agent`` (D8.8.1), then the pipeline's handoff;
-4. a result → ``checking`` → check → ``delivering`` → delivery → ``succeeded``;
+4. a result → ``checking`` → check → ``delivering`` → delivery → the pipeline's ``advance_main``
+   (D8.9) → ``succeeded``;
 5. every end state is one fenced ``cleanup``: revoke the token, remove the job's containers and
    volume and verify, then the end state. The job leaves the one-job slot only after that.
 
@@ -33,7 +35,7 @@ import socket
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Protocol, TypeVar
 from uuid import uuid4
@@ -50,7 +52,7 @@ from personal_agent.delegation.protocols import (
 from personal_agent.dev_agent.jobs import DevJob, JobState, JobStore, Lease
 from personal_agent.dev_agent.launcher import AgentLauncher
 from personal_agent.dev_broker.tokens import issue_job_token, revoke_job_token
-from personal_agent.exceptions import LeaseLostError
+from personal_agent.exceptions import DevJobRefusedError, LeaseLostError
 from personal_agent.telemetry.trace import TraceContext
 
 log = structlog.get_logger(__name__)
@@ -260,11 +262,29 @@ class Fence:
             )
 
 
-class JobResultPipeline(Protocol):
-    """The steps after the agent: handoff (FRE-1685), check and delivery (FRE-1686).
+@dataclass(frozen=True)
+class PreparedJob:
+    """What ``prepare`` gives the agent container.
 
-    Every external action of a step goes through ``fence.run``.
+    Attributes:
+        job: The job, with ``repo`` and ``base_commit`` set when the pipeline has a repo.
+        workspace: A tar of the clone for the workspace volume, or ``None`` for an empty one.
     """
+
+    job: DevJob
+    workspace: bytes | None
+
+
+class JobResultPipeline(Protocol):
+    """The repo steps around the agent (FRE-1685), and the check and delivery (FRE-1686).
+
+    Every external action of a step goes through ``fence.run``. A step that raises
+    :class:`DevJobRefusedError` ends the job with that reason.
+    """
+
+    async def prepare(self, job: DevJob, fence: Fence) -> PreparedJob:
+        """Make the repo and the workspace clone, before the agent container starts (D8.4)."""
+        ...
 
     async def handoff(self, job: DevJob, fence: Fence) -> str | None:
         """Take the agent's commits out of the workspace. Return the result commit, or ``None``."""
@@ -278,9 +298,18 @@ class JobResultPipeline(Protocol):
         """Publish the result. Idempotent (D9.8): a retry after a crash publishes once."""
         ...
 
+    async def advance_main(self, job: DevJob, fence: Fence) -> None:
+        """After the publish, fast-forward the repo's ``main`` to the result, if it can (D8.9)."""
+        ...
+
 
 class NoResultPipeline:
-    """The pipeline until FRE-1685 and FRE-1686 land: no handoff, so no job has a result."""
+    """A pipeline with no repo: an empty workspace and no handoff, so no job has a result."""
+
+    async def prepare(self, job: DevJob, fence: Fence) -> PreparedJob:
+        """Return the job unchanged, with an empty workspace."""
+        del fence
+        return PreparedJob(job=job, workspace=None)
 
     async def handoff(self, job: DevJob, fence: Fence) -> str | None:
         """Return ``None``: the handoff is not built yet."""
@@ -294,6 +323,10 @@ class NoResultPipeline:
     async def deliver(self, job: DevJob, fence: Fence) -> None:
         """Never reached without a check."""
         raise NotImplementedError("delivery arrives with FRE-1686")
+
+    async def advance_main(self, job: DevJob, fence: Fence) -> None:
+        """Never reached without a delivery."""
+        del job, fence
 
 
 class _EndFailedError(Exception):
@@ -545,10 +578,24 @@ class JobSupervisor:
 
         token = await fence.run("issue_token", issue)
         await self._store.transition(fence.lease, JobState.RUNNING)
+        try:
+            prepared = await self._pipeline.prepare(job, fence)
+        except DevJobRefusedError as refused:
+            log.warning(
+                "dev_job_refused",
+                job_id=str(job.id),
+                reason=refused.reason,
+                trace_id=job.trace_id.hex,
+            )
+            await self._end(job, fence, JobState.FAILED, refused.reason)
+            return
+        job = prepared.job
 
         async def start(conn: asyncpg.Connection) -> None:
             del conn
-            await self._launcher.start(job.id, job_token=token, server_password=password)
+            await self._launcher.start(
+                job.id, job_token=token, server_password=password, workspace=prepared.workspace
+            )
 
         await fence.run("start_container", start, mark_started=True)
         log.info("dev_job_running", job_id=str(job.id), trace_id=job.trace_id.hex)
@@ -579,7 +626,18 @@ class JobSupervisor:
             await self._launcher.stop(job.id)
 
         await fence.run("stop_agent", stop_agent)
-        result = await self._pipeline.handoff(job, fence)
+        try:
+            result = await self._pipeline.handoff(job, fence)
+        except DevJobRefusedError as refused:
+            log.warning(
+                "dev_job_result_refused",
+                job_id=str(job.id),
+                reason=refused.reason,
+                trace_id=job.trace_id.hex,
+            )
+            state = JobState.TIMED_OUT if timed_out else JobState.FAILED
+            await self._end(job, fence, state, refused.reason, revoked=True)
+            return
         if result is None:
             if timed_out:
                 await self._end(job, fence, JobState.TIMED_OUT, "time_limit", revoked=True)
@@ -589,6 +647,7 @@ class JobSupervisor:
                 missing = outcome.what_was_missing if outcome is not None else "no_outcome"
                 await self._end(job, fence, JobState.FAILED, f"agent: {missing}", revoked=True)
             return
+        job = replace(job, result_commit=result)
         await self._store.transition(fence.lease, JobState.CHECKING)
         if not await self._pipeline.check(job, result, fence):
             await self._end(job, fence, JobState.FAILED_CHECK, "check_failed", revoked=True)
@@ -616,7 +675,29 @@ class JobSupervisor:
                 job, fence, JobState.FAILED, f"delivery_failed: {type(exc).__name__}", revoked=True
             )
             return
+        await self._advance_main(job, fence)
         await self._end(job, fence, JobState.SUCCEEDED, None, revoked=True)
+
+    async def _advance_main(self, job: DevJob, fence: Fence) -> None:
+        """Try ``advance_main`` twice. The page is published, so a failure never fails the job.
+
+        After two failures ``main_moved`` stays ``NULL``: the outcome is unknown (D8.9).
+        """
+        for attempt in (1, 2):
+            try:
+                await self._pipeline.advance_main(job, fence)
+                return
+            except LeaseLostError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — the page is published; main is secondary
+                log.warning(
+                    "dev_job_advance_main_failed",
+                    job_id=str(job.id),
+                    attempt=attempt,
+                    error_type=type(exc).__name__,
+                    trace_id=job.trace_id.hex,
+                )
+        log.error("dev_job_main_moved_unknown", job_id=str(job.id), trace_id=job.trace_id.hex)
 
     async def _run_agent(
         self, job: DevJob, password: str, timeout: float, keeper: LeaseKeeper

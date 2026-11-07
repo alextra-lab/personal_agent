@@ -1,6 +1,7 @@
 """Fixtures for the job record and supervisor tests (FRE-1684).
 
-The database tests run on the test stack (:5433, FRE-375) as ``agent``. Apply the migrations first::
+The database tests run on the test stack (:5433, FRE-375) as the gateway's role ``seshat_app``, so a
+passing test also proves that role's grants. Apply the migrations first (as ``agent``)::
 
     docker exec -i build-postgres-test-1 psql -U agent -d personal_agent \
         < docker/postgres/migrations/0039_dev_jobs.sql
@@ -49,7 +50,7 @@ async def delete_test_jobs(pool: asyncpg.Pool) -> None:
 
 @pytest_asyncio.fixture
 async def admin_pool() -> AsyncIterator[asyncpg.Pool]:
-    """A pool as ``agent`` on the test stack. Test jobs are removed before and after the test."""
+    """A pool as ``seshat_app`` on the test stack. Test jobs are removed before and after the test."""
     pool = await asyncpg.create_pool(
         _normalize_asyncpg_dsn(settings.database_url), min_size=1, max_size=8
     )

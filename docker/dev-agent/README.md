@@ -148,8 +148,8 @@ The gateway runs the supervisor (`personal_agent.dev_agent.supervisor`) when
    `healthy` (the health check no longer imports the cost gate).
 
 Before the supervisor can run a job, the toolkit volume (`AGENT_DEV_AGENT_TOOLKIT_VOLUME`) must exist
-with the pinned toolkit. The launcher refuses to start a job without it. Filling that volume is a
-separate ticket.
+with the pinned toolkit. The launcher refuses to start a job without it. Filling that volume is
+FRE-1751.
 
 ### Notes for FRE-1685 and FRE-1686
 

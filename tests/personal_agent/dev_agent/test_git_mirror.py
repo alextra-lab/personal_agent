@@ -218,6 +218,18 @@ class TestHandoffChecks:
             head = await mirror.commit_template(template)
             assert await mirror.is_ancestor("0" * 40, head) is False
 
+    async def test_a_bundle_with_a_dot_git_tree_entry_is_refused(self, tmp_path: Path) -> None:
+        """Code review item 3: fsck runs on the bundle fetch (git 2.47: hasDotgit)."""
+        ws = tmp_path / "bad"
+        subprocess.run(["git", "init", "-q", str(ws)], check=True)
+        blob = git(ws, "hash-object", "-w", "--stdin", stdin=b"x\n").strip()
+        tree = git(ws, "mktree", stdin=f"100644 blob {blob}\t.git\n".encode()).strip()
+        commit = git(ws, "commit-tree", tree, "-m", "bad").strip()
+        git(ws, "update-ref", f"refs/heads/{_BRANCH}", commit)
+        async with GitMirror.open() as mirror:
+            with pytest.raises(DevAgentRepoError, match="fsck|dotgit|index-pack"):
+                await mirror.fetch_bundle(bundle_of(ws), _BRANCH)
+
     async def test_garbage_bundle_is_refused(self) -> None:
         async with GitMirror.open() as mirror:
             with pytest.raises(DevAgentRepoError):

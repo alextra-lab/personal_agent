@@ -248,7 +248,8 @@ class GitHubRepoPipeline:
 
         try:
             bundle = await fence.run("handoff_bundle", bundle_it)
-        except DevAgentLaunchError as exc:
+        except (DevAgentLaunchError, TimeoutError) as exc:
+            # TimeoutError: the fence's action limit cut the handoff (code review finding 2).
             log.warning(
                 "dev_job_handoff_failed",
                 job_id=str(job.id),

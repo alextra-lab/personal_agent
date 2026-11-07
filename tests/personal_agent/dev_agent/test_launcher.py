@@ -354,6 +354,16 @@ class TestRunBytes:
         result = await run_bytes(["head", "-c", "5000", "/dev/zero"], max_stdout=100)
         assert (result.returncode, result.stdout) == (125, b"")
 
+    async def test_output_past_the_cap_kills_a_child_that_keeps_running(self) -> None:
+        """Code review finding 1: the cap ends the call at once, not at the timeout."""
+        import time
+
+        script = "import sys, time; sys.stdout.write('x' * 200000); sys.stdout.flush(); time.sleep(30)"
+        started = time.monotonic()
+        result = await run_bytes(["python3", "-c", script], max_stdout=1000, timeout=20)
+        assert (result.returncode, result.stdout) == (125, b"")
+        assert time.monotonic() - started < 5
+
     async def test_a_timeout_returns_124(self) -> None:
         result = await run_bytes(["sleep", "5"], timeout=0.2)
         assert result.returncode == 124

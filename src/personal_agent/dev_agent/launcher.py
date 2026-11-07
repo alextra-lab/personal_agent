@@ -71,12 +71,26 @@ def workspace_volume_name(job_id: UUID) -> str:
 
 
 def handoff_container_name(job_id: UUID) -> str:
-    """Return the name of a job's handoff container."""
+    """Return the name of a job's handoff container.
+
+    Args:
+        job_id: The job.
+
+    Returns:
+        A Docker name.
+    """
     return f"seshat-dev-handoff-{job_id}"
 
 
 def handoff_volume_name(job_id: UUID) -> str:
-    """Return the name of the output volume of a job's handoff container."""
+    """Return the name of the output volume of a job's handoff container.
+
+    Args:
+        job_id: The job.
+
+    Returns:
+        A Docker name.
+    """
     return f"seshat-dev-out-{job_id}"
 
 
@@ -239,10 +253,18 @@ async def run_bytes(
         finally:
             proc.stdin.close()
 
+    async def read_out() -> bytes | None:
+        out = await _read_capped(proc.stdout, max_stdout, keep_past_cap=False)
+        if out is None:
+            # Past the cap: kill now. The child would block on the full pipe, and stderr would
+            # never close (code review finding 1).
+            await _kill(proc)
+        return out
+
     async def body() -> tuple[bytes | None, bytes]:
         _, out, err = await asyncio.gather(
             feed(),
-            _read_capped(proc.stdout, max_stdout, keep_past_cap=False),
+            read_out(),
             _read_capped(proc.stderr, 65536, keep_past_cap=True),
         )
         if out is not None:

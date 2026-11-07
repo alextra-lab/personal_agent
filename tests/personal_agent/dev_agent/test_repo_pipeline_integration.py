@@ -88,6 +88,8 @@ class BundleLauncher:
 
     async def bundle_workspace(self, job_id: UUID, branch: str) -> bytes:
         assert branch == job_branch(job_id)
+        if self.bundles.get(job_id) is None:
+            raise TimeoutError("seeded: the handoff passed the fence's action limit")
         return self.bundles[job_id]
 
 
@@ -347,6 +349,16 @@ class TestHandoff:
         repo = prepared.job.repo or ""
         assert env.host.ref(repo, f"refs/heads/{job_branch(job.id)}") is None
         assert (await env.row(job.id))["result_commit"] is None
+
+    async def test_a_handoff_cut_by_the_action_limit_is_handoff_failed(
+        self, env: Env, make_job: MakeJob
+    ) -> None:
+        """Code review finding 2: a TimeoutError keeps the stable reason."""
+        job = await make_job()
+        fence = await env.fence_for(job)
+        prepared = await env.pipeline.prepare(job, fence)
+        with pytest.raises(DevJobRefusedError, match="handoff_failed"):
+            await env.pipeline.handoff(prepared.job, fence)
 
     async def test_no_commit_is_no_result(self, env: Env, make_job: MakeJob) -> None:
         job = await make_job()

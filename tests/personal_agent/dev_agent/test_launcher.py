@@ -155,3 +155,24 @@ class TestLabels:
             runner=listing,
         )
         assert await launcher.labelled_job_ids() == {a, b}
+
+
+class TestRunCommand:
+    async def test_a_cancelled_call_kills_and_reaps_its_child(self) -> None:
+        """Review finding 5: a cancelled caller leaves no CLI process behind."""
+        import asyncio
+
+        import psutil  # type: ignore[import-untyped]
+
+        from personal_agent.dev_agent.launcher import run_command
+
+        marker = "31.4159"
+        task = asyncio.create_task(run_command(["sleep", marker]))
+        await asyncio.sleep(0.3)
+        children = [p for p in psutil.Process().children() if p.cmdline()[-1:] == [marker]]
+        assert len(children) == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not children[0].is_running() or children[0].status() == psutil.STATUS_ZOMBIE
+        assert not [p for p in psutil.Process().children() if p.cmdline()[-1:] == [marker]]

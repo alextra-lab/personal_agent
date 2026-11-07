@@ -132,6 +132,13 @@ _JOB_COLUMNS = """
     model_id, state, lease_epoch, started_at, result_commit, result_artifact_id
 """
 
+#: The row predicate of the lease's own row, without the expiry. Valid only inside a fence: the
+#: fence checked the expiry and holds the row lock, so no one else can take the lease meanwhile.
+_OWN_ROW = f"""
+    id = $1 AND lease_epoch = $2 AND lease_owner = $3
+    AND state <> ALL('{{{",".join(_END_STATE_VALUES)}}}'::text[])
+"""
+
 #: The row predicate of a valid lease. $1 job id, $2 epoch, $3 owner.
 _HELD = f"""
     id = $1 AND lease_epoch = $2 AND lease_owner = $3
@@ -341,7 +348,8 @@ class JobStore:
 
         Raises:
             LeaseLostError: If the lease is not valid. ``operation`` did not run.
-            Exception: Whatever ``operation`` raised. The action row records ``error``.
+            Exception: Whatever ``operation`` raised. Its database writes roll back, and the action
+                row records ``error``.
         """
         async with self._pool.acquire() as conn:
             async with conn.transaction():
@@ -383,11 +391,13 @@ class JobStore:
                 )
                 failure: Exception | None = None
                 try:
-                    result = await operation(conn)
+                    # A savepoint: a failed action rolls back its own database writes, and an
+                    # aborted statement does not abort the fence's transaction.
+                    async with conn.transaction():
+                        result = await operation(conn)
                 except Exception as exc:  # noqa: BLE001 — recorded, committed, then re-raised
                     failure = exc
-                # The block commits in both cases, so the log keeps an action that raised. A
-                # database write of the action commits too: the action may have partly happened.
+                # The fence commits in both cases, so the log keeps an action that raised.
                 await self._record_outcome(conn, action_id, "error" if failure else "done")
                 # The row stayed locked, so no one took the lease. Extend it again, or an action
                 # longer than the lease would leave its own holder with an expired lease.
@@ -445,6 +455,9 @@ class JobStore:
     ) -> None:
         """Write the end state. Call it only inside the cleanup fence, after the cleanup.
 
+        It does not check the lease expiry: the fence checked it and holds the row lock, so a
+        cleanup that outlasts the lease still writes its end state.
+
         Args:
             conn: The fenced transaction's connection.
             lease: The lease of the fence.
@@ -463,7 +476,7 @@ class JobStore:
                SET state = $4, failure_reason = $5, ended_at = clock_timestamp(),
                    lease_expires_at = NULL,
                    spend_usd = (SELECT committed_usd FROM dev_job_spend WHERE job_id = $1)
-             WHERE {_HELD}
+             WHERE {_OWN_ROW}
             RETURNING id
             """,
             lease.job_id,

@@ -328,7 +328,7 @@ class TestPausedSupervisor:
         assert events == [], f"Docker saw an action for the job after the resume: {events}"
         assert live.leftovers(job.id) == []
         assert await live.actions(job.id) == actions
-        assert [owner for _, _, owner, _ in actions] == ["child-a", "gateway-b"]
+        assert [owner for _, _, owner, _ in actions] == ["child-a", "gateway-b", "gateway-b"]
         assert await live.token(job.id) == token == "revoked"
         row = await live.row(job.id)
         assert (row["state"], row["lease_epoch"], row["lease_owner"]) == ("failed", 2, "gateway-b")

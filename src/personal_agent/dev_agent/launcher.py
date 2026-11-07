@@ -14,6 +14,7 @@ with no value), so they never show on a command line.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -100,12 +101,23 @@ async def run_command(
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=DOCKER_TIMEOUT_SECONDS)
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
+        await _kill(proc)
         return CommandResult(124, "", f"timed out after {DOCKER_TIMEOUT_SECONDS} s")
+    except BaseException:
+        # A cancelled caller must not leave the CLI running: it could act after the fence ended.
+        await asyncio.shield(_kill(proc))
+        raise
     return CommandResult(
         proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
     )
+
+
+async def _kill(proc: asyncio.subprocess.Process) -> None:
+    """Kill a child process, if it still runs, and reap it."""
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    await proc.wait()
 
 
 class AgentLauncher(Protocol):

@@ -156,7 +156,12 @@ class TestPausedSupervisor:
         assert "start" not in h.docker.ops(job.id)
         assert h.docker.calls == calls_before
         assert await h.actions(job.id) == rows_before
-        assert [r[2] for r in rows_before] == ["sup-a", "sup-b"]  # issue_token, then B's cleanup
+        # A's issue_token, then B's revoke and cleanup.
+        assert [(r[0], r[2]) for r in rows_before] == [
+            ("issue_token", "sup-a"),
+            ("revoke_token", "sup-b"),
+            ("cleanup", "sup-b"),
+        ]
         assert await h.token(job.id) == token_before == "revoked"
         row = await h.row(job.id)
         assert (row["state"], row["lease_epoch"], row["lease_owner"]) == ("failed", 2, "sup-b")
@@ -231,6 +236,7 @@ class TestLimits:
             "start_container",
             "revoke_token",
             "stop_agent",
+            "revoke_token",
             "cleanup",
         ]
 
@@ -251,6 +257,33 @@ class TestLimits:
         row = await h.row(job.id)
         assert (row["state"], row["failure_reason"]) == ("cap_reached", "cap_reached")
         assert job.id not in h.docker.containers
+        assert await h.token(job.id) == "revoked"
+
+    async def test_a_stop_after_the_last_renewal_is_not_lost(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        """Review finding 2: the broker stops the token, and the agent ends before a renewal."""
+        job = await make_job()
+
+        async def stopped_then_done(
+            package: DelegationPackage, timeout: float
+        ) -> DelegationOutcome:
+            del timeout
+            await h.pool.execute(
+                "UPDATE dev_job_tokens SET status = 'stopped', stop_reason = 'cost_unknown' "
+                "WHERE job_id = $1",
+                job.id,
+            )
+            return DelegationOutcome(package.task_id, True, 1, "done", "")
+
+        pipeline = RecordingPipeline(result="abc123")
+        a = h.supervisor("sup-a", behaviour=stopped_then_done, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        assert a.keeper is not None and a.keeper.renewals == 0
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("cost_unknown", "cost_unknown")
+        assert pipeline.calls == [], "a stopped job never reaches the handoff"
         assert await h.token(job.id) == "revoked"
 
     async def test_sixty_seconds_without_a_renewal_stops_all_work(
@@ -345,4 +378,3 @@ class TestResult:
         row = await h.row(job.id)
         assert (row["state"], row["lease_epoch"]) == ("succeeded", 2)
         assert job.id not in h.docker.containers
-

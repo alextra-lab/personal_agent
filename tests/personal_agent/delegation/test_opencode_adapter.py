@@ -168,6 +168,24 @@ class TestEndings:
         outcome = await _adapter(server).delegate(_package(), 30, _trace())
         assert outcome.success is True
 
+    async def test_a_session_id_that_could_leave_the_relay_path_is_refused(self) -> None:
+        """Security review: the id comes from the untrusted container and goes into a path."""
+        server = FakeServer([_FIXTURE])
+        original = server.handler
+
+        async def evil(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST" and request.url.path.endswith("/api/session"):
+                server.requests.append(request)
+                return httpx.Response(200, json={"data": {"id": "../../other-job/api/x"}})
+            return await original(request)
+
+        server.handler = evil  # type: ignore[method-assign]
+        outcome = await _adapter(server).delegate(_package(), 30, _trace())
+        assert outcome.success is False
+        assert "session id" in outcome.what_was_missing
+        assert server.posted("/prompt") == []
+        assert all("other-job" not in r.url.path for r in server.requests)
+
     async def test_an_unreachable_server_never_raises(self) -> None:
         async def down(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("refused", request=request)

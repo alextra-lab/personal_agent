@@ -498,19 +498,27 @@ class JobSupervisor:
 
         left = await self._store.seconds_left(job.id, policy.time_limit_seconds)
         outcome = await self._run_agent(job, password, max(left, 0.0), keeper)
-        if keeper.stop_reason is not None:
-            state = _STOP_STATES.get(keeper.stop_reason, JobState.FAILED)
-            await self._end(job, fence, state, keeper.stop_reason)
-            return
 
-        async def revoke(conn: asyncpg.Connection) -> None:
+        async def read_and_revoke(conn: asyncpg.Connection) -> str | None:
+            # A stop that came after the last renewal is read here, before the revoke overwrites it.
+            row = await conn.fetchrow(
+                "SELECT status, stop_reason FROM dev_job_tokens WHERE job_id = $1", job.id
+            )
             await revoke_job_token(conn, job.id)
+            if row is not None and row["status"] == "stopped":
+                return str(row["stop_reason"]) if row["stop_reason"] else None
+            return None
+
+        stop_reason = await fence.run("revoke_token", read_and_revoke) or keeper.stop_reason
+        if stop_reason is not None:
+            state = _STOP_STATES.get(stop_reason, JobState.FAILED)
+            await self._end(job, fence, state, stop_reason)
+            return
 
         async def stop_agent(conn: asyncpg.Connection) -> None:
             del conn
             await self._launcher.stop(job.id)
 
-        await fence.run("revoke_token", revoke)
         await fence.run("stop_agent", stop_agent)
         timed_out = await self._store.seconds_left(job.id, policy.time_limit_seconds) <= 0
         result = await self._pipeline.handoff(job, fence)
@@ -575,13 +583,19 @@ class JobSupervisor:
             return run.result() if run.done() and not run.cancelled() else None
 
     async def _end(self, job: DevJob, fence: Fence, state: JobState, reason: str | None) -> None:
-        """Clean up, then write the end state, in one fenced action. The slot frees only after it."""
+        """Revoke the token, then remove and write the end state. The slot frees only after both.
+
+        The revoke is its own fence, so it commits even when the removal then fails.
+        """
+
+        async def revoke(conn: asyncpg.Connection) -> None:
+            await revoke_job_token(conn, job.id)
 
         async def cleanup(conn: asyncpg.Connection) -> None:
-            await revoke_job_token(conn, job.id)
             await self._launcher.remove(job.id)
             await JobStore.finish(conn, fence.lease, state, reason)
 
+        await fence.run("revoke_token", revoke)
         await fence.run("cleanup", cleanup)
         log.info(
             "dev_job_ended",

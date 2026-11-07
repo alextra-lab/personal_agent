@@ -28,7 +28,7 @@ from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
 log = structlog.get_logger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class RunningSupervisor:
     """The supervisor task and the pool it owns.
 
@@ -89,10 +89,10 @@ async def start_supervisor() -> RunningSupervisor | None:
             trace_id=None,
         )
         return None
+    profiles = load_profiles()
     pool = await asyncpg.create_pool(
         _normalize_asyncpg_dsn(settings.database_url), min_size=1, max_size=4, command_timeout=30
     )
-    profiles = load_profiles()
     supervisor = JobSupervisor(
         store=JobStore(pool),
         launcher=DockerLauncher(

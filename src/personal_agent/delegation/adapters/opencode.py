@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -48,6 +49,9 @@ END_EVENTS: dict[str, bool] = {
 }
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+
+#: The form of an OpenCode session id (``ses_`` and an alphanumeric suffix, observed in 2.2.5).
+_SESSION_ID = re.compile(r"ses_[A-Za-z0-9]{1,128}")
 
 
 def opencode_client(
@@ -238,6 +242,10 @@ class OpenCodeAdapter:
         )
         created.raise_for_status()
         session_id = str(created.json()["data"]["id"])
+        if not _SESSION_ID.fullmatch(session_id):
+            # The id comes from the untrusted container. It goes into a request path, so a value
+            # such as "../../<other job>" must never reach the relay (security review, FRE-1684).
+            raise ValueError("OpenCode returned a session id outside the expected form")
         prompted = await self._client.post(
             f"/api/session/{session_id}/prompt", json={"text": package.task_description}
         )

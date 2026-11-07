@@ -165,6 +165,44 @@ class TestFence:
             ("remove", "error", 1),
         ]
 
+    async def test_a_database_error_in_an_action_is_raised_and_logged(
+        self, make_job: MakeJob, store: JobStore, admin_pool: asyncpg.Pool
+    ) -> None:
+        """Review finding 3: the real error reaches the caller, and the action row survives."""
+        job = await make_job()
+        taken = await store.claim_new("sup-a", _LEASE)
+        assert taken is not None
+        _, lease = taken
+
+        async def bad_sql(conn: asyncpg.Connection) -> None:
+            await conn.execute("UPDATE dev_jobs SET task_text = 'changed' WHERE id = $1", job.id)
+            await conn.execute("SELECT * FROM no_such_table")
+
+        with pytest.raises(asyncpg.UndefinedTableError):
+            await store.fenced(lease, "issue_token", bad_sql, lease_seconds=_LEASE)
+        rows = await admin_pool.fetch(
+            "SELECT action, outcome FROM dev_job_actions WHERE job_id = $1", job.id
+        )
+        assert [(r["action"], r["outcome"]) for r in rows] == [("issue_token", "error")]
+        assert (await store.get(job.id)).task_text != "changed"  # type: ignore[union-attr]
+        assert await store.renew(lease, _LEASE) is not None
+
+    async def test_a_cleanup_longer_than_the_lease_still_writes_the_end_state(
+        self, make_job: MakeJob, store: JobStore
+    ) -> None:
+        """Review finding 1: inside the fence the row lock, not the expiry, proves the lease."""
+        job = await make_job()
+        taken = await store.claim_new("sup-a", 1.0)
+        assert taken is not None
+        _, lease = taken
+
+        async def slow_cleanup(conn: asyncpg.Connection) -> None:
+            await asyncio.sleep(1.5)
+            await store.finish(conn, lease, JobState.TIMED_OUT, "time_limit")
+
+        await store.fenced(lease, "cleanup", slow_cleanup, lease_seconds=1.0)
+        assert (await store.get(job.id)).state is JobState.TIMED_OUT  # type: ignore[union-attr]
+
     async def test_recovery_cannot_take_a_job_while_its_action_runs(
         self, make_job: MakeJob, store: JobStore, admin_pool: asyncpg.Pool
     ) -> None:

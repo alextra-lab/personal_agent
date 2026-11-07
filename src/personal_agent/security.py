@@ -220,7 +220,8 @@ class DomainGuard:
         staleness episode so a stalled warm job is visible without the hot path
         paying for it or flooding logs on every request.
         """
-        if self._mode is GuardMode.OFF or not self._is_stale():
+        # Only blocklist mode reads the feed; OFF and ALLOWLIST cannot be stale (FRE-1683).
+        if self._mode is not GuardMode.BLOCKLIST or not self._is_stale():
             return
         if not self._logged_stale:
             log.warning(

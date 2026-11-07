@@ -12,6 +12,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict
@@ -113,6 +114,22 @@ class ContainerProfiles(_Frozen):
     agent: ContainerProfile
     check: ContainerProfile
     handoff: ContainerProfile
+
+
+def agent_container_name(job_id: UUID) -> str:
+    """Return the name of a job's agent container.
+
+    The launcher (FRE-1684) names the container with it, and the broker's control relay
+    (FRE-1683) resolves it on ``dev-agent``. One rule, so the relay can reach only the container
+    of the job that the gateway names.
+
+    Args:
+        job_id: The job.
+
+    Returns:
+        A Docker container name that is also a DNS label (53 characters).
+    """
+    return f"seshat-dev-agent-{job_id}"
 
 
 def load_profiles(path: Path = DEFAULT_PROFILES_PATH) -> ContainerProfiles:

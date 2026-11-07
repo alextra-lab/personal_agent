@@ -53,7 +53,7 @@ endif
         infra-up infra-down dev \
         deploy build build-full vps-bootstrap \
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
-        sandbox-build dev-agent-build dev-agent-verify prompt-show \
+        sandbox-build dev-agent-build dev-agent-verify dev-broker-verify prompt-show \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
         verify-envelope verify-lib verify-artifact-e2e \
@@ -321,6 +321,9 @@ dev-agent-build:  ## Build the four dev-agent images (check, agent, handoff, pro
 
 dev-agent-verify:  ## Live check of the dev-agent network, proxy and images (ARGS="--compose-project <p> --up --down")
 	uv run python -m scripts.verify_dev_agent_images $(ARGS)
+
+dev-broker-verify:  ## Live check of the dev-agent broker: inspect, port scans, relay and role refusals
+	uv run python -m scripts.verify_dev_broker
 
 # ─── One-shot maintenance ─────────────────────────────────────────────────────
 

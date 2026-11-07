@@ -333,6 +333,23 @@ class TestNoteStaleness:
 
         mock_log.warning.assert_not_called()
 
+    def test_noop_when_allowlist_mode(self, tmp_path: Path) -> None:
+        """GuardMode.ALLOWLIST never reads the blocklist either, so it is never stale (FRE-1683).
+
+        The dev-agent broker builds an allowlist guard for each relayed request; a warning here
+        would fire on every one of them.
+        """
+        g = DomainGuard(
+            cache_path=tmp_path / "bl.json",
+            mode=GuardMode.ALLOWLIST,
+            allowlist=frozenset({"172.19.0.7"}),
+        )
+
+        with patch("personal_agent.security.log") as mock_log:
+            g.note_staleness()
+
+        mock_log.warning.assert_not_called()
+
     def test_silent_when_fresh(self, tmp_path: Path) -> None:
         """A recently-loaded guard is not stale — note_staleness() logs nothing."""
         g = _guard(tmp_path)  # _guard() sets _last_loaded = now()

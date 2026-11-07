@@ -192,7 +192,7 @@ jobs:
       - name: Run integration tests (transport + schema parity)
         run: |
           PERSONAL_AGENT_INTEGRATION=1 uv run python -m pytest -m integration \
-            -k "transport or init_sql" \
+            -k "transport or init_sql or dev_broker" \
             -v --tb=short
         env:
           APP_ENV: test

@@ -58,3 +58,63 @@ control. A probe that never reaches anything proves nothing, so the control must
 - **Residual risk.** The proxy decides by the host name of the `CONNECT` target. It cannot read the encrypted tunnel.
   The agent can send data to `registry.npmjs.org`. It cannot send it anywhere else.
 - **Observed on 2026-11-06.** On `dev-agent`, external names do not resolve (no DNS path out). A connection to the network's `.1` address on port 22 times out.
+
+## The broker (FRE-1683)
+
+`seshat-dev-broker` (in `docker-compose.cloud.yml`) runs `python -m personal_agent.dev_broker` from the gateway
+image. It has two listeners, each on the broker's own address on one network:
+
+| Network | Port | Listener | Authenticated by |
+|---|---|---|---|
+| `dev-agent` | 8700 | `POST /v1/chat/completions`, OpenAI-compatible, `stream` supported | the job token (`Authorization: Bearer`) |
+| `cloud-sim` | 8701 | `/{method} /relay/{job_id}/{path}` to the job's OpenCode server, and `/healthz` | `X-Dev-Broker-Secret` |
+
+Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration `0038_dev_broker.sql`.
+
+### First deploy (master)
+
+1. Add the role `dev_agent` to the real `config/governance/budget.yaml`, as in `budget.yaml.example` (the role
+   block and the `uncapped_roles` entry). Without it, the gateway refuses to start after its rebuild
+   (`validate_role_totality`).
+2. Apply `docker/postgres/migrations/0038_dev_broker.sql` with `AGENT_DATABASE_ADMIN_URL`. It creates the role
+   `seshat_dev_broker` with no password, so nothing can log in as it before step 3.
+3. Generate two values (`openssl rand -hex 32`). Put them in `/opt/seshat/.env` as `DEV_BROKER_DB_PASSWORD` and
+   `AGENT_DEV_BROKER_CONTROL_SECRET`, and in `pass`. Then run
+   `ALTER ROLE seshat_dev_broker PASSWORD '<DEV_BROKER_DB_PASSWORD>'`. The compose file defaults both to empty,
+   so other services deploy without them, and the broker refuses to start (or to log in) until they are set.
+4. Rebuild `seshat-gateway` (new `ModelRole`, the settings field, the `respond()` settle fix).
+5. `docker compose -f docker-compose.cloud.yml up -d --build seshat-dev-broker`.
+6. `make dev-broker-verify`. Every section of the report must be empty and `result` must be `PASS`.
+
+### Notes for FRE-1684
+
+- **Tokens.** `personal_agent.dev_broker.tokens.issue_job_token` (before the agent container starts) and
+  `revoke_job_token` (first step of every end state) run on the gateway's pool. The broker's role cannot insert a
+  token. The supervisor reads `dev_job_tokens.status` and `stop_reason` on each lease renewal.
+- **Container name.** Name the agent container `agent_container_name(job_id)`
+  (`personal_agent.dev_agent.container_spec`). The relay resolves that name and nothing else.
+- **OpenCode provider.** Point OpenCode's OpenAI-compatible provider at `http://dev-broker:8700/v1`, with
+  `SESHAT_JOB_TOKEN` as the API key and the job's catalog key (for example `deepseek-v4.1-flash-scaleway`) as the
+  model id. Any other model id is refused.
+- **Relay.** Send the OpenCode server password as `Authorization` through the relay. The relay forwards it and
+  strips the control secret.
+- **Spend.** `dev_job_spend` holds a job's committed and reserved spend. `dev_job_calls` is the per-call ledger.
+  A call that stays `reserved` past the call limit plus 60 s (a failed settle, or a broker that died mid-call)
+  is settled as `cancelled` by the broker's sweep, at start and every 60 s. Its worst case stays spent.
+- **Errors.** A failure before the send (config, egress guard, a 10 s slot wait, the cost-gate database) or a
+  4xx other than 408 from the provider settles at zero. A 5xx, a 408 or other timeout, or a connection lost after
+  the send keeps the worst case (`provider_error`), because the provider may have billed. A settle that fails is
+  logged, the answer still goes out, and the sweep settles the row at the worst case. Any other error after the answer keeps the
+  worst case and stops the token with `cost_unknown`.
+- **Refusals.** 403 `cap_reached` stops the token: not even the smallest call (an empty prompt and a full
+  answer) fits in the committed spend. 403 `call_too_large` refuses only this call: it does not fit the room
+  left, but a smaller one can. 429 `cap_busy` refuses for now: only the worst cases of calls in flight cause it,
+  and a retry can pass once they settle. Only `cap_reached` stops the token.
+- **Window boundary.** No call starts within 180 s of 00:00 UTC (the 150 s call, its reserve and its settle).
+- **Input.** Message content must be text (a string or `text` parts). Any other part is refused, because the
+  worst case bounds text only.
+- **Stop.** One signal handler stops both listeners. In-flight model calls get up to 160 s to finish and
+  settle (`stop_grace_period: 3m`). An open relayed stream re-checks its job every 5 s and ends after
+  revocation.
+- **Stored cap overrides.** The broker's role has no grant on `settings_overrides` (ADR-0159 D4.4). Its cost gate
+  enforces the file caps, not a cap that the owner stores in the PWA. Its own job and month caps still apply.

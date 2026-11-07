@@ -166,3 +166,11 @@ class PlannerInputTooLargeError(ValueError):
             f"planner input too large: message {message_chars} + digest {digest_chars} "
             f"chars exceed the {max_chars}-char bound."
         )
+
+
+class BrokerStartupError(RuntimeError):
+    """Raised when the dev-agent broker cannot start safely (ADR-0159 D4.3, D4.4; FRE-1683).
+
+    The broker refuses to start rather than listen on the wrong interface, run without its control
+    secret, or dispatch under an egress guard that allows more than its one provider.
+    """

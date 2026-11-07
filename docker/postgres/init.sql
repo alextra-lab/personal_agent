@@ -548,6 +548,57 @@ CREATE TABLE IF NOT EXISTS session_model_selections (
     PRIMARY KEY (session_id, role)
 );
 
+-- The dev-agent broker's ledger (ADR-0159 D5 / FRE-1683). Mirrors
+-- docker/postgres/migrations/0038_dev_broker.sql. The role seshat_dev_broker and its grants are at
+-- the end of this file, after every table they name.
+CREATE TABLE IF NOT EXISTS dev_job_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    job_id      UUID NOT NULL UNIQUE,
+    model_key   TEXT NOT NULL,
+    trace_id    UUID NOT NULL,
+    session_id  UUID NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('active', 'stopped', 'revoked')),
+    stop_reason TEXT CHECK (stop_reason IN ('cap_reached', 'cost_unknown')),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS dev_job_spend (
+    job_id        UUID PRIMARY KEY,
+    committed_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    reserved_usd  NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS dev_month_spend (
+    month_start   DATE PRIMARY KEY,
+    committed_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    reserved_usd  NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS dev_job_calls (
+    call_id               UUID PRIMARY KEY,
+    job_id                UUID NOT NULL,
+    model_key             TEXT NOT NULL,
+    month_start           DATE NOT NULL,
+    prompt_token_bound    INTEGER NOT NULL,
+    max_output_tokens     INTEGER NOT NULL,
+    input_tokens          INTEGER,
+    output_tokens         INTEGER,
+    reserved_usd          NUMERIC(12, 6) NOT NULL,
+    settled_usd           NUMERIC(12, 6),
+    status                TEXT NOT NULL CHECK (status IN (
+        'reserved', 'settled', 'cost_unknown', 'timed_out', 'cancelled', 'provider_error',
+        'failed', 'gate_denied'
+    )),
+    created_at            TIMESTAMPTZ NOT NULL,
+    settled_at            TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_dev_job_calls_job ON dev_job_calls (job_id, created_at);
+
 -- ===========================================================================
 -- sysgraph schema (ADR-0105 D2/D3 / FRE-714)
 --
@@ -766,3 +817,29 @@ GRANT USAGE ON SCHEMA sysgraph TO grafana_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA sysgraph TO grafana_ro;
 ALTER DEFAULT PRIVILEGES FOR ROLE sysgraph_role IN SCHEMA sysgraph
     GRANT SELECT ON TABLES TO grafana_ro;
+
+-- ===========================================================================
+-- seshat_dev_broker — the dev-agent broker's restricted role (ADR-0159 D4.4 / FRE-1683)
+--
+-- Mirrors docker/postgres/migrations/0038_dev_broker.sql: the broker's four ledger tables, the
+-- cost-gate counters and reservations, and an insert into api_costs. Nothing else, and no
+-- ALTER DEFAULT PRIVILEGES. Dev password; set the real one at deploy (see the 0038 header).
+-- ===========================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'seshat_dev_broker') THEN
+        CREATE ROLE seshat_dev_broker LOGIN PASSWORD 'seshat_dev_broker_dev_password';
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE personal_agent TO seshat_dev_broker;
+GRANT USAGE ON SCHEMA public TO seshat_dev_broker;
+GRANT SELECT ON dev_job_tokens TO seshat_dev_broker;
+GRANT UPDATE (status, stop_reason, updated_at) ON dev_job_tokens TO seshat_dev_broker;
+GRANT SELECT, INSERT, UPDATE ON dev_job_spend, dev_month_spend, dev_job_calls TO seshat_dev_broker;
+GRANT SELECT, INSERT, UPDATE ON budget_counters, budget_reservations TO seshat_dev_broker;
+GRANT USAGE ON SEQUENCE budget_counters_id_seq TO seshat_dev_broker;
+GRANT INSERT, SELECT (id) ON api_costs TO seshat_dev_broker;
+GRANT USAGE ON SEQUENCE api_costs_id_seq TO seshat_dev_broker;

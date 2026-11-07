@@ -1559,6 +1559,14 @@ class AppConfig(BaseSettings):
         ),
         json_schema_extra={"secret": True},
     )
+    dev_broker_control_secret: str | None = Field(
+        default=None,
+        description=(
+            "Shared secret of the dev-agent broker's control API (ADR-0159 D4.3, FRE-1683). "
+            "The gateway sends it; the broker refuses to start without it."
+        ),
+        json_schema_extra={"secret": True},
+    )
     eur_usd_rate: float = Field(
         default=1.14,
         gt=0,

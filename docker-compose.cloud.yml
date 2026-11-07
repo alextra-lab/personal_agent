@@ -615,6 +615,71 @@ services:
           - dev-agent-proxy
       dev-agent-egress: {}
 
+  # ── Broker of the development agent (ADR-0159 D4.3, D4.4, D5; FRE-1683) ─────────────────────────
+  # The agent's only model endpoint (on dev-agent) and the gateway's only way to the job's OpenCode
+  # server (on cloud-sim). Each listener binds the broker's own address on its network, never
+  # 0.0.0.0. It reads no env_file: its environment is the three credentials of D4.4 and the
+  # non-secret values below. It has no Docker socket, no volume and no published port.
+  # Before the first start: apply migration 0038 and set DEV_BROKER_DB_PASSWORD and
+  # AGENT_DEV_BROKER_CONTROL_SECRET in .env (docker/dev-agent/README.md).
+  seshat-dev-broker:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+      args:
+        BUILD_FINGERPRINT: ${BUILD_FINGERPRINT:-unknown}
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,size=32m
+      # Log files and the guard's caches. Nothing here outlives the container.
+      - /app/telemetry:rw,size=64m,uid=65534,gid=65534
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 128
+    # The broker joins two networks. It must never route between them.
+    sysctls:
+      net.ipv4.ip_forward: 0
+    environment:
+      # The three credentials default to empty, so a missing value never breaks a compose command
+      # for another service. The broker fails closed instead: it refuses to start without the
+      # control secret or the Scaleway key, and an empty database password cannot log in.
+      # No AGENT_DEPLOYMENT_PROFILE: the `cloud` profile requires the Anthropic and OpenAI keys,
+      # which this service must not hold. The default profile asks for none.
+      APP_ENV: production
+      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_dev_broker:${DEV_BROKER_DB_PASSWORD:-}@postgres:5432/personal_agent
+      AGENT_SCALEWAY_SECRET_KEY: ${AGENT_SCALEWAY_SECRET_KEY:-}
+      AGENT_DEV_BROKER_CONTROL_SECRET: ${AGENT_DEV_BROKER_CONTROL_SECRET:-}
+      # ADR-0141 D2: the egress guard of this process allows the Scaleway host only. The broker
+      # refuses to start if the guard allows any other host that it probes.
+      AGENT_URL_GUARD_MODE: allowlist
+      AGENT_URL_GUARD_ALLOWLIST: '["api.scaleway.ai"]'
+      AGENT_OTEL_EXPORTER_ENDPOINT: otel-collector:4317
+    command: ["/app/.venv/bin/python", "-m", "personal_agent.dev_broker"]
+    # A model call can run 150 s. On stop, the broker lets in-flight calls finish and settle.
+    stop_grace_period: 3m
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-m", "personal_agent.dev_broker", "--health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      cloud-sim:
+        aliases:
+          - dev-broker
+      dev-agent:
+        aliases:
+          - dev-broker
+
 volumes:
   # PostgreSQL data (persisted)
   postgres_data_cloud:

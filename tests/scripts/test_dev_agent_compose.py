@@ -19,6 +19,7 @@ _ROOT = repo_root()
 _COMPOSE = _ROOT / "docker-compose.cloud.yml"
 _SQUID = _ROOT / "docker" / "dev-agent" / "squid.conf"
 _PROXY = "dev-agent-proxy"
+_BROKER = "seshat-dev-broker"
 
 
 @pytest.fixture(scope="module")
@@ -48,11 +49,12 @@ def test_the_egress_network_is_not_internal(compose: dict[str, object]) -> None:
     assert not networks["dev-agent-egress"].get("internal", False)
 
 
-def test_only_the_proxy_joins_dev_agent(compose: dict[str, object]) -> None:
+def test_only_the_proxy_and_the_broker_join_dev_agent(compose: dict[str, object]) -> None:
+    """ADR-0159 D4.2: two containers join dev-agent from compose. Agent containers are per job."""
     services = compose["services"]
     assert isinstance(services, dict)
     members = {name for name, svc in services.items() if "dev-agent" in _networks_of(svc)}
-    assert members == {_PROXY}
+    assert members == {_PROXY, _BROKER}
 
 
 def test_only_the_proxy_joins_the_egress_network(compose: dict[str, object]) -> None:
@@ -127,3 +129,58 @@ def test_squid_keeps_no_cache_and_no_second_listener() -> None:
     assert lines.count("cache deny all") == 1
     assert [ln for ln in lines if ln.startswith("http_port")] == ["http_port 3128"]
     assert not [ln for ln in lines if ln.startswith(("https_port", "tcp_outgoing", "cache_peer"))]
+
+
+
+# ── The broker (ADR-0159 D4.3, D4.4; FRE-1683) ────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def broker(compose: dict[str, object]) -> dict[str, object]:
+    services = compose["services"]
+    assert isinstance(services, dict)
+    service = services[_BROKER]
+    assert isinstance(service, dict)
+    return service
+
+
+def test_the_broker_environment_is_an_explicit_allowlist(broker: dict[str, object]) -> None:
+    """D4.4: the three credentials and fixed non-secret values. No env_file imports the rest."""
+    assert "env_file" not in broker
+    environment = broker["environment"]
+    assert isinstance(environment, dict)
+    assert set(environment) == {
+        "APP_ENV",
+        "AGENT_DATABASE_URL",
+        "AGENT_SCALEWAY_SECRET_KEY",
+        "AGENT_DEV_BROKER_CONTROL_SECRET",
+        "AGENT_URL_GUARD_MODE",
+        "AGENT_URL_GUARD_ALLOWLIST",
+        "AGENT_OTEL_EXPORTER_ENDPOINT",
+    }
+    assert str(environment["AGENT_DATABASE_URL"]).startswith(
+        "postgresql+asyncpg://seshat_dev_broker:"
+    )
+    assert environment["AGENT_URL_GUARD_MODE"] == "allowlist"
+    assert yaml.safe_load(str(environment["AGENT_URL_GUARD_ALLOWLIST"])) == ["api.scaleway.ai"]
+
+
+def test_the_broker_has_no_socket_volume_or_port(broker: dict[str, object]) -> None:
+    assert "volumes" not in broker
+    assert "ports" not in broker
+    assert "privileged" not in broker
+    assert "docker.sock" not in str(broker)
+
+
+def test_the_broker_is_locked_down(broker: dict[str, object]) -> None:
+    assert broker["read_only"] is True
+    assert broker["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in broker["security_opt"]  # type: ignore[operator]
+    user = str(broker["user"])
+    assert not user.startswith("0") and user != "root"
+    assert broker["mem_limit"]
+    assert broker["pids_limit"]
+
+
+def test_the_broker_is_on_cloud_sim_and_dev_agent_only(broker: dict[str, object]) -> None:
+    assert _networks_of(broker) == {"cloud-sim", "dev-agent"}

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from personal_agent.dev_agent.container_spec import (
     ContainerProfile,
     ContainerProfiles,
+    agent_container_name,
     build_create_args,
     load_profiles,
 )
@@ -201,3 +202,13 @@ class TestOpenCodePinMatchesTheDockerfile:
         match = re.search(r"^ARG OPENCODE_VERSION=(\S+)$", dockerfile.read_text(), re.MULTILINE)
         assert match is not None
         assert match.group(1) == profiles.opencode_version
+
+
+def test_the_agent_container_name_is_a_dns_label() -> None:
+    """The broker's relay resolves this name on dev-agent (FRE-1683), so it must be a DNS label."""
+    from uuid import UUID
+
+    name = agent_container_name(UUID(int=0))
+    assert name == "seshat-dev-agent-00000000-0000-0000-0000-000000000000"
+    assert len(name) <= 63
+    assert re.fullmatch(r"[a-z0-9-]+", name)

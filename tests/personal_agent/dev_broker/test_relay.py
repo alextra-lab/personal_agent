@@ -265,3 +265,67 @@ async def test_an_open_stream_ends_when_the_job_is_revoked() -> None:
     await asyncio.wait_for(app(scope, receive, send), timeout=3)
     assert ended.is_set()
     assert chunks >= 3
+
+
+async def test_the_upstream_closes_when_the_answer_never_starts() -> None:
+    """The gateway can leave before the first byte. The upstream connection must not stay open."""
+    import asyncio
+
+    job_id = uuid4()
+    closed = asyncio.Event()
+
+    class _Tracked(httpx.AsyncByteStream):
+        async def __aiter__(self):  # type: ignore[no-untyped-def]
+            yield b"data: {}\n\n"
+
+        async def aclose(self) -> None:
+            closed.set()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_Tracked())
+
+    async def resolve(_host: str) -> list[IPv4Address]:
+        return [_AGENT_IP]
+
+    app = build_control_app(
+        secret=_SECRET,
+        ledger=_Ledger({job_id}),
+        resolver=resolve,
+        subnet=_SUBNET,
+        opencode_port=4096,
+        clock=FakeClock(_NOW),
+        upstream_factory=lambda target: create_guarded_http_client(
+            guard=DomainGuard(mode=GuardMode.ALLOWLIST, allowlist=frozenset({str(target)})),
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    sent_request = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal sent_request
+        if not sent_request:
+            sent_request = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        if message["type"] == "http.response.start":
+            raise OSError("the gateway went away")
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": f"/relay/{job_id}/event",
+        "raw_path": f"/relay/{job_id}/event".encode(),
+        "query_string": b"",
+        "headers": [(SECRET_HEADER.lower().encode(), _SECRET.encode())],
+        "server": ("broker", 8701),
+        "client": ("172.25.0.2", 5000),
+    }
+    with pytest.raises(OSError):
+        await asyncio.wait_for(app(scope, receive, send), timeout=3)
+    assert closed.is_set()

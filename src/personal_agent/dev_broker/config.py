@@ -69,10 +69,11 @@ class BrokerConfig(BaseModel):
                 f"{_SETTLE_MARGIN_SECONDS} s to settle before the cost-gate TTL "
                 f"({RESERVATION_TTL_SECONDS} s)"
             )
-        if self.boundary_guard_seconds < self.call_timeout_seconds:
+        if self.boundary_guard_seconds < self.call_timeout_seconds + _SETTLE_MARGIN_SECONDS:
             raise ValueError(
-                "boundary_guard_seconds must be at least call_timeout_seconds, or a call can "
-                "cross a cost-gate window boundary"
+                f"boundary_guard_seconds must be at least call_timeout_seconds + "
+                f"{_SETTLE_MARGIN_SECONDS}, or a call and its settle can cross a cost-gate window "
+                "boundary"
             )
         if self.default_model not in self.models:
             raise ValueError(f"default_model {self.default_model!r} is not in models")

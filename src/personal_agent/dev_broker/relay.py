@@ -20,7 +20,7 @@ import contextlib
 import hmac
 import socket
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime
 from ipaddress import IPv4Address, IPv4Network
 from typing import Protocol
@@ -30,6 +30,7 @@ import httpx
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from personal_agent.dev_agent.container_spec import agent_container_name
 from personal_agent.dev_broker.clock import Clock
@@ -100,6 +101,40 @@ def guarded_upstream_client(target: IPv4Address) -> httpx.AsyncClient:
         trust_env=False,
         follow_redirects=False,
     )
+
+
+class _ClosingStreamingResponse(StreamingResponse):
+    """A streaming response that runs ``on_close`` however it ends, even before its first byte.
+
+    The body generator's own ``finally`` does not run when the response never starts (the client
+    leaves first), so the upstream connection would stay open with no read timeout.
+    """
+
+    def __init__(
+        self,
+        content: AsyncIterator[bytes],
+        *,
+        on_close: Callable[[], Awaitable[None]],
+        status_code: int,
+        headers: Mapping[str, str],
+    ) -> None:
+        """Initialise the response.
+
+        Args:
+            content: The body.
+            on_close: Closes the upstream answer and client. Must be idempotent.
+            status_code: The status.
+            headers: The headers.
+        """
+        super().__init__(content, status_code=status_code, headers=headers)
+        self._on_close = on_close
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Send the response, then close the upstream on every path."""
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._on_close()
 
 
 def _denied(status: int, code: str) -> JSONResponse:
@@ -249,8 +284,14 @@ def build_control_app(
             method=request.method,
             status=answer.status_code,
         )
-        return StreamingResponse(
+
+        async def close() -> None:
+            await answer.aclose()
+            await upstream.aclose()
+
+        return _ClosingStreamingResponse(
             relayed(),
+            on_close=close,
             status_code=answer.status_code,
             headers={
                 name: value

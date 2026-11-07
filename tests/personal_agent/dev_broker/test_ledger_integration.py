@@ -79,13 +79,22 @@ def _ledger(pool: asyncpg.Pool, *, job_cap: Decimal = _JOB_CAP) -> SpendLedger:
     return SpendLedger(pool, job_cap_usd=job_cap, month_cap_usd=_MONTH_CAP)
 
 
-async def _reserve(ledger: SpendLedger, job: _Job, amount: str, now: datetime | None = None):  # type: ignore[no-untyped-def]
+async def _reserve(  # type: ignore[no-untyped-def]
+    ledger: SpendLedger,
+    job: _Job,
+    amount: str,
+    now: datetime | None = None,
+    *,
+    smallest: str | None = None,
+):
+    """Reserve ``amount``. The smallest call defaults to the call itself."""
     return await ledger.reserve(
         token_hash=job.token_hash,
         model_key=_MODEL,
         amount_usd=Decimal(amount),
         prompt_token_bound=100,
         max_output_tokens=50,
+        smallest_call_usd=Decimal(smallest or amount),
         now=now or job.now,
     )
 
@@ -141,6 +150,22 @@ class TestReserve:
         assert refused.reason == "cap_reached"
         assert await _token(broker_pool, job.job_id) == ("stopped", "cap_reached")
         assert await _spend(broker_pool, job.job_id) == (Decimal("0.100000"), Decimal("0"))
+
+    async def test_a_call_too_large_for_the_room_left_does_not_stop_the_token(
+        self, broker_pool: asyncpg.Pool, job: _Job
+    ) -> None:
+        """One large call is refused alone while smaller calls still fit."""
+        ledger = _ledger(broker_pool, job_cap=Decimal("1.00"))
+        first = await _reserve(ledger, job, "0.30")
+        assert isinstance(first, Admitted)
+        await ledger.settle(first, Settled(Decimal("0.30"), 1, 1), now=job.now)
+
+        refused = await _reserve(ledger, job, "0.90", smallest="0.02")
+
+        assert isinstance(refused, Refusal)
+        assert refused.reason == "call_too_large"
+        assert await _token(broker_pool, job.job_id) == ("active", None)
+        assert isinstance(await _reserve(ledger, job, "0.20", smallest="0.02"), Admitted)
 
     async def test_a_refusal_caused_by_calls_in_flight_does_not_stop_the_token(
         self, broker_pool: asyncpg.Pool, job: _Job
@@ -352,6 +377,7 @@ class TestMonthBoundary:
                 amount_usd=Decimal("0.20"),
                 prompt_token_bound=1,
                 max_output_tokens=1,
+                smallest_call_usd=Decimal("0.01"),
                 now=last_minute,
             )
             assert isinstance(admitted, Admitted)
@@ -367,6 +393,7 @@ class TestMonthBoundary:
                 amount_usd=Decimal("0.07"),
                 prompt_token_bound=1,
                 max_output_tokens=1,
+                smallest_call_usd=Decimal("0.01"),
                 now=next_month,
             )
             assert isinstance(second, Admitted)

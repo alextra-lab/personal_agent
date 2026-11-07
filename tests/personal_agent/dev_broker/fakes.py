@@ -41,6 +41,7 @@ class FakeLedger:
         self.grant = TokenGrant(uuid4(), model_key, uuid4(), uuid4())
         self.refuse_reserve: Refusal | None = None
         self.reserved: list[tuple[Decimal, int, int, datetime]] = []
+        self.smallest: list[Decimal] = []
         self.settled: list[tuple[Admitted, Outcome]] = []
 
     async def check_token(
@@ -60,8 +61,10 @@ class FakeLedger:
         amount_usd: Decimal,
         prompt_token_bound: int,
         max_output_tokens: int,
+        smallest_call_usd: Decimal,
         now: datetime,
     ) -> Admitted | Refusal:
+        self.smallest.append(smallest_call_usd)
         if self.refuse_reserve is not None:
             return self.refuse_reserve
         self.reserved.append((amount_usd, prompt_token_bound, max_output_tokens, now))

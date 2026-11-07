@@ -34,8 +34,8 @@ class TestCommittedConfig:
         assert config.call_timeout_seconds == 150
         assert config.call_timeout_seconds < RESERVATION_TTL_SECONDS
 
-    def test_boundary_guard_covers_a_whole_call(self, config: BrokerConfig) -> None:
-        assert config.boundary_guard_seconds >= config.call_timeout_seconds
+    def test_boundary_guard_covers_a_whole_call_and_its_settle(self, config: BrokerConfig) -> None:
+        assert config.boundary_guard_seconds >= config.call_timeout_seconds + 10
 
     def test_default_model_is_deepseek(self, config: BrokerConfig) -> None:
         assert config.default_model == "deepseek-v4.1-flash-scaleway"
@@ -65,7 +65,7 @@ class TestValidation:
 
     def test_a_guard_shorter_than_a_call_is_refused(self) -> None:
         data = self._base()
-        data["boundary_guard_seconds"] = 60
+        data["boundary_guard_seconds"] = data["call_timeout_seconds"]
         with pytest.raises(ValidationError, match="boundary_guard_seconds"):
             BrokerConfig.model_validate(data)
 

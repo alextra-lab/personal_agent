@@ -61,6 +61,8 @@ _REFUSAL_STATUS: dict[str, int] = {
     "cap_reached": 403,
     # Calls in flight hold the headroom; retry once they settle.
     "cap_busy": 429,
+    # This call does not fit the room left; a smaller one can.
+    "call_too_large": 403,
 }
 
 
@@ -81,6 +83,7 @@ class Ledger(Protocol):
         amount_usd: Decimal,
         prompt_token_bound: int,
         max_output_tokens: int,
+        smallest_call_usd: Decimal,
         now: datetime,
     ) -> Admitted | Refusal:
         """Reserve a call's worst case, or refuse it."""
@@ -253,6 +256,15 @@ class ModelRoute:
             Decimal(bound) * Decimal(str(entry.input_cost_per_token))
             + Decimal(max_tokens) * Decimal(str(entry.output_cost_per_token))
         ).quantize(_MICRO_USD, rounding=ROUND_UP)
+        # The smallest call the job can make: an empty prompt and a full answer. The ledger
+        # stops the job only when not even this fits.
+        full_answer = min(
+            self.config.max_output_tokens, entry.max_tokens or self.config.max_output_tokens
+        )
+        smallest_call = (
+            Decimal(self.config.prompt_overhead_tokens) * Decimal(str(entry.input_cost_per_token))
+            + Decimal(full_answer) * Decimal(str(entry.output_cost_per_token))
+        ).quantize(_MICRO_USD, rounding=ROUND_UP)
 
         # Everything that can fail on the request is built here, before the reserve: from the
         # reserve on, every path settles (D5.7 reservations have no time limit).
@@ -282,6 +294,7 @@ class ModelRoute:
             amount_usd=worst_case,
             prompt_token_bound=bound,
             max_output_tokens=max_tokens,
+            smallest_call_usd=smallest_call,
             now=self._clock.now(),
         )
         if isinstance(admitted, Refusal):
@@ -313,28 +326,25 @@ class ModelRoute:
         )
         # Stays Cancelled() only when a BaseException (a cancellation) leaves the dispatch.
         outcome: Outcome = Cancelled()
+        deadline = asyncio.timeout(self.config.call_timeout_seconds)
         try:
-            response = await asyncio.wait_for(
-                self._dispatcher.dispatch(request, trace_ctx),
-                timeout=self.config.call_timeout_seconds,
-            )
-        except TimeoutError:
-            outcome = TimedOut()
-            result = _error(504, "timed_out", "the model call reached the broker's time limit")
+            async with deadline:
+                response = await self._dispatcher.dispatch(request, trace_ctx)
+        except TimeoutError as exc:
+            if deadline.expired():
+                outcome = TimedOut()
+                result = _error(504, "timed_out", "the model call reached the broker's time limit")
+            else:
+                # Raised inside the call (a database command timeout), not by the deadline.
+                outcome = failure_outcome(exc)
+                self._log_failure(admitted, exc, outcome)
+                result = _error(502, "provider_error", "the model call failed")
         except BudgetDenied:
             outcome = GateDenied()
             result = _error(503, "budget_denied", "the global cost cap refused the call")
         except Exception as exc:  # noqa: BLE001 — classified below; never left unsettled
             outcome = failure_outcome(exc)
-            log.warning(
-                "dev_broker_dispatch_failed",
-                job_id=str(admitted.job_id),
-                call_id=str(admitted.call_id),
-                trace_id=admitted.trace_id.hex,
-                error_type=type(exc).__name__,
-                error=str(exc),
-                outcome=type(outcome).__name__,
-            )
+            self._log_failure(admitted, exc, outcome)
             result = _error(502, "provider_error", "the model call failed")
         else:
             outcome = outcome_of(response)
@@ -345,10 +355,34 @@ class ModelRoute:
                 include_usage=include_usage,
             )
         finally:
-            # Shielded: a cancellation cannot abandon the settle, and the reservation never
-            # stays behind while the process lives.
-            await asyncio.shield(self._ledger.settle(admitted, outcome, now=self._clock.now()))
+            # Shielded: a cancellation cannot abandon the settle. A settle that fails is logged
+            # and the answer still goes out: the call ran, and the stale sweep settles its row
+            # at the worst case.
+            try:
+                await asyncio.shield(self._ledger.settle(admitted, outcome, now=self._clock.now()))
+            except Exception as settle_exc:  # noqa: BLE001
+                log.error(
+                    "dev_broker_settle_failed",
+                    job_id=str(admitted.job_id),
+                    call_id=str(admitted.call_id),
+                    trace_id=admitted.trace_id.hex,
+                    outcome=type(outcome).__name__,
+                    error_type=type(settle_exc).__name__,
+                    error=str(settle_exc),
+                )
         return result
+
+    @staticmethod
+    def _log_failure(admitted: Admitted, exc: Exception, outcome: Outcome) -> None:
+        log.warning(
+            "dev_broker_dispatch_failed",
+            job_id=str(admitted.job_id),
+            call_id=str(admitted.call_id),
+            trace_id=admitted.trace_id.hex,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            outcome=type(outcome).__name__,
+        )
 
     def _refused(self, refusal: Refusal) -> RouteResult:
         status = _REFUSAL_STATUS[refusal.reason]
@@ -362,6 +396,7 @@ _NOT_SENT: tuple[type[BaseException], ...] = (
     EgressBlockedError,
     InferenceSlotTimeout,
     asyncpg.PostgresError,
+    asyncpg.InterfaceError,
     OSError,
 )
 
@@ -371,7 +406,7 @@ def failure_outcome(exc: Exception) -> Failed | ProviderError | CostUnknown:
 
     - Not sent (config, egress guard, slot wait, cost-gate database): nothing was billed.
     - ``LLMClientError`` with no cause: ``respond`` refused before dispatch (no provider, no key).
-    - ``LLMClientError`` caused by a 4xx: the provider rejected the request, so it did not bill.
+    - ``LLMClientError`` caused by a 4xx other than 408: the provider rejected the request.
     - Any other ``LLMClientError`` (5xx, timeout, a connection lost while reading the answer):
       the provider may have generated and billed, so the worst case stays spent.
     - Anything else came after the answer (parsing): worst case, and the job stops.
@@ -389,7 +424,8 @@ def failure_outcome(exc: Exception) -> Failed | ProviderError | CostUnknown:
         if cause is None:
             return Failed()
         status = getattr(cause, "status_code", None)
-        if isinstance(status, int) and 400 <= status < 500:
+        # 408 is litellm's own Timeout: the request left and may have been billed.
+        if isinstance(status, int) and 400 <= status < 500 and status != 408:
             return Failed()
         return ProviderError()
     return CostUnknown()

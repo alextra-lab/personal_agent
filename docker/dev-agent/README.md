@@ -102,11 +102,15 @@ Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration
   A call that stays `reserved` past the call limit plus 60 s (a failed settle, or a broker that died mid-call)
   is settled as `cancelled` by the broker's sweep, at start and every 60 s. Its worst case stays spent.
 - **Errors.** A failure before the send (config, egress guard, a 10 s slot wait, the cost-gate database) or a
-  4xx from the provider settles at zero. A 5xx, a timeout or a connection lost after the send keeps the worst
-  case (`provider_error`), because the provider may have billed. Any other error after the answer keeps the
+  4xx other than 408 from the provider settles at zero. A 5xx, a 408 or other timeout, or a connection lost after
+  the send keeps the worst case (`provider_error`), because the provider may have billed. A settle that fails is
+  logged, the answer still goes out, and the sweep settles the row at the worst case. Any other error after the answer keeps the
   worst case and stops the token with `cost_unknown`.
-- **Refusals.** 403 `cap_reached` stops the token: committed spend plus this call passes a cap. 429 `cap_busy`
-  does not: only the worst cases of calls in flight cause it, and a retry can pass once they settle.
+- **Refusals.** 403 `cap_reached` stops the token: not even the smallest call (an empty prompt and a full
+  answer) fits in the committed spend. 403 `call_too_large` refuses only this call: it does not fit the room
+  left, but a smaller one can. 429 `cap_busy` refuses for now: only the worst cases of calls in flight cause it,
+  and a retry can pass once they settle. Only `cap_reached` stops the token.
+- **Window boundary.** No call starts within 180 s of 00:00 UTC (the 150 s call, its reserve and its settle).
 - **Input.** Message content must be text (a string or `text` parts). Any other part is refused, because the
   worst case bounds text only.
 - **Stop.** One signal handler stops both listeners. In-flight model calls get up to 160 s to finish and

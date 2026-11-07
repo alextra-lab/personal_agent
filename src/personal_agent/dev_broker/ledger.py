@@ -30,7 +30,13 @@ from personal_agent.dev_broker.clock import month_start
 log = structlog.get_logger(__name__)
 
 RefusalReason = Literal[
-    "unknown_token", "inactive_token", "expired_token", "wrong_model", "cap_reached", "cap_busy"
+    "unknown_token",
+    "inactive_token",
+    "expired_token",
+    "wrong_model",
+    "cap_reached",
+    "cap_busy",
+    "call_too_large",
 ]
 
 
@@ -209,9 +215,15 @@ class SpendLedger:
         amount_usd: Decimal,
         prompt_token_bound: int,
         max_output_tokens: int,
+        smallest_call_usd: Decimal,
         now: datetime,
     ) -> Admitted | Refusal:
         """Reserve a call's worst case on the job and month counters, or refuse it.
+
+        A refusal stops the job (``cap_reached``) only when not even the smallest call could fit
+        in the committed spend. A call that is too large for the room left is refused alone
+        (``call_too_large``), and one that only calls in flight block is refused for now
+        (``cap_busy``). The token stays active in both.
 
         Args:
             token_hash: SHA-256 hex of the bearer token.
@@ -219,6 +231,7 @@ class SpendLedger:
             amount_usd: The call's worst-case cost.
             prompt_token_bound: The prompt-token bound that priced it.
             max_output_tokens: The clamped output tokens that priced it.
+            smallest_call_usd: The worst case of the smallest call the job can make.
             now: The current instant. It also selects the month row.
 
         Returns:
@@ -263,12 +276,19 @@ class SpendLedger:
             job_total = job_committed + job_row["reserved_usd"]
             month_total = month_committed + month_row["reserved_usd"]
             if job_total + amount_usd > self._job_cap or month_total + amount_usd > self._month_cap:
-                # The committed spend alone decides whether the job is done. Calls in flight
-                # hold worst cases that mostly come back, so a refusal that only they cause is
-                # temporary: the agent can retry once they settle.
+                # The committed spend decides whether the job is done: it is done when not even
+                # the smallest call fits. Worst cases in flight mostly come back, so a refusal
+                # that only they cause is temporary.
                 exhausted = (
+                    job_committed + smallest_call_usd > self._job_cap
+                    or month_committed + smallest_call_usd > self._month_cap
+                )
+                too_large = (
                     job_committed + amount_usd > self._job_cap
                     or month_committed + amount_usd > self._month_cap
+                )
+                reason: RefusalReason = (
+                    "cap_reached" if exhausted else "call_too_large" if too_large else "cap_busy"
                 )
                 if exhausted:
                     await conn.execute(
@@ -281,14 +301,14 @@ class SpendLedger:
                         now,
                     )
                 log.warning(
-                    "dev_broker_cap_reached" if exhausted else "dev_broker_cap_busy",
+                    f"dev_broker_{reason}",
                     job_id=str(job_id),
                     trace_id=trace_id.hex,
                     amount_usd=float(amount_usd),
                     job_total_usd=float(job_total),
                     month_total_usd=float(month_total),
                 )
-                return Refusal("cap_reached" if exhausted else "cap_busy", trace_id)
+                return Refusal(reason, trace_id)
 
             await conn.execute(
                 "UPDATE dev_job_spend SET reserved_usd = reserved_usd + $2, updated_at = $3 "

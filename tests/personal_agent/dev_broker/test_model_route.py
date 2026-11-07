@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_UP, Decimal
 from typing import Any
 
+import asyncpg  # type: ignore[import-untyped]
 import httpx
 import pytest
 import pytest_asyncio
@@ -428,6 +429,9 @@ class TestFailureClassification:
             # The provider rejected the request: not billed.
             ("400", Failed()),
             ("429", Failed()),
+            # litellm.Timeout carries 408: the request left, so it may be billed.
+            ("408", ProviderError()),
+            (asyncpg.InterfaceError("connection closed"), Failed()),
             # The provider failed after the request left: may be billed.
             ("500", ProviderError()),
             ("timeout", ProviderError()),
@@ -442,6 +446,8 @@ class TestFailureClassification:
             error = self._wrapped(self._status(400))
         elif exc == "429":
             error = self._wrapped(self._status(429))
+        elif exc == "408":
+            error = self._wrapped(self._status(408))
         elif exc == "500":
             error = self._wrapped(self._status(500))
         elif exc == "timeout":
@@ -498,3 +504,48 @@ class TestInputRules:
         response = await _post(setup, _body())
         assert response.status_code == 429
         assert response.json()["error"]["code"] == "cap_busy"
+
+
+class TestDeadlines:
+    async def test_a_timeout_raised_inside_the_call_is_not_the_brokers_deadline(self) -> None:
+        """An asyncpg command timeout before the send is not billed, and is not TimedOut."""
+
+        async def db_stall(_r: ModelRequest, _t: TraceContext) -> LLMResponse:
+            raise TimeoutError("command timeout")
+
+        setup = _Setup(dispatcher=FakeDispatcher(db_stall))
+        response = await _post(setup, _body())
+        assert response.status_code == 502
+        assert [outcome for _, outcome in setup.ledger.settled] == [Failed()]
+
+    async def test_a_failed_settle_keeps_the_answer(self) -> None:
+        """The answer was billed; a settle failure is logged and the sweep settles the row."""
+        setup = _Setup()
+
+        async def broken_settle(*_args: object, **_kwargs: object) -> None:
+            raise OSError("database gone")
+
+        setup.ledger.settle = broken_settle  # type: ignore[method-assign]
+        response = await _post(setup, _body())
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "hello"
+
+
+class TestCallTooLarge:
+    async def test_the_smallest_worst_case_is_passed_to_the_reserve(self, setup: _Setup) -> None:
+        """The ledger stops the job only when not even the smallest call could fit."""
+        await _post(setup, _body(max_tokens=100))
+        entry = load_model_config().models[_MODEL]
+        smallest = (
+            Decimal(setup.config.prompt_overhead_tokens) * Decimal(str(entry.input_cost_per_token))
+            + Decimal(setup.config.max_output_tokens) * Decimal(str(entry.output_cost_per_token))
+        ).quantize(Decimal("0.000001"), rounding=ROUND_UP)
+        assert setup.ledger.smallest == [smallest]
+
+    async def test_a_call_too_large_for_the_room_left_is_403_without_a_stop(
+        self, setup: _Setup
+    ) -> None:
+        setup.ledger.refuse_reserve = Refusal("call_too_large")
+        response = await _post(setup, _body())
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "call_too_large"

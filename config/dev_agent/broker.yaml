@@ -12,16 +12,18 @@ month_cap_eur: "30.00"
 
 # D5.10: a cost-gate reservation expires after 180 s, so the broker ends every model call at 150 s.
 call_timeout_seconds: 150
-# D5.11: no call starts this many seconds before a cost-gate window boundary (00:00 UTC).
-boundary_guard_seconds: 150
+# D5.11: no call starts this many seconds before a cost-gate window boundary (00:00 UTC). It covers
+# the reserve, the 150 s call and its settle, so none of them can land after the boundary.
+boundary_guard_seconds: 180
 # D5.10: the most output tokens one call can request. The worst case of a call is priced at this.
 max_output_tokens: 8192
 # The prompt-token bound of a call is the UTF-8 byte length of its messages and tools as JSON, plus
 # this. The models use byte-level BPE tokenizers (a token covers at least one byte), so the
 # bound is a worst case, not an estimate.
 prompt_overhead_tokens: 1024
-# The largest request body that the model route reads.
-max_request_bytes: 8388608
+# The largest request body that the model route reads. The models' context is 256K tokens (about
+# 1 MB of text); a larger body is refused before any work on it.
+max_request_bytes: 2097152
 
 # D5.13: the models that a job token can name. Catalog keys in config/models.yaml.
 # qwen3.8-27b on Scaleway is not here yet: no record holds its Scaleway price (FRE-1683 handoff).

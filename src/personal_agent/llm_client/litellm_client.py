@@ -1793,8 +1793,10 @@ class LiteLLMClient:
             # async-with body ever runs, so the acompletion()-scoped refund
             # handlers below never fire. Without this, the reservation made
             # above leaks until the cost-gate reaper sweeps it at TTL.
+            # FRE-1683: shielded, so a cancel during the refund cannot abandon it.
+            settled = True
             try:
-                await gate.refund(reservation_id, trace_id=trace_id)
+                await asyncio.shield(gate.refund(reservation_id, trace_id=trace_id))
             except Exception as refund_exc:  # noqa: BLE001
                 log.error(
                     "litellm_refund_after_slot_timeout_failed",

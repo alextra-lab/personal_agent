@@ -33,12 +33,14 @@ from personal_agent.dev_agent.container_spec import (
     load_profiles,
 )
 from personal_agent.dev_agent.jobs import JobStore
-from personal_agent.dev_agent.launcher import JOB_LABEL, SCOPE_LABEL, DockerLauncher
+from personal_agent.dev_agent.launcher import JOB_LABEL, SCOPE_LABEL, DockerLauncher, run_command
 from personal_agent.dev_agent.repo_pipeline import GitHubRepoPipeline, job_branch
 from personal_agent.dev_agent.supervisor import Fence, SupervisorPolicy
+from personal_agent.dev_agent.toolkit import fill_toolkit_volume
 
 from .conftest import MakeJob
 from .test_repo_pipeline_integration import LocalHost
+from .toolkit_fakes import fetch_synthetic, synthetic_assets
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -207,13 +209,16 @@ async def live(
 ) -> AsyncIterator[tuple[DockerLauncher, LocalHost, str]]:
     scope = f"fre1685-test-{uuid4().hex[:8]}"
     toolkit = f"fre1685-toolkit-{uuid4().hex[:8]}"
-    docker("volume", "create", toolkit)
     agent = load_profiles().agent
     image = _image("SESHAT_DEV_AGENT_TEST_IMAGE", "seshat-dev-agent:fre1684-test", agent.image)
+    await fill_toolkit_volume(
+        toolkit, synthetic_assets(), fetch_synthetic, image=image, runner=run_command
+    )
     launcher = DockerLauncher(
         agent.model_copy(update={"image": image}),
         network_name="none",
         toolkit_volume=toolkit,
+        toolkit_assets=synthetic_assets(),
         scope=scope,
         handoff_profile=handoff_profile,
     )

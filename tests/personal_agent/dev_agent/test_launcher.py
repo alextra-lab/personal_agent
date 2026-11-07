@@ -274,6 +274,7 @@ def _full_launcher(fake: FakeDocker, raw: FakeBytes) -> DockerLauncher:
         profiles.agent,
         network_name="seshat_dev-agent",
         toolkit_volume="toolkit",
+        toolkit_assets=synthetic_assets(),
         scope="prod",
         handoff_profile=profiles.handoff,
         runner=fake,
@@ -283,7 +284,7 @@ def _full_launcher(fake: FakeDocker, raw: FakeBytes) -> DockerLauncher:
 
 class TestWorkspaceCopy:
     async def test_the_clone_is_copied_in_between_create_and_start(self) -> None:
-        fake, raw = FakeDocker(), FakeBytes()
+        fake, raw = _fake(), FakeBytes()
         job = uuid4()
         await _full_launcher(fake, raw).start(
             job, job_token=_TOKEN, server_password=_PASSWORD, workspace=b"TAR"
@@ -291,9 +292,9 @@ class TestWorkspaceCopy:
         (cp, stdin, _), = raw.calls
         assert cp == ["docker", "cp", "-a", "-", f"{agent_container_name(job)}:/workspace"]
         assert stdin == b"TAR"
-        # The copy came after the create and before the start.
-        order = [argv[1] for argv, _ in fake.calls]
-        assert order == ["volume", "volume", "create", "start"]
+        # The copy came after the agent container's create and before its start.
+        tail = [argv[1:3] for argv, _ in fake.calls[-2:]]
+        assert tail == [["create", "--name"], ["start", agent_container_name(job)]]
 
 
 class TestBundleWorkspace:

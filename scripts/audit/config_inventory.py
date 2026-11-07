@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 import sys
+import types
 from pathlib import Path
 
 from pydantic.fields import FieldInfo
@@ -174,6 +175,9 @@ def _default_repr(field: FieldInfo) -> str:
 
 def _type_str(field: FieldInfo) -> str:
     ann = field.annotation
+    # On Python 3.14 `X | None` exposes __name__ == "Union"; str() keeps `X | None`.
+    if isinstance(ann, types.UnionType):
+        return str(ann)
     name = getattr(ann, "__name__", None)
     return (name or str(ann)).replace("typing.", "")
 

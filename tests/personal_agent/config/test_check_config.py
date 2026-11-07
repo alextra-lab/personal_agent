@@ -192,7 +192,8 @@ class TestDeploymentManifestMatchesCompose:
 class TestEmbeddingFallbackIdentity:
     """ADR-0112 AC-6 (FRE-821) — managed + local-fallback embedder configs must pin
     the same weights revision (exact match after an optional 'Qwen/'-style provider
-    prefix is stripped from either side) — not a fuzzy/substring comparison.
+    prefix is stripped from either side, and after casefold) — not a fuzzy/substring
+    comparison.
     """
 
     def test_default_pairing_matches(self) -> None:
@@ -217,12 +218,21 @@ class TestEmbeddingFallbackIdentity:
         )
         assert check_embedding_fallback_identity(settings) == []
 
-    def test_case_sensitive_mismatch_is_flagged(self) -> None:
-        # Exact match, not fuzzy — a case difference is a real revision question,
-        # not something to silently accept.
+    def test_casing_only_difference_is_not_flagged(self) -> None:
+        # Scaleway accepts the lowercase id and rejects the OVH casing (FRE-1750, live).
+        for managed, local in (
+            ("Qwen3-Embedding-8B", "qwen3-embedding-8b"),
+            ("qwen3-embedding-8b", "Qwen3-Embedding-8B"),
+        ):
+            settings = AppConfig(
+                managed_embedding_model=managed, local_fallback_embedding_model=local
+            )
+            assert check_embedding_fallback_identity(settings) == []
+
+    def test_different_model_is_flagged_even_with_casing_difference(self) -> None:
         settings = AppConfig(
-            managed_embedding_model="qwen3-embedding-8b",
-            local_fallback_embedding_model="Qwen3-Embedding-8B",
+            managed_embedding_model="Qwen3-Embedding-8B",
+            local_fallback_embedding_model="qwen3-embedding-0.6b",
         )
         findings = check_embedding_fallback_identity(settings)
         assert len(findings) == 1

@@ -358,6 +358,7 @@ READ_ONLY_SETTINGS: Mapping[str, str] = {
     "database_admin_url": _SECRET,
     "dev_broker_control_secret": _SECRET,
     "linear_api_key": _SECRET,
+    "local_fallback_embedding_token": _SECRET,
     "managed_database_url": _SECRET,
     "managed_embedding_token": _SECRET,
     "neo4j_password": _SECRET,

@@ -1510,6 +1510,15 @@ class AppConfig(BaseSettings):
             "config_guard identity check enforces this."
         ),
     )
+    local_fallback_embedding_token: str | None = Field(
+        default=None,
+        description=(
+            "Bearer token for the local fallback embedder endpoint (FRE-1750). Set only when "
+            "the fallback is a billed provider such as Scaleway; the call is unauthenticated "
+            "when unset. Unset by default."
+        ),
+        json_schema_extra={"secret": True},
+    )
     managed_reranker_endpoint: str | None = Field(
         default=None,
         description="Reranker endpoint for the `managed` substrate profile (ADR-0112 D3). Unset by default.",

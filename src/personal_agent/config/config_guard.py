@@ -674,9 +674,11 @@ def check_embedding_fallback_identity(settings: AppConfig | None = None) -> list
     """ADR-0112 AC-6 (FRE-821) — managed + local-fallback embedder configs pin the same revision.
 
     Strips an optional provider prefix (e.g. ``"Qwen/"``) from either side, then
-    requires an **exact, case-sensitive** match of what remains — a fuzzy or
-    substring comparison would not actually prove "same weights revision" (AC-6's
-    bar). Output dimension and normalization/pooling are not checked here: both
+    compares what remains after ``casefold()``. Casing alone does not change the
+    weights: Scaleway serves ``qwen3-embedding-8b`` where OVH serves
+    ``Qwen3-Embedding-8B``, and it rejects the OVH casing (FRE-1750, checked live).
+    A fuzzy or substring comparison would still not prove "same weights revision"
+    (AC-6's bar). Output dimension and normalization/pooling are not checked here: both
     sides share the single ``embedding_dimensions`` request parameter by
     construction (no second field to drift), and pooling is a container command-
     line flag, not an AppConfig field — attested manually in the deploy runbook
@@ -698,7 +700,7 @@ def check_embedding_fallback_identity(settings: AppConfig | None = None) -> list
 
     managed = settings.managed_embedding_model
     local = settings.local_fallback_embedding_model
-    if _strip_provider_prefix(managed) == _strip_provider_prefix(local):
+    if _strip_provider_prefix(managed).casefold() == _strip_provider_prefix(local).casefold():
         return []
     return [
         Finding(

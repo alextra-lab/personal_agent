@@ -25,12 +25,14 @@ class ManualClock:
 
     def __init__(self) -> None:
         self.now = 0.0
+        self.sleeps: list[float] = []
         self._waiters: list[tuple[float, asyncio.Future[None]]] = []
 
     def monotonic(self) -> float:
         return self.now
 
     async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._waiters.append((self.now + seconds, future))
         await future

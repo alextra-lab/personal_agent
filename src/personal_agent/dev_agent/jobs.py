@@ -58,6 +58,8 @@ ACTIVE_STATES: frozenset[JobState] = frozenset(
 END_STATES: frozenset[JobState] = frozenset(set(JobState) - ACTIVE_STATES)
 
 _END_STATE_VALUES: list[str] = sorted(s.value for s in END_STATES)
+#: The SQL predicate "the job is not at an end state". One copy, used by every query.
+_NOT_ENDED = f"state <> ALL('{{{','.join(_END_STATE_VALUES)}}}'::text[])"
 
 JobMode = Literal["build", "fix"]
 
@@ -136,14 +138,14 @@ _JOB_COLUMNS = """
 #: fence checked the expiry and holds the row lock, so no one else can take the lease meanwhile.
 _OWN_ROW = f"""
     id = $1 AND lease_epoch = $2 AND lease_owner = $3
-    AND state <> ALL('{{{",".join(_END_STATE_VALUES)}}}'::text[])
+    AND {_NOT_ENDED}
 """
 
 #: The row predicate of a valid lease. $1 job id, $2 epoch, $3 owner.
 _HELD = f"""
     id = $1 AND lease_epoch = $2 AND lease_owner = $3
     AND lease_expires_at > clock_timestamp()
-    AND state <> ALL('{{{",".join(_END_STATE_VALUES)}}}'::text[])
+    AND {_NOT_ENDED}
 """
 
 
@@ -283,10 +285,7 @@ class JobStore:
         Returns:
             The job and the new lease, or ``None`` when no such job exists.
         """
-        where = (
-            f"state <> ALL('{{{','.join(_END_STATE_VALUES)}}}'::text[]) AND lease_epoch > 0 "
-            "AND lease_expires_at <= clock_timestamp()"
-        )
+        where = f"{_NOT_ENDED} AND lease_epoch > 0 AND lease_expires_at <= clock_timestamp()"
         return await self._take(where, owner, lease_seconds)
 
     async def renew(self, lease: Lease, lease_seconds: float) -> TokenSignal | None:
@@ -389,13 +388,14 @@ class JobStore:
                     lease.owner,
                     action,
                 )
-                failure: Exception | None = None
+                failure: BaseException | None = None
                 try:
                     # A savepoint: a failed action rolls back its own database writes, and an
                     # aborted statement does not abort the fence's transaction.
                     async with conn.transaction():
                         result = await operation(conn)
-                except Exception as exc:  # noqa: BLE001 — recorded, committed, then re-raised
+                except BaseException as exc:  # noqa: BLE001 — recorded, committed, then re-raised
+                    # A cancel (gateway stop) is recorded too: the action may have acted already.
                     failure = exc
                 # The fence commits in both cases, so the log keeps an action that raised.
                 await self._record_outcome(conn, action_id, "error" if failure else "done")
@@ -538,7 +538,7 @@ class JobStore:
             f"""
             SELECT id FROM dev_jobs
              WHERE id = ANY($1::uuid[])
-               AND state <> ALL('{{{",".join(_END_STATE_VALUES)}}}'::text[])
+               AND {_NOT_ENDED}
             """,
             ids,
         )

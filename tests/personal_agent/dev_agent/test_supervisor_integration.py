@@ -112,9 +112,10 @@ class TestRestart:
         await until(lambda: len(h.timeouts) == 1)  # the agent runs; no fenced action is open
         await clock.advance(30)
         await until(lambda: a.keeper is not None and a.keeper.renewals == 1)
-        await a.stop()  # the gateway restarts: no cleanup runs
+        await a.stop()  # a graceful gateway stop: the token is revoked, nothing else is cleaned
         assert (await h.row(job.id))["state"] == "running"
-        assert job.id in h.docker.containers and await h.token(job.id) == "active"
+        assert job.id in h.docker.containers
+        assert await h.token(job.id) == "revoked", "review finding 6: no spend after the stop"
 
         b = h.supervisor("sup-b")
         await b.scan_once()  # the lease has not expired yet: nothing happens
@@ -231,12 +232,16 @@ class TestLimits:
         row = await h.row(job.id)
         assert row["started_at"] is not None
         assert row["ended_at"] - row["started_at"] < timedelta(seconds=30)
+        expiry = await h.pool.fetchval(
+            "SELECT expires_at - created_at FROM dev_job_tokens WHERE job_id = $1", job.id
+        )
+        # Review finding 8: the expiry is Postgres time + limit + grace (1800 + 300 s).
+        assert timedelta(seconds=2099) < expiry < timedelta(seconds=2101)
         assert [r[0] for r in await h.actions(job.id)] == [
             "issue_token",
             "start_container",
             "revoke_token",
             "stop_agent",
-            "revoke_token",
             "cleanup",
         ]
 
@@ -322,6 +327,34 @@ class TestCleanup:
         assert (row["state"], row["failure_reason"]) == ("failed", "supervisor_restart")
         assert job.id not in h.docker.containers
         assert await h.token(job.id) == "revoked"
+
+    async def test_a_failed_end_is_retried_with_its_own_state(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        """Review finding 3: a retry keeps the intended end state and reason."""
+        job = await make_job()
+        h.docker.fail_remove = 1
+        a = h.supervisor("sup-a", behaviour=succeed)
+        await a.scan_once()
+        await _wait_end(a)
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("failed", "no_result")
+        assert h.docker.ops(job.id)[-2:] == ["remove_failed", "remove"]
+
+    async def test_recovering_its_own_stale_job_stops_the_local_run_first(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        """Review finding 5: the local run of a job that lost its lease stops before the cleanup."""
+        job = await make_job()
+        a = h.supervisor("sup-a")
+        await a.scan_once()
+        await until(lambda: len(h.timeouts) == 1)
+        await expire_lease(h.pool, job.id)
+        await a.scan_once()
+        assert not a.busy
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("failed", "supervisor_restart")
+        assert job.id not in h.docker.containers
 
     async def test_the_orphan_sweep_removes_only_ended_or_unknown_jobs(
         self, h: Harness, make_job: MakeJob

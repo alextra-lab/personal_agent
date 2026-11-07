@@ -34,7 +34,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Protocol, TypeVar
 from uuid import uuid4
 
@@ -161,18 +161,24 @@ class LeaseKeeper:
             "lease_epoch": self._lease.epoch,
             "trace_id": None,
         }
+        # One attempt is short, and a failed attempt is retried soon, so one hung renewal does not
+        # use up the whole stop window.
+        attempt = self._policy.renew_seconds / 3
+        wait = self._policy.renew_seconds
         while not work.done():
-            await self._clock.sleep(self._policy.renew_seconds)
+            await self._clock.sleep(wait)
+            wait = self._policy.renew_seconds
             if work.done():
                 return
             if self._in_action:
                 # The fenced action holds the row. The lease cannot change hands meanwhile.
                 continue
             try:
-                async with asyncio.timeout(self._policy.renew_seconds):
+                async with asyncio.timeout(attempt):
                     signal = await self._store.renew(self._lease, self._policy.lease_seconds)
             except Exception as exc:  # noqa: BLE001 — a failed renewal is retried until the stop rule
                 log.warning("dev_job_renew_failed", error_type=type(exc).__name__, **trace)
+                wait = attempt
             else:
                 if signal is None:
                     self.lost = True
@@ -185,7 +191,9 @@ class LeaseKeeper:
                     self.stop_reason = signal.stop_reason
                     self.stopped.set()
                     log.info("dev_job_token_stopped", stop_reason=signal.stop_reason, **trace)
-            if self._clock.monotonic() - self._last_ok >= self._policy.stop_after_seconds:
+            # A renewal that waited on the row of a fenced action is not a stale lease.
+            stale = self._clock.monotonic() - self._last_ok >= self._policy.stop_after_seconds
+            if stale and not self._in_action:
                 self.lost = True
                 log.error(
                     "dev_job_renewal_stale_work_stopped",
@@ -288,6 +296,16 @@ class NoResultPipeline:
         raise NotImplementedError("delivery arrives with FRE-1686")
 
 
+class _EndFailedError(Exception):
+    """An end state could not be written. It carries the intended end, so a retry keeps it."""
+
+    def __init__(self, state: JobState, reason: str | None, *, revoked: bool) -> None:
+        super().__init__(f"could not end the job as {state.value}")
+        self.state = state
+        self.reason = reason
+        self.revoked = revoked
+
+
 #: Opens the job's adapter for the run and closes it after. Arguments: the job, the server password.
 AdapterFactory = Callable[[DevJob, str], AbstractAsyncContextManager[DelegationExecutorProtocol]]
 
@@ -330,6 +348,8 @@ class JobSupervisor:
         self._clock = clock or SystemMonotonicClock()
         self.owner = owner or supervisor_owner_id()
         self._current: asyncio.Task[None] | None = None
+        self._current_job: DevJob | None = None
+        self._current_fence: Fence | None = None
         self.keeper: LeaseKeeper | None = None
 
     @property
@@ -357,11 +377,33 @@ class JobSupervisor:
             await self.stop()
 
     async def stop(self) -> None:
-        """Stop the current job's work without cleanup. Recovery cleans it up after its lease expires."""
-        if self._current is not None and not self._current.done():
-            self._current.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._current
+        """Stop the current job's work, then revoke its token as a best effort.
+
+        The revoke stops the agent's model calls at once (the job would not resume anyway, D9.6).
+        Recovery removes the containers and writes the end state after the lease expires.
+        """
+        if self._current is None or self._current.done():
+            return
+        job, fence = self._current_job, self._current_fence
+        self._current.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._current
+        if job is None or fence is None:
+            return
+
+        async def revoke(conn: asyncpg.Connection) -> None:
+            await revoke_job_token(conn, job.id)
+
+        try:
+            async with asyncio.timeout(10):
+                await fence.run("revoke_token", revoke)
+        except Exception as exc:  # noqa: BLE001 — best effort; recovery revokes it later
+            log.warning(
+                "dev_job_stop_revoke_failed",
+                job_id=str(job.id),
+                error_type=type(exc).__name__,
+                trace_id=job.trace_id.hex,
+            )
 
     async def scan_once(self) -> None:
         """Recover expired jobs, sweep orphans, and take a new job if this supervisor is idle."""
@@ -387,9 +429,10 @@ class JobSupervisor:
                 lease_epoch=lease.epoch,
                 trace_id=job.trace_id.hex,
             )
-            if job.state is JobState.DELIVERING:
-                # Only one job is active, so a local task is this job's stale run. Stop it first.
+            if self._current_job is not None and self._current_job.id == job.id:
+                # This process's own run lost the lease. Stop it before acting on the job.
                 await self.stop()
+            if job.state is JobState.DELIVERING:
                 self._start(job, lease, self._resume_delivery)
                 continue
             try:
@@ -432,6 +475,8 @@ class JobSupervisor:
         keeper = LeaseKeeper(self._store, lease, self.policy, self._clock)
         fence = Fence(self._store, lease, self.policy, keeper)
         self.keeper = keeper
+        self._current_job = job
+        self._current_fence = fence
 
         async def guarded() -> None:
             try:
@@ -440,6 +485,17 @@ class JobSupervisor:
                 log.warning(
                     "dev_job_work_stopped_lease_lost", job_id=str(job.id), trace_id=job.trace_id.hex
                 )
+            except _EndFailedError as failed:
+                # Retry the same end once. A second failure leaves the job to recovery.
+                log.error(
+                    "dev_job_end_failed",
+                    job_id=str(job.id),
+                    state=failed.state.value,
+                    error_type=type(failed.__cause__).__name__,
+                    trace_id=job.trace_id.hex,
+                )
+                with contextlib.suppress(Exception):
+                    await self._end(job, fence, failed.state, failed.reason, revoked=failed.revoked)
             except Exception as exc:  # noqa: BLE001 — end the job; a failed end is recovered later
                 log.error(
                     "dev_job_work_failed",
@@ -472,11 +528,12 @@ class JobSupervisor:
     async def _work(self, job: DevJob, fence: Fence, keeper: LeaseKeeper) -> None:
         policy = self.policy
         password = secrets.token_urlsafe(32)
-        expires = datetime.now(timezone.utc) + timedelta(
-            seconds=policy.time_limit_seconds + policy.token_grace_seconds
-        )
 
         async def issue(conn: asyncpg.Connection) -> str:
+            expires = await conn.fetchval(
+                "SELECT clock_timestamp() + make_interval(secs => $1)",
+                policy.time_limit_seconds + policy.token_grace_seconds,
+            )
             return await issue_job_token(
                 conn,
                 job_id=job.id,
@@ -498,6 +555,8 @@ class JobSupervisor:
 
         left = await self._store.seconds_left(job.id, policy.time_limit_seconds)
         outcome = await self._run_agent(job, password, max(left, 0.0), keeper)
+        # Measured before the revoke and the container stop, which take seconds of their own.
+        timed_out = await self._store.seconds_left(job.id, policy.time_limit_seconds) <= 0
 
         async def read_and_revoke(conn: asyncpg.Connection) -> str | None:
             # A stop that came after the last renewal is read here, before the revoke overwrites it.
@@ -512,7 +571,7 @@ class JobSupervisor:
         stop_reason = await fence.run("revoke_token", read_and_revoke) or keeper.stop_reason
         if stop_reason is not None:
             state = _STOP_STATES.get(stop_reason, JobState.FAILED)
-            await self._end(job, fence, state, stop_reason)
+            await self._end(job, fence, state, stop_reason, revoked=True)
             return
 
         async def stop_agent(conn: asyncpg.Connection) -> None:
@@ -520,20 +579,19 @@ class JobSupervisor:
             await self._launcher.stop(job.id)
 
         await fence.run("stop_agent", stop_agent)
-        timed_out = await self._store.seconds_left(job.id, policy.time_limit_seconds) <= 0
         result = await self._pipeline.handoff(job, fence)
         if result is None:
             if timed_out:
-                await self._end(job, fence, JobState.TIMED_OUT, "time_limit")
+                await self._end(job, fence, JobState.TIMED_OUT, "time_limit", revoked=True)
             elif outcome is not None and outcome.success:
-                await self._end(job, fence, JobState.FAILED, "no_result")
+                await self._end(job, fence, JobState.FAILED, "no_result", revoked=True)
             else:
                 missing = outcome.what_was_missing if outcome is not None else "no_outcome"
-                await self._end(job, fence, JobState.FAILED, f"agent: {missing}")
+                await self._end(job, fence, JobState.FAILED, f"agent: {missing}", revoked=True)
             return
         await self._store.transition(fence.lease, JobState.CHECKING)
         if not await self._pipeline.check(job, result, fence):
-            await self._end(job, fence, JobState.FAILED_CHECK, "check_failed")
+            await self._end(job, fence, JobState.FAILED_CHECK, "check_failed", revoked=True)
             return
         await self._store.transition(fence.lease, JobState.DELIVERING)
         await self._deliver(job, fence)
@@ -554,9 +612,11 @@ class JobSupervisor:
                 error_type=type(exc).__name__,
                 trace_id=job.trace_id.hex,
             )
-            await self._end(job, fence, JobState.FAILED, f"delivery_failed: {type(exc).__name__}")
+            await self._end(
+                job, fence, JobState.FAILED, f"delivery_failed: {type(exc).__name__}", revoked=True
+            )
             return
-        await self._end(job, fence, JobState.SUCCEEDED, None)
+        await self._end(job, fence, JobState.SUCCEEDED, None, revoked=True)
 
     async def _run_agent(
         self, job: DevJob, password: str, timeout: float, keeper: LeaseKeeper
@@ -582,10 +642,29 @@ class JobSupervisor:
                             await task
             return run.result() if run.done() and not run.cancelled() else None
 
-    async def _end(self, job: DevJob, fence: Fence, state: JobState, reason: str | None) -> None:
+    async def _end(
+        self,
+        job: DevJob,
+        fence: Fence,
+        state: JobState,
+        reason: str | None,
+        *,
+        revoked: bool = False,
+    ) -> None:
         """Revoke the token, then remove and write the end state. The slot frees only after both.
 
         The revoke is its own fence, so it commits even when the removal then fails.
+
+        Args:
+            job: The job.
+            fence: The fence of the current lease.
+            state: The end state.
+            reason: The failure reason, or ``None``.
+            revoked: The token was revoked under this lease already, so skip the revoke.
+
+        Raises:
+            LeaseLostError: If the lease is not held.
+            _EndFailedError: If the revoke or the cleanup failed. It carries the intended end.
         """
 
         async def revoke(conn: asyncpg.Connection) -> None:
@@ -595,8 +674,14 @@ class JobSupervisor:
             await self._launcher.remove(job.id)
             await JobStore.finish(conn, fence.lease, state, reason)
 
-        await fence.run("revoke_token", revoke)
-        await fence.run("cleanup", cleanup)
+        try:
+            if not revoked:
+                await fence.run("revoke_token", revoke)
+            await fence.run("cleanup", cleanup)
+        except LeaseLostError:
+            raise
+        except Exception as exc:
+            raise _EndFailedError(state, reason, revoked=revoked) from exc
         log.info(
             "dev_job_ended",
             job_id=str(job.id),

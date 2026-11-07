@@ -187,6 +187,32 @@ class TestFence:
         assert (await store.get(job.id)).task_text != "changed"  # type: ignore[union-attr]
         assert await store.renew(lease, _LEASE) is not None
 
+    async def test_a_cancelled_action_is_logged(
+        self, make_job: MakeJob, store: JobStore, admin_pool: asyncpg.Pool
+    ) -> None:
+        """Review finding 4: a cancel (gateway stop) keeps the action row, as an error."""
+        job = await make_job()
+        taken = await store.claim_new("sup-a", _LEASE)
+        assert taken is not None
+        _, lease = taken
+        inside = asyncio.Event()
+
+        async def hangs(conn: asyncpg.Connection) -> None:
+            inside.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(
+            store.fenced(lease, "start_container", hangs, lease_seconds=_LEASE)
+        )
+        await inside.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        rows = await admin_pool.fetch(
+            "SELECT action, outcome FROM dev_job_actions WHERE job_id = $1", job.id
+        )
+        assert [(r["action"], r["outcome"]) for r in rows] == [("start_container", "error")]
+
     async def test_a_cleanup_longer_than_the_lease_still_writes_the_end_state(
         self, make_job: MakeJob, store: JobStore
     ) -> None:

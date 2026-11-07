@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import structlog
 
@@ -42,6 +43,10 @@ log = structlog.get_logger(__name__)
 TOOLKIT_MOUNT = "/srv/artifact-lib"
 #: The file in the volume that records the digest and the pins (D7.5 reads the digest from it).
 MANIFEST_FILE = "toolkit-manifest.json"
+#: The label on every helper container, so a stray one can be listed: ``docker ps -a --filter
+#: label=seshat.dev_toolkit``. A stray helper keeps a reference to the volume and blocks the next fill.
+HELPER_LABEL = "seshat.dev_toolkit"
+_HELPER_NAME_PREFIX = "seshat-dev-toolkit-"
 #: The only SRI algorithm that the pins use.
 _SRI_ALGORITHM = "sha384"
 
@@ -181,13 +186,16 @@ def _read_tree(root: Path) -> dict[str, bytes]:
     A symlink would make the host read the file it points to, and a pipe would block the read.
     """
     files: dict[str, bytes] = {}
-    for path in root.rglob("*"):
-        if path.is_symlink() or not (path.is_file() or path.is_dir()):
-            raise DevAgentToolkitError(
-                f"the toolkit volume holds a special entry: {path.relative_to(root).as_posix()}"
-            )
-        if path.is_file():
-            files[path.relative_to(root).as_posix()] = path.read_bytes()
+    try:
+        for path in root.rglob("*"):
+            if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                raise DevAgentToolkitError(
+                    f"the toolkit volume holds a special entry: {path.relative_to(root).as_posix()}"
+                )
+            if path.is_file():
+                files[path.relative_to(root).as_posix()] = path.read_bytes()
+    except OSError as exc:
+        raise DevAgentToolkitError(f"cannot read the files of the toolkit volume: {exc}") from exc
     return files
 
 
@@ -197,6 +205,43 @@ def _write_tree(root: Path, files: Mapping[str, bytes]) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         target.chmod(0o444)
+
+
+def _helper_name() -> str:
+    """Return a new name for a helper container. The name is known before ``docker create`` runs."""
+    return f"{_HELPER_NAME_PREFIX}{uuid4().hex[:12]}"
+
+
+def _create_helper_args(name: str, mount: str, image: str) -> list[str]:
+    """Return the ``docker create`` arguments of a helper container that never starts."""
+    return [
+        "create",
+        "--network",
+        "none",
+        "--name",
+        name,
+        "--label",
+        f"{HELPER_LABEL}=1",
+        "-v",
+        mount,
+        image,
+    ]
+
+
+async def _remove_helper(runner: CommandRunner, name: str) -> None:
+    """Remove a helper container by name. A failure is logged, and it never hides the caller's error.
+
+    The removal is shielded, so a cancelled caller still removes the container. A container that
+    does not exist is not a failure.
+    """
+    result = await asyncio.shield(runner(["docker", "rm", "-f", name]))
+    if result.returncode != 0 and "No such container" not in result.stderr:
+        log.warning(
+            "dev_agent_toolkit_helper_not_removed",
+            container=name,
+            error=result.stderr.strip()[:300],
+            trace_id=None,
+        )
 
 
 async def read_toolkit_volume(volume: str, image: str, runner: CommandRunner) -> dict[str, bytes]:
@@ -215,23 +260,18 @@ async def read_toolkit_volume(volume: str, image: str, runner: CommandRunner) ->
     Raises:
         DevAgentToolkitError: If a Docker call fails.
     """
-    out = await _docker(
-        runner,
-        "toolkit read container create",
-        "create",
-        "--network",
-        "none",
-        "-v",
-        f"{volume}:{TOOLKIT_MOUNT}:ro",
-        image,
-    )
-    container = out.strip()
+    helper = _helper_name()
     try:
+        await _docker(
+            runner,
+            "toolkit read container create",
+            *_create_helper_args(helper, f"{volume}:{TOOLKIT_MOUNT}:ro", image),
+        )
         with tempfile.TemporaryDirectory(prefix="seshat-toolkit-read-") as tmp:
-            await _docker(runner, "toolkit read cp", "cp", f"{container}:{TOOLKIT_MOUNT}/.", tmp)
+            await _docker(runner, "toolkit read cp", "cp", f"{helper}:{TOOLKIT_MOUNT}/.", tmp)
             return await asyncio.to_thread(_read_tree, Path(tmp))
     finally:
-        await asyncio.shield(runner(["docker", "rm", "-f", container]))
+        await _remove_helper(runner, helper)
 
 
 async def fill_toolkit_volume(
@@ -271,28 +311,21 @@ async def fill_toolkit_volume(
         # Docker refuses to remove a volume that a container refers to.
         await _docker(runner, "volume rm", "volume", "rm", volume)
     await _docker(runner, "volume create", "volume", "create", volume)
-    container: str | None = None
+    helper = _helper_name()
     try:
-        out = await _docker(
+        await _docker(
             runner,
             "toolkit container create",
-            "create",
-            "--network",
-            "none",
-            "-v",
-            f"{volume}:{TOOLKIT_MOUNT}",
-            image,
+            *_create_helper_args(helper, f"{volume}:{TOOLKIT_MOUNT}", image),
         )
-        container = out.strip()
         with tempfile.TemporaryDirectory(prefix="seshat-toolkit-write-") as tmp:
             await asyncio.to_thread(_write_tree, Path(tmp), files)
-            await _docker(runner, "toolkit cp", "cp", f"{tmp}/.", f"{container}:{TOOLKIT_MOUNT}")
-        await _docker(runner, "toolkit container rm", "rm", "-f", container)
-        container = None
+            await _docker(runner, "toolkit cp", "cp", f"{tmp}/.", f"{helper}:{TOOLKIT_MOUNT}")
+        await _remove_helper(runner, helper)
         check_toolkit_contents(assets, await read_toolkit_volume(volume, image, runner))
     except BaseException:
-        if container is not None:
-            await asyncio.shield(runner(["docker", "rm", "-f", container]))
+        # The container first: Docker refuses to remove a volume that a container refers to.
+        await _remove_helper(runner, helper)
         await asyncio.shield(runner(["docker", "volume", "rm", "-f", volume]))
         raise
     digest = toolkit_digest(assets)

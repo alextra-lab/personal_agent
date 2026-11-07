@@ -58,10 +58,12 @@ class TestStart:
         job = uuid4()
         await _launcher(fake).start(job, job_token=_TOKEN, server_password=_PASSWORD)
         commands = [argv[1:3] for argv, _ in fake.calls]
+        helper = fake.calls[1][0][fake.calls[1][0].index("--name") + 1]
+        assert helper.startswith("seshat-dev-toolkit-")
         assert commands == [
             ["volume", "inspect"],
             ["create", "--network"],  # the helper that reads the toolkit volume
-            ["cp", "helper1:/srv/artifact-lib/."],
+            ["cp", f"{helper}:/srv/artifact-lib/."],
             ["rm", "-f"],
             ["volume", "create"],
             ["create", "--name"],

@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -20,8 +20,14 @@ import pytest
 import pytest_asyncio
 
 from personal_agent.dev_agent.container_spec import agent_container_name, load_profiles
-from personal_agent.dev_agent.launcher import SCOPE_LABEL, DockerLauncher, run_command
+from personal_agent.dev_agent.launcher import (
+    SCOPE_LABEL,
+    CommandResult,
+    DockerLauncher,
+    run_command,
+)
 from personal_agent.dev_agent.toolkit import (
+    HELPER_LABEL,
     MANIFEST_FILE,
     TOOLKIT_MOUNT,
     fill_toolkit_volume,
@@ -136,6 +142,32 @@ class TestFill:
                 env.volume, synthetic_assets(), corrupt, image=env.image, runner=run_command
             )
         assert not env.volume_exists()
+
+    async def test_bytes_that_change_after_the_copy_leave_no_volume_and_no_helper(
+        self, env: Env
+    ) -> None:
+        """AC-2, the read-back path: the bytes are right in memory and wrong in the volume."""
+        first = synthetic_assets()[0].path
+
+        async def tampering(
+            args: Sequence[str], *, env: Mapping[str, str] | None = None
+        ) -> CommandResult:
+            result = await run_command(args, env=env)
+            if list(args[1:2]) == ["cp"] and args[3].startswith("seshat-dev-toolkit-"):
+                _docker(
+                    "run", "--rm", "--user", "0", "--network", "none", "-v", f"{env_.volume}:/t",
+                    "--entrypoint", "sh", env_.image, "-c", f"printf x >> /t/{first}",
+                )  # fmt: skip
+            return result
+
+        env_ = env
+        with pytest.raises(DevAgentToolkitError, match="differs from the pin"):
+            await fill_toolkit_volume(
+                env.volume, synthetic_assets(), fetch_synthetic, image=env.image, runner=tampering
+            )
+        assert not env.volume_exists()
+        leftovers = _docker("ps", "-aq", "--filter", f"label={HELPER_LABEL}=1").stdout
+        assert leftovers.decode().split() == []
 
     async def test_a_second_fill_replaces_the_volume(self, env: Env) -> None:
         await env.fill()

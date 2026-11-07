@@ -12,8 +12,10 @@ import os
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from personal_agent.dev_agent.toolkit import (
+    HELPER_LABEL,
     MANIFEST_FILE,
     ToolkitAsset,
     _read_tree,
@@ -99,6 +101,17 @@ class TestReadTree:
         os.mkfifo(tmp_path / "pipe.js")
         with pytest.raises(DevAgentToolkitError, match="special entry: pipe.js"):
             _read_tree(tmp_path)
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+    def test_an_unreadable_file_is_a_toolkit_error_not_a_raw_oserror(self, tmp_path: Path) -> None:
+        locked = tmp_path / "locked.js"
+        locked.write_bytes(b"1")
+        locked.chmod(0)
+        try:
+            with pytest.raises(DevAgentToolkitError, match="cannot read"):
+                _read_tree(tmp_path)
+        finally:
+            locked.chmod(0o644)
 
     def test_regular_files_in_folders_are_read(self, tmp_path: Path) -> None:
         (tmp_path / "a").mkdir()
@@ -222,6 +235,15 @@ class TestFill:
         volume_rm = next(i for i, a in enumerate(argvs) if a[1:3] == ["volume", "rm"])
         assert container_rm < volume_rm
 
+    async def test_a_failed_removal_in_the_error_path_does_not_hide_the_first_error(self) -> None:
+        fake = FakeDocker()
+        fake.fail.update({"cp", "rm"})
+        with capture_logs() as logs, pytest.raises(DevAgentToolkitError, match="cp"):
+            await fill_toolkit_volume(
+                _VOLUME, synthetic_assets(), _fetch_good, image=_IMAGE, runner=fake
+            )
+        assert [e for e in logs if e["event"] == "dev_agent_toolkit_helper_not_removed"]
+
     async def test_a_read_back_that_differs_removes_the_volume(self) -> None:
         fake = FakeDocker()
         fake.tamper_on_copy_in = True
@@ -243,6 +265,24 @@ class TestRead:
         create = next(a for a in fake.argvs() if a[1] == "create")
         assert f"{_VOLUME}:/srv/artifact-lib:ro" in create
         assert create[create.index("--network") + 1] == "none"
+
+    async def test_the_helper_has_a_known_name_and_a_label(self) -> None:
+        fake = FakeDocker()
+        fake.volumes[_VOLUME] = complete_volume()
+        await read_toolkit_volume(_VOLUME, _IMAGE, fake)
+        create = next(a for a in fake.argvs() if a[1] == "create")
+        name = create[create.index("--name") + 1]
+        assert name.startswith("seshat-dev-toolkit-")
+        assert f"{HELPER_LABEL}=1" in create
+        assert ["docker", "rm", "-f", name] in fake.argvs(), "removed by name, not by id"
+
+    async def test_a_failed_removal_is_logged_and_does_not_hide_the_result(self) -> None:
+        fake = FakeDocker()
+        fake.volumes[_VOLUME] = complete_volume()
+        fake.fail.add("rm")
+        with capture_logs() as logs:
+            assert await read_toolkit_volume(_VOLUME, _IMAGE, fake) == complete_volume()
+        assert [e for e in logs if e["event"] == "dev_agent_toolkit_helper_not_removed"]
 
     async def test_a_failed_copy_still_removes_the_helper_container(self) -> None:
         fake = FakeDocker()

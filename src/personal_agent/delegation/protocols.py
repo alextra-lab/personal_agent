@@ -30,9 +30,11 @@ __all__ = [
 class DelegationExecutorProtocol(Protocol):
     """Protocol for external agent delegation adapters.
 
-    Implementations wrap a specific external agent harness (Claude Code CLI,
-    Codex REST API, generic MCP, etc.) and adapt the DelegationPackage/
-    DelegationOutcome contract to that harness's invocation model.
+    Implementations wrap a specific external agent harness and adapt the
+    DelegationPackage/DelegationOutcome contract to that harness's invocation
+    model. The one implementation is ``adapters.opencode.OpenCodeAdapter``
+    (ADR-0159 D2.2, which superseded ADR-0050 D4/D6 and deleted the earlier
+    unused adapters).
 
     ADR-0049 modularity principle: new agent integrations are new adapter
     implementations, not modifications to the orchestrator.

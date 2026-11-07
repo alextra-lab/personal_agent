@@ -14,19 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import signal
-import socket
-import urllib.request
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv4Interface, IPv4Network
 
 import asyncpg  # type: ignore[import-untyped]
-import psutil  # type: ignore[import-untyped]
 import structlog
 import uvicorn
 
+from personal_agent.dev_broker.addresses import interface_addresses, select_listen_addresses
 from personal_agent.dev_broker.clock import Clock, SystemClock
 from personal_agent.dev_broker.config import BrokerConfig, load_broker_config
 from personal_agent.dev_broker.dispatch import LiteLLMDispatcher
@@ -50,67 +45,6 @@ _MUST_REFUSE = (
     "http://caddy:8601",
     "http://169.254.169.254",
 )
-
-
-@dataclass(frozen=True)
-class ListenAddresses:
-    """Where the two listeners bind.
-
-    Attributes:
-        model: The broker's ``dev-agent`` address (the model route).
-        control: The broker's ``cloud-sim`` address (the control API).
-        dev_agent_subnet: The ``dev-agent`` subnet (the relay's target check).
-    """
-
-    model: IPv4Address
-    control: IPv4Address
-    dev_agent_subnet: IPv4Network
-
-
-def interface_addresses() -> list[IPv4Interface]:
-    """Return every IPv4 address of this container, with its netmask.
-
-    Returns:
-        The addresses, loopback included.
-    """
-    found: list[IPv4Interface] = []
-    for addresses in psutil.net_if_addrs().values():
-        for address in addresses:
-            if address.family == socket.AF_INET and address.netmask:
-                found.append(IPv4Interface(f"{address.address}/{address.netmask}"))
-    return found
-
-
-def select_listen_addresses(
-    interfaces: Sequence[IPv4Interface], *, control_subnet: IPv4Network
-) -> ListenAddresses:
-    """Choose the two listen addresses, or refuse to start.
-
-    Args:
-        interfaces: The container's IPv4 addresses.
-        control_subnet: The ``cloud-sim`` subnet.
-
-    Returns:
-        The two addresses and the ``dev-agent`` subnet.
-
-    Raises:
-        BrokerStartupError: Unless exactly one address is in ``control_subnet`` and exactly one
-            other non-loopback address exists in a subnet that does not overlap it.
-    """
-    usable = [i for i in interfaces if not i.ip.is_loopback]
-    control = [i for i in usable if i.ip in control_subnet]
-    others = [i for i in usable if i.ip not in control_subnet]
-    if len(control) != 1 or len(others) != 1:
-        raise BrokerStartupError(
-            "the broker must be on exactly two networks: cloud-sim and dev-agent "
-            f"(found {[str(i) for i in usable]})"
-        )
-    dev_agent = others[0]
-    if dev_agent.network.overlaps(control_subnet):
-        raise BrokerStartupError(f"the dev-agent subnet {dev_agent.network} overlaps cloud-sim")
-    return ListenAddresses(
-        model=dev_agent.ip, control=control[0].ip, dev_agent_subnet=dev_agent.network
-    )
 
 
 def check_egress_guard(guard: DomainGuard, provider_url: str) -> None:
@@ -308,38 +242,19 @@ async def run(config: BrokerConfig) -> None:
         log.info("dev_broker_stopped", trace_id=None)
 
 
-def health(config: BrokerConfig) -> bool:
-    """Return whether the control listener answers its health route.
-
-    Args:
-        config: The broker config.
-
-    Returns:
-        ``True`` when ``/healthz`` answers ``ok``.
-    """
-    addresses = select_listen_addresses(interface_addresses(), control_subnet=config.control_subnet)
-    url = f"http://{addresses.control}:{config.control_port}/healthz"
-    with urllib.request.urlopen(url, timeout=3) as answer:  # noqa: S310 — fixed http URL
-        return bool(json.load(answer).get("status") == "ok")
-
-
 def main(argv: Sequence[str]) -> int:
-    """Run the broker, or its health check with ``--health``.
+    """Run the broker. ``--health`` never reaches here (see ``__main__`` and ``health``).
 
     Args:
-        argv: Command-line arguments without the program name.
+        argv: Command-line arguments without the program name. Unused.
 
     Returns:
         The exit status.
     """
     from personal_agent.telemetry.logger import configure_logging  # noqa: PLC0415
 
+    del argv
     config = load_broker_config()
-    if "--health" in argv:
-        try:
-            return 0 if health(config) else 1
-        except OSError, BrokerStartupError, ValueError:
-            return 1
     configure_logging()
     asyncio.run(run(config))
     return 0

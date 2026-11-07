@@ -31,7 +31,7 @@ def hash_token(raw_token: str) -> str:
 
 
 async def issue_job_token(
-    pool: asyncpg.Pool,
+    pool: asyncpg.Pool | asyncpg.Connection,
     *,
     job_id: UUID,
     model_key: str,
@@ -42,7 +42,7 @@ async def issue_job_token(
     """Create the job's token row and return the raw token.
 
     Args:
-        pool: The gateway's pool.
+        pool: The gateway's pool, or a connection inside the supervisor's fenced transaction.
         job_id: The job.
         model_key: The catalog key of the job's model. The broker accepts no other model.
         trace_id: The job's trace. ``api_costs`` rows join to the job on it (D5.9).
@@ -76,11 +76,11 @@ async def issue_job_token(
     return raw_token
 
 
-async def revoke_job_token(pool: asyncpg.Pool, job_id: UUID) -> None:
+async def revoke_job_token(pool: asyncpg.Pool | asyncpg.Connection, job_id: UUID) -> None:
     """Set the job's token to ``revoked``. The broker then refuses it on every listener.
 
     Args:
-        pool: The gateway's pool.
+        pool: The gateway's pool, or a connection inside the supervisor's fenced transaction.
         job_id: The job.
     """
     trace_id = await pool.fetchval(

@@ -1,0 +1,13 @@
+# Egress proxy for the dev-agent network (ADR-0159 D4.5; FRE-1682). Squid with squid.conf.
+# Build: make dev-agent-build
+FROM debian:trixie-slim
+
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends squid bash \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY squid.conf /etc/squid/squid.conf
+
+# The Debian "proxy" user (uid 13). The container runs with a read-only root and no capabilities.
+USER proxy
+ENTRYPOINT ["squid", "-N", "-f", "/etc/squid/squid.conf"]

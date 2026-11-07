@@ -1,0 +1,108 @@
+# Container boundary of the development agent (ADR-0159 D3.3, D7.3, D8.8; FRE-1682).
+#
+# This file is data. The launcher (FRE-1684) renders it into `docker create` arguments with
+# personal_agent.dev_agent.container_spec.build_create_args(). The live check
+# (scripts/verify_dev_agent_images.py) compares `docker inspect` output with it. A change here
+# is a change of the security boundary: review it as one.
+#
+# network:  "dev-agent" = the internal Docker network of that name (the launcher passes the real,
+#           project-prefixed name). "none" = no network.
+# mounts:   the source is always a named volume that the launcher supplies. A host path or the
+#           Docker socket is refused at render time.
+# env:      env_fixed is the whole non-secret environment. env_from_launcher names variables whose
+#           value the launcher passes through its own process environment (never on the command line).
+#           Nothing else is set. The check compares the container environment with these two lists.
+
+# One pin for OpenCode. docker/dev-agent/Dockerfile.browser has the same value in
+# ARG OPENCODE_VERSION. A test fails if they differ.
+opencode_version: "2.2.5"
+
+agent:
+  name: agent
+  image: seshat-dev-agent:0.1
+  user: "10001:10001"
+  network: dev-agent
+  memory_mb: 3072
+  cpus: 2.0
+  pids_limit: 512
+  read_only_root: true
+  cap_drop: [ALL]
+  no_new_privileges: true
+  init: true
+  tmpfs:
+    - {path: /tmp, size_mb: 512, mode: "1777", exec: false}
+    # HOME. It holds the state of OpenCode. OpenCode and npm may run files from here.
+    - {path: /devagent-home, size_mb: 256, mode: "0700", exec: true}
+  mounts:
+    - {target: /workspace, read_only: false}
+    - {target: /srv/artifact-lib, read_only: true}
+  env_fixed:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HOME: /devagent-home
+    LANG: C.UTF-8
+    LC_ALL: C.UTF-8
+    TZ: UTC
+    NODE_ENV: development
+    OPENCODE_CONFIG: /etc/opencode/opencode.json
+    PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    HTTPS_PROXY: http://dev-agent-proxy:3128
+  env_from_launcher: [SESHAT_JOB_TOKEN, OPENCODE_SERVER_PASSWORD]
+  wall_clock_seconds: 1800
+
+check:
+  name: check
+  image: seshat-dev-check:0.1
+  user: "10001:10001"
+  network: none
+  memory_mb: 2048
+  cpus: 1.0
+  pids_limit: 256
+  read_only_root: true
+  cap_drop: [ALL]
+  no_new_privileges: true
+  init: true
+  tmpfs:
+    # D7.3: one bounded tmpfs for writable scratch. HOME is inside it.
+    - {path: /tmp, size_mb: 640, mode: "1777", exec: false}
+  mounts:
+    - {target: /input/dist, read_only: true}
+    - {target: /input/tests, read_only: true}
+    - {target: /srv/artifact-lib, read_only: true}
+  env_fixed:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HOME: /tmp
+    LANG: C.UTF-8
+    LC_ALL: C.UTF-8
+    TZ: UTC
+    NODE_ENV: test
+    PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+  env_from_launcher: []
+  wall_clock_seconds: 300
+
+# Bundles the agent's commits out of an untrusted workspace (D8.8.2). Same limits as the check.
+handoff:
+  name: handoff
+  image: seshat-dev-handoff:0.1
+  user: "10001:10001"
+  network: none
+  memory_mb: 2048
+  cpus: 1.0
+  pids_limit: 256
+  read_only_root: true
+  cap_drop: [ALL]
+  no_new_privileges: true
+  init: false
+  tmpfs:
+    - {path: /tmp, size_mb: 64, mode: "1777", exec: false}
+  mounts:
+    - {target: /workspace, read_only: true}
+    - {target: /out, read_only: false}
+  env_fixed:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HOME: /tmp
+    LANG: C.UTF-8
+    GIT_CONFIG_GLOBAL: /dev/null
+    GIT_CONFIG_SYSTEM: /dev/null
+    GIT_TERMINAL_PROMPT: "0"
+  env_from_launcher: []
+  wall_clock_seconds: 300

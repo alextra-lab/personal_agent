@@ -1,0 +1,48 @@
+# Browser images of the development agent (ADR-0159 D7.1, D2.1; FRE-1682). Two targets:
+#
+#   check  Chromium, Playwright, the CSP test server and the probe. Used for the publish check.
+#   agent  check + OpenCode (pinned) + git. Used for the job.
+#
+# Build (the CSP server source lives in e2e/artifact-lib, a named build context): make dev-agent-build
+# The Playwright base image has node, python3 and git. Its environment holds PATH, LANG, LC_ALL
+# and PLAYWRIGHT_BROWSERS_PATH. config/dev_agent/container_profiles.yaml declares all four.
+FROM mcr.microsoft.com/playwright:v1.60.0-noble AS check
+
+RUN groupadd -g 10001 devagent \
+    && useradd -u 10001 -g 10001 -m -d /devagent-home -s /bin/bash devagent
+
+# The playwright module for browser-smoke.mjs. Browsers come from the base image.
+WORKDIR /opt/probe
+RUN npm install --no-audit --no-fund --omit=dev playwright@1.60.0
+COPY probe.py browser-smoke.mjs /opt/probe/
+
+COPY --from=csp csp-server.ts csp-serve.ts /opt/csp/
+COPY csp-manifest.json /opt/csp/csp-manifest.json
+
+# Mount points, so a named volume starts with the right owner.
+RUN mkdir -p /workspace /srv/artifact-lib /input/dist /input/tests \
+    && chown 10001:10001 /workspace
+
+USER 10001:10001
+WORKDIR /workspace
+CMD ["python3", "/opt/probe/probe.py", "network"]
+
+
+FROM check AS agent
+
+# The one pin. config/dev_agent/container_profiles.yaml (opencode_version) must match.
+ARG OPENCODE_VERSION=2.2.5
+
+USER root
+# The package installs four platform builds. postinstall hard-links the right one to bin/opencode.exe.
+# Removing node_modules drops the other three (about 700 MB) and keeps the linked binary.
+RUN npm install -g --no-audit --no-fund @opencode/cli@${OPENCODE_VERSION} \
+    && rm -rf "$(npm root -g)/@opencode/cli/node_modules" \
+    && npm cache clean --force \
+    && opencode --version \
+    && mkdir -p /etc/opencode \
+    && echo '{}' > /etc/opencode/opencode.json
+# The permission file of the job (D2.4) replaces /etc/opencode/opencode.json in FRE-1684.
+# An empty file means no rule matches, and OpenCode then asks. A headless job cannot answer, so it stops.
+
+USER 10001:10001

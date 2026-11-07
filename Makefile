@@ -53,7 +53,7 @@ endif
         infra-up infra-down dev \
         deploy build build-full vps-bootstrap \
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
-        sandbox-build prompt-show \
+        sandbox-build dev-agent-build dev-agent-verify prompt-show \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
         verify-envelope verify-lib verify-artifact-e2e \
@@ -308,6 +308,19 @@ tool-failure-coverage:
 
 sandbox-build:  ## Build the Python sandbox image for run_python
 	docker build -t seshat-sandbox-python:0.1 docker/sandbox/ -f docker/sandbox/Dockerfile.python
+
+# ─── Development agent images (ADR-0159, FRE-1682) ────────────────────────────
+
+dev-agent-build:  ## Build the four dev-agent images (check, agent, handoff, proxy)
+	docker build -t seshat-dev-check:0.1 --target check --build-context csp=e2e/artifact-lib \
+		-f docker/dev-agent/Dockerfile.browser docker/dev-agent/
+	docker build -t seshat-dev-agent:0.1 --target agent --build-context csp=e2e/artifact-lib \
+		-f docker/dev-agent/Dockerfile.browser docker/dev-agent/
+	docker build -t seshat-dev-handoff:0.1 -f docker/dev-agent/Dockerfile.handoff docker/dev-agent/
+	docker build -t seshat-dev-proxy:0.1 -f docker/dev-agent/Dockerfile.proxy docker/dev-agent/
+
+dev-agent-verify:  ## Live check of the dev-agent network, proxy and images (ARGS="--compose-project <p> --up --down")
+	uv run python -m scripts.verify_dev_agent_images $(ARGS)
 
 # ─── One-shot maintenance ─────────────────────────────────────────────────────
 

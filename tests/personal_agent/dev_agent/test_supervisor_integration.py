@@ -215,7 +215,7 @@ class TestLimits:
         await a.scan_once()
         await _wait_end(a)
         assert 1790 < h.timeouts[0] <= 1800, "the agent gets the time left of the 30 minutes"
-        assert pipeline.calls == ["handoff"]
+        assert pipeline.calls == ["prepare", "handoff"]
         row = await h.row(job.id)
         assert (row["state"], row["failure_reason"]) == ("timed_out", "time_limit")
         assert h.docker.ops(job.id) == ["start", "stop", "remove"]
@@ -288,7 +288,7 @@ class TestLimits:
         assert a.keeper is not None and a.keeper.renewals == 0
         row = await h.row(job.id)
         assert (row["state"], row["failure_reason"]) == ("cost_unknown", "cost_unknown")
-        assert pipeline.calls == [], "a stopped job never reaches the handoff"
+        assert pipeline.calls == ["prepare"], "a stopped job never reaches the handoff"
         assert await h.token(job.id) == "revoked"
 
     async def test_sixty_seconds_without_a_renewal_stops_all_work(
@@ -375,7 +375,11 @@ class TestResult:
         a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
         await a.scan_once()
         await _wait_end(a)
-        assert pipeline.calls == ["handoff", "check abc123", "deliver", "upload"]
+        assert pipeline.calls == [
+            "prepare", "handoff", "check abc123", "deliver", "upload", "advance_main",
+        ]  # fmt: skip
+        assert pipeline.seen_results == ["abc123"]
+        assert h.docker.workspaces[job.id] == b"workspace-tar"
         assert (await h.row(job.id))["state"] == "succeeded"
         assert ("upload", 1, "sup-a", "done") in await h.actions(job.id)
         assert job.id not in h.docker.containers
@@ -388,7 +392,7 @@ class TestResult:
         a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
         await a.scan_once()
         await _wait_end(a)
-        assert pipeline.calls == ["handoff", "check abc123"]
+        assert pipeline.calls == ["prepare", "handoff", "check abc123"]
         assert (await h.row(job.id))["state"] == "failed_check"
 
     async def test_a_delivering_job_resumes_its_delivery_after_a_restart(
@@ -407,7 +411,91 @@ class TestResult:
         b = h.supervisor("sup-b", pipeline=second)
         await b.scan_once()
         await _wait_end(b)
-        assert second.calls == ["deliver", "upload"]
+        assert second.calls == ["deliver", "upload", "advance_main"]
         row = await h.row(job.id)
         assert (row["state"], row["lease_epoch"]) == ("succeeded", 2)
+        assert job.id not in h.docker.containers
+
+
+class TestRepoHooks:
+    """The repo steps of FRE-1685 around the agent (ADR-0159 D8.4, D8.8, D8.9)."""
+
+    async def test_a_refused_prepare_ends_failed_with_its_reason_and_starts_nothing(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        job = await make_job()
+        pipeline = RecordingPipeline(refuse_prepare="source_not_found")
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("failed", "source_not_found")
+        assert "start" not in h.docker.ops(job.id)
+        assert pipeline.calls == ["prepare"]
+        assert await h.token(job.id) is None, "no token is issued before prepare passes"
+
+    async def test_a_refused_handoff_ends_failed_with_its_reason(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        job = await make_job()
+        pipeline = RecordingPipeline(refuse_handoff="head_not_descendant")
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("failed", "head_not_descendant")
+        assert pipeline.calls == ["prepare", "handoff"]
+
+    async def test_advance_main_is_retried_once(self, h: Harness, make_job: MakeJob) -> None:
+        job = await make_job()
+        pipeline = RecordingPipeline(result="abc123", advance_failures=1)
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        assert pipeline.calls[-2:] == ["advance_main", "advance_main"]
+        assert (await h.row(job.id))["state"] == "succeeded"
+
+    async def test_a_published_page_succeeds_even_when_main_cannot_move(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        job = await make_job()
+        pipeline = RecordingPipeline(result="abc123", advance_failures=5)
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        assert pipeline.calls.count("advance_main") == 2
+        assert (await h.row(job.id))["state"] == "succeeded"
+        assert await h.pool.fetchval("SELECT main_moved FROM dev_jobs WHERE id = $1", job.id) is None
+
+    async def test_a_refused_handoff_after_the_limit_ends_timed_out(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        job = await make_job()
+
+        async def runs_past_the_limit(
+            package: DelegationPackage, timeout: float
+        ) -> DelegationOutcome:
+            await h.pool.execute(
+                "UPDATE dev_jobs SET started_at = clock_timestamp() - interval '31 minutes' "
+                "WHERE id = $1",
+                job.id,
+            )
+            return DelegationOutcome(package.task_id, False, 3, "", "timed_out")
+
+        pipeline = RecordingPipeline(refuse_handoff="page_missing")
+        a = h.supervisor("sup-a", behaviour=runs_past_the_limit, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("timed_out", "page_missing")
+
+    async def test_a_refused_check_keeps_its_reason(self, h: Harness, make_job: MakeJob) -> None:
+        """Code review finding 2: every step's refusal keeps its reason."""
+        job = await make_job()
+        pipeline = RecordingPipeline(result="abc123", refuse_check="check_refused_reason")
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("failed", "check_refused_reason")
         assert job.id not in h.docker.containers

@@ -1,11 +1,13 @@
 # ruff: noqa: D101, D102
-"""The Docker launcher's calls (ADR-0159 D3.1–D3.4, D6; FRE-1684).
+"""The Docker launcher's calls (ADR-0159 D3.1–D3.4, D6, D8.4, D8.8.2; FRE-1684, FRE-1685).
 
 A fake runner records every ``docker`` call. The live behaviour is in ``test_supervisor_live.py``.
 """
 
 from __future__ import annotations
 
+import io
+import tarfile
 from collections.abc import Mapping, Sequence
 from uuid import uuid4
 
@@ -16,8 +18,13 @@ from personal_agent.dev_agent.launcher import (
     JOB_LABEL,
     OPENCODE_COMMAND,
     SCOPE_LABEL,
+    BytesResult,
     CommandResult,
     DockerLauncher,
+    handoff_container_name,
+    handoff_volume_name,
+    parse_single_file_tar,
+    run_bytes,
     workspace_volume_name,
 )
 from personal_agent.exceptions import DevAgentLaunchError, DevAgentToolkitError
@@ -209,3 +216,161 @@ class TestRunCommand:
             await task
         assert not children[0].is_running() or children[0].status() == psutil.STATUS_ZOMBIE
         assert not [p for p in psutil.Process().children() if p.cmdline()[-1:] == [marker]]
+
+
+class FakeBytes:
+    """Records every binary ``docker`` call. ``cp`` from a container returns ``tar``."""
+
+    def __init__(self, tar: bytes = b"", start_status: int = 0) -> None:
+        self.calls: list[tuple[list[str], bytes | None, float]] = []
+        self.tar = tar
+        self.start_status = start_status
+
+    async def __call__(
+        self,
+        args: Sequence[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        stdin: bytes | None = None,
+        timeout: float = 60.0,
+        max_stdout: int = 1 << 26,
+    ) -> BytesResult:
+        argv = list(args)
+        self.calls.append((argv, stdin, timeout))
+        if argv[1] == "start":
+            return BytesResult(self.start_status, b"", "seeded" if self.start_status else "")
+        if argv[1] == "cp" and argv[-1] == "-":
+            return BytesResult(0, self.tar, "")
+        return BytesResult(0, b"", "")
+
+
+def _tar_of(name: str, data: bytes, kind: bytes = tarfile.REGTYPE) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as tar:
+        info = tarfile.TarInfo(name)
+        info.type = kind
+        if kind == tarfile.SYMTYPE:
+            info.linkname = "/etc/passwd"
+            tar.addfile(info)
+        else:
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def _two_files() -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as tar:
+        for name in ("job.bundle", "extra"):
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            tar.addfile(info, io.BytesIO(b"x"))
+    return buffer.getvalue()
+
+
+def _full_launcher(fake: FakeDocker, raw: FakeBytes) -> DockerLauncher:
+    profiles = load_profiles()
+    return DockerLauncher(
+        profiles.agent,
+        network_name="seshat_dev-agent",
+        toolkit_volume="toolkit",
+        toolkit_assets=synthetic_assets(),
+        scope="prod",
+        handoff_profile=profiles.handoff,
+        runner=fake,
+        bytes_runner=raw,
+    )
+
+
+class TestWorkspaceCopy:
+    async def test_the_clone_is_copied_in_between_create_and_start(self) -> None:
+        fake, raw = _fake(), FakeBytes()
+        job = uuid4()
+        await _full_launcher(fake, raw).start(
+            job, job_token=_TOKEN, server_password=_PASSWORD, workspace=b"TAR"
+        )
+        (cp, stdin, _), = raw.calls
+        assert cp == ["docker", "cp", "-a", "-", f"{agent_container_name(job)}:/workspace"]
+        assert stdin == b"TAR"
+        # The copy came after the agent container's create and before its start.
+        tail = [argv[1:3] for argv, _ in fake.calls[-2:]]
+        assert tail == [["create", "--name"], ["start", agent_container_name(job)]]
+
+
+class TestBundleWorkspace:
+    async def test_the_handoff_container_has_the_profile_and_returns_the_bundle(self) -> None:
+        job = uuid4()
+        fake, raw = FakeDocker(), FakeBytes(tar=_tar_of("job.bundle", b"BUNDLE"))
+        bundle = await _full_launcher(fake, raw).bundle_workspace(job, f"job/{job}")
+        assert bundle == b"BUNDLE"
+        create = next(argv for argv, _ in fake.calls if argv[1] == "create")
+        assert create[create.index("--name") + 1] == handoff_container_name(job)
+        assert create[create.index("--network") + 1] == "none"
+        assert f"{workspace_volume_name(job)}:/workspace:ro" in create
+        assert f"{handoff_volume_name(job)}:/out" in create
+        assert f"{JOB_LABEL}={job}" in create and f"{SCOPE_LABEL}=prod" in create
+        assert create[-2:] == ["seshat-dev-handoff:0.1", f"job/{job}"]
+        start = next(c for c in raw.calls if c[0][1] == "start")
+        assert start[0] == ["docker", "start", "-a", handoff_container_name(job)]
+        assert start[2] == 300.0
+        # Removed after, container and output volume.
+        tail = [argv[1:3] for argv, _ in fake.calls[-2:]]
+        assert tail == [["rm", "-f"], ["volume", "rm"]]
+
+    async def test_a_failed_handoff_raises_and_still_cleans_up(self) -> None:
+        job = uuid4()
+        fake, raw = FakeDocker(), FakeBytes(start_status=3)
+        with pytest.raises(DevAgentLaunchError, match="handoff run"):
+            await _full_launcher(fake, raw).bundle_workspace(job, f"job/{job}")
+        assert [argv[1:3] for argv, _ in fake.calls[-2:]] == [["rm", "-f"], ["volume", "rm"]]
+
+    @pytest.mark.parametrize(
+        "tar",
+        [
+            _tar_of("job.bundle", b"x", tarfile.SYMTYPE),
+            _tar_of("other", b"x"),
+            _two_files(),
+            b"not a tar",
+        ],
+    )
+    async def test_only_one_regular_bundle_file_is_accepted(self, tar: bytes) -> None:
+        job = uuid4()
+        with pytest.raises(DevAgentLaunchError):
+            await _full_launcher(FakeDocker(), FakeBytes(tar=tar)).bundle_workspace(
+                job, f"job/{job}"
+            )
+
+
+async def test_parse_single_file_tar_refuses_an_oversized_member() -> None:
+    with pytest.raises(DevAgentLaunchError):
+        parse_single_file_tar(_tar_of("job.bundle", b"x" * 11), "job.bundle", 10)
+
+
+class TestRunBytes:
+    async def test_stdin_and_stdout_are_binary(self) -> None:
+        result = await run_bytes(["cat"], stdin=b"\x00\xffdata")
+        assert (result.returncode, result.stdout) == (0, b"\x00\xffdata")
+
+    async def test_output_past_the_cap_is_refused(self) -> None:
+        result = await run_bytes(["head", "-c", "5000", "/dev/zero"], max_stdout=100)
+        assert (result.returncode, result.stdout) == (125, b"")
+
+    async def test_output_past_the_cap_kills_a_child_that_keeps_running(self) -> None:
+        """Code review finding 1: the cap ends the call at once, not at the timeout."""
+        import time
+
+        script = "import sys, time; sys.stdout.write('x' * 200000); sys.stdout.flush(); time.sleep(30)"
+        started = time.monotonic()
+        result = await run_bytes(["python3", "-c", script], max_stdout=1000, timeout=20)
+        assert (result.returncode, result.stdout) == (125, b"")
+        assert time.monotonic() - started < 5
+
+    async def test_a_timeout_returns_124(self) -> None:
+        result = await run_bytes(["sleep", "5"], timeout=0.2)
+        assert result.returncode == 124
+
+    async def test_large_stderr_does_not_block(self) -> None:
+        script = "import sys; sys.stderr.write('e' * 300000); print('done')"
+        result = await run_bytes(["python3", "-c", script], timeout=10)
+        assert result.stdout.strip() == b"done"
+        assert len(result.stderr) == 65536

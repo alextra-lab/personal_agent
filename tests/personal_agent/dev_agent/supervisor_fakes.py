@@ -1,4 +1,4 @@
-"""Fakes for the supervisor tests (FRE-1684): a manual clock, a launcher, an adapter, a pipeline."""
+"""Fakes for the supervisor tests (FRE-1684, FRE-1685): a clock, a launcher, an adapter, a pipeline."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from personal_agent.delegation.protocols import (
     DelegationPackage,
 )
 from personal_agent.dev_agent.jobs import DevJob, JobStore, Lease, TokenSignal
-from personal_agent.dev_agent.supervisor import Fence
-from personal_agent.exceptions import DevAgentLaunchError
+from personal_agent.dev_agent.supervisor import Fence, PreparedJob
+from personal_agent.exceptions import DevAgentLaunchError, DevJobRefusedError
 from personal_agent.telemetry.trace import TraceContext
 
 
@@ -57,9 +57,18 @@ class FakeLauncher:
         self.inside_start = asyncio.Event()
         self.fail_remove = 0
         self.who = "?"
+        self.workspaces: dict[UUID, bytes | None] = {}
 
-    async def start(self, job_id: UUID, *, job_token: str, server_password: str) -> None:
+    async def start(
+        self,
+        job_id: UUID,
+        *,
+        job_token: str,
+        server_password: str,
+        workspace: bytes | None = None,
+    ) -> None:
         assert job_token and server_password
+        self.workspaces[job_id] = workspace
         self.inside_start.set()
         if self.start_gate is not None:
             await self.start_gate.wait()
@@ -79,6 +88,10 @@ class FakeLauncher:
 
     async def labelled_job_ids(self) -> set[UUID]:
         return set(self.containers)
+
+    async def bundle_workspace(self, job_id: UUID, branch: str) -> bytes:
+        self.calls.append(("bundle", job_id, self.who))
+        return b""
 
     def ops(self, job_id: UUID) -> list[str]:
         return [op for op, jid, _ in self.calls if jid == job_id]
@@ -136,21 +149,41 @@ class RecordingPipeline:
         result: str | None = None,
         passes: bool = True,
         deliver_gate: asyncio.Event | None = None,
+        refuse_prepare: str | None = None,
+        refuse_handoff: str | None = None,
+        advance_failures: int = 0,
+        refuse_check: str | None = None,
     ) -> None:
         self.result = result
         self.passes = passes
         self.deliver_gate = deliver_gate
+        self.refuse_prepare = refuse_prepare
+        self.refuse_handoff = refuse_handoff
+        self.advance_failures = advance_failures
+        self.refuse_check = refuse_check
         self.in_delivery = asyncio.Event()
         self.calls: list[str] = []
+        self.seen_results: list[str | None] = []
+
+    async def prepare(self, job: DevJob, fence: Fence) -> PreparedJob:
+        del fence
+        self.calls.append("prepare")
+        if self.refuse_prepare is not None:
+            raise DevJobRefusedError(self.refuse_prepare)
+        return PreparedJob(job=job, workspace=b"workspace-tar")
 
     async def handoff(self, job: DevJob, fence: Fence) -> str | None:
         del job, fence
         self.calls.append("handoff")
+        if self.refuse_handoff is not None:
+            raise DevJobRefusedError(self.refuse_handoff)
         return self.result
 
     async def check(self, job: DevJob, result_commit: str, fence: Fence) -> bool:
         del job, fence
         self.calls.append(f"check {result_commit}")
+        if self.refuse_check is not None:
+            raise DevJobRefusedError(self.refuse_check)
         return self.passes
 
     async def deliver(self, job: DevJob, fence: Fence) -> None:
@@ -165,6 +198,14 @@ class RecordingPipeline:
             self.calls.append("upload")
 
         await fence.run("upload", upload)
+
+    async def advance_main(self, job: DevJob, fence: Fence) -> None:
+        del fence
+        self.calls.append("advance_main")
+        self.seen_results.append(job.result_commit)
+        if self.advance_failures:
+            self.advance_failures -= 1
+            raise ConnectionError("seeded: GitHub unreachable")
 
 
 class PausingStore(JobStore):

@@ -1602,7 +1602,8 @@ class AppConfig(BaseSettings):
         default="seshat_dev_agent_toolkit",
         description=(
             "The named Docker volume with the pinned artifact toolkit, mounted read-only at "
-            "/srv/artifact-lib (ADR-0159 D3.3). The launcher refuses to start a job if it is missing."
+            "/srv/artifact-lib (ADR-0159 D3.3). The launcher refuses to start a job if it is missing "
+            "or if a file differs from its pin. Fill it with `make dev-agent-toolkit` (FRE-1751)."
         ),
     )
     dev_agent_label_scope: str = Field(

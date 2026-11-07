@@ -43,12 +43,15 @@ from personal_agent.dev_agent.launcher import (
     JOB_LABEL,
     SCOPE_LABEL,
     DockerLauncher,
+    run_command,
     workspace_volume_name,
 )
 from personal_agent.dev_agent.supervisor import JobSupervisor, SupervisorPolicy
+from personal_agent.dev_agent.toolkit import fill_toolkit_volume
 from personal_agent.telemetry.trace import TraceContext
 
 from .conftest import MakeJob
+from .toolkit_fakes import fetch_synthetic, synthetic_assets
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -117,7 +120,11 @@ class LiveEnv:
     def launcher(self) -> DockerLauncher:
         profile = load_profiles().agent.model_copy(update={"image": self.image})
         return DockerLauncher(
-            profile, network_name=self.network, toolkit_volume=self.toolkit, scope=self.scope
+            profile,
+            network_name=self.network,
+            toolkit_volume=self.toolkit,
+            toolkit_assets=synthetic_assets(),
+            scope=self.scope,
         )
 
     def leftovers(self, job_id: UUID) -> list[str]:
@@ -185,7 +192,9 @@ async def live(admin_pool: asyncpg.Pool) -> AsyncIterator[LiveEnv]:
         pool=admin_pool,
     )
     _docker("network", "create", "--internal", env.network)
-    _docker("volume", "create", env.toolkit)
+    await fill_toolkit_volume(
+        env.toolkit, synthetic_assets(), fetch_synthetic, image=image, runner=run_command
+    )
     try:
         yield env
     finally:

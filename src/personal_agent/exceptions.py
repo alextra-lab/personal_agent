@@ -190,3 +190,11 @@ class DevAgentLaunchError(RuntimeError):
     Examples: the toolkit volume is missing, ``docker create`` fails, or a container or volume of
     the job remains after removal.
     """
+
+
+class DevAgentToolkitError(DevAgentLaunchError):
+    """Raised when the dev-agent toolkit is wrong, or its volume cannot be built (FRE-1751).
+
+    Examples: an asset has no pinned SRI, fetched bytes differ from the pin, or the volume holds a
+    file that is missing, changed or extra. It is a launch error, so the supervisor refuses the job.
+    """

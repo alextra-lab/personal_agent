@@ -20,7 +20,13 @@ from personal_agent.dev_agent.launcher import (
     DockerLauncher,
     workspace_volume_name,
 )
-from personal_agent.exceptions import DevAgentLaunchError
+from personal_agent.exceptions import DevAgentLaunchError, DevAgentToolkitError
+
+from .toolkit_fakes import (
+    FakeDocker,
+    complete_volume,
+    synthetic_assets,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,23 +34,11 @@ _TOKEN = "job-token-secret-value"
 _PASSWORD = "server-password-secret-value"
 
 
-class FakeDocker:
-    def __init__(self) -> None:
-        self.calls: list[tuple[list[str], Mapping[str, str] | None]] = []
-        self.fail: set[str] = set()
-        self.listing: dict[str, list[str]] = {}
-
-    async def __call__(
-        self, args: Sequence[str], *, env: Mapping[str, str] | None = None
-    ) -> CommandResult:
-        argv = list(args)
-        self.calls.append((argv, env))
-        key = " ".join(argv[1:3])
-        if key in self.fail:
-            return CommandResult(1, "", f"{key} broke")
-        if argv[1] == "ps" or argv[1:3] == ["volume", "ls"]:
-            return CommandResult(0, "\n".join(self.listing.pop(key, [])), "")
-        return CommandResult(0, "", "")
+def _fake() -> FakeDocker:
+    """A fake Docker whose ``toolkit`` volume holds the correct synthetic toolkit."""
+    fake = FakeDocker()
+    fake.volumes["toolkit"] = complete_volume()
+    return fake
 
 
 def _launcher(fake: FakeDocker) -> DockerLauncher:
@@ -52,6 +46,7 @@ def _launcher(fake: FakeDocker) -> DockerLauncher:
         load_profiles().agent,
         network_name="seshat_dev-agent",
         toolkit_volume="toolkit",
+        toolkit_assets=synthetic_assets(),
         scope="prod",
         runner=fake,
     )
@@ -59,21 +54,24 @@ def _launcher(fake: FakeDocker) -> DockerLauncher:
 
 class TestStart:
     async def test_the_container_is_created_from_the_spec_with_the_job_label(self) -> None:
-        fake = FakeDocker()
+        fake = _fake()
         job = uuid4()
         await _launcher(fake).start(job, job_token=_TOKEN, server_password=_PASSWORD)
         commands = [argv[1:3] for argv, _ in fake.calls]
         assert commands == [
             ["volume", "inspect"],
+            ["create", "--network"],  # the helper that reads the toolkit volume
+            ["cp", "helper1:/srv/artifact-lib/."],
+            ["rm", "-f"],
             ["volume", "create"],
             ["create", "--name"],
             ["start", agent_container_name(job)],
         ]
-        create, env = fake.calls[2]
+        create, env = fake.calls[5]
         assert create[create.index("--name") + 1] == agent_container_name(job)
         assert f"{JOB_LABEL}={job}" in create
         assert f"{SCOPE_LABEL}=prod" in create
-        assert f"{SCOPE_LABEL}=prod" in fake.calls[1][0]
+        assert f"{SCOPE_LABEL}=prod" in fake.calls[4][0]
         assert create[create.index("--network") + 1] == "seshat_dev-agent"
         assert f"{workspace_volume_name(job)}:/workspace" in create
         assert "toolkit:/srv/artifact-lib:ro" in create
@@ -84,25 +82,52 @@ class TestStart:
         assert env["OPENCODE_SERVER_PASSWORD"] == _PASSWORD
 
     async def test_no_secret_is_on_any_command_line(self) -> None:
-        fake = FakeDocker()
+        fake = _fake()
         await _launcher(fake).start(uuid4(), job_token=_TOKEN, server_password=_PASSWORD)
         for argv, _ in fake.calls:
             assert not any(_TOKEN in arg or _PASSWORD in arg for arg in argv)
-        create = fake.calls[2][0]
+        create = fake.calls[5][0]
         assert "SESHAT_JOB_TOKEN" in create and "OPENCODE_SERVER_PASSWORD" in create
 
     async def test_a_missing_toolkit_volume_starts_nothing(self) -> None:
-        fake = FakeDocker()
+        fake = _fake()
         fake.fail.add("volume inspect")
         with pytest.raises(DevAgentLaunchError, match="toolkit"):
             await _launcher(fake).start(uuid4(), job_token=_TOKEN, server_password=_PASSWORD)
         assert [argv[1:3] for argv, _ in fake.calls] == [["volume", "inspect"]]
 
     async def test_a_failed_create_raises(self) -> None:
-        fake = FakeDocker()
+        fake = _fake()
         fake.fail.add("create --name")
         with pytest.raises(DevAgentLaunchError, match="docker create"):
             await _launcher(fake).start(uuid4(), job_token=_TOKEN, server_password=_PASSWORD)
+
+    @pytest.mark.parametrize(
+        ("damage", "message"),
+        [
+            ("change", "differs from the pin"),
+            ("extra", "unexpected file"),
+            ("half", "missing"),
+            ("empty", "missing"),
+        ],
+    )
+    async def test_a_wrong_toolkit_volume_starts_nothing(self, damage: str, message: str) -> None:
+        fake = _fake()
+        files = fake.volumes["toolkit"]
+        first = sorted(files)[0]
+        if damage == "change":
+            files[first] += b"!"
+        elif damage == "extra":
+            files["planted.js"] = b"evil()"
+        elif damage == "half":
+            del files[sorted(files)[-1]]
+        else:
+            files.clear()
+        with pytest.raises(DevAgentToolkitError, match=message):
+            await _launcher(fake).start(uuid4(), job_token=_TOKEN, server_password=_PASSWORD)
+        assert ["volume", "create"] not in [argv[1:3] for argv in fake.argvs()]
+        assert not any(argv[1] == "start" for argv in fake.argvs())
+        assert fake.containers == {}, "the helper container is removed"
 
 
 class TestRemove:
@@ -130,7 +155,12 @@ class TestRemove:
             return CommandResult(0, "", "")
 
         launcher = DockerLauncher(
-            load_profiles().agent, network_name="n", toolkit_volume="t", scope="prod", runner=sticky
+            load_profiles().agent,
+            network_name="n",
+            toolkit_volume="t",
+            toolkit_assets=synthetic_assets(),
+            scope="prod",
+            runner=sticky,
         )
         with pytest.raises(DevAgentLaunchError, match="still has"):
             await launcher.remove(job)
@@ -151,6 +181,7 @@ class TestLabels:
             load_profiles().agent,
             network_name="n",
             toolkit_volume="t",
+            toolkit_assets=synthetic_assets(),
             scope="prod",
             runner=listing,
         )

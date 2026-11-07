@@ -148,8 +148,21 @@ The gateway runs the supervisor (`personal_agent.dev_agent.supervisor`) when
    `healthy` (the health check no longer imports the cost gate).
 
 Before the supervisor can run a job, the toolkit volume (`AGENT_DEV_AGENT_TOOLKIT_VOLUME`) must exist
-with the pinned toolkit. The launcher refuses to start a job without it. Filling that volume is
-FRE-1751.
+with the pinned toolkit. Run `make dev-agent-toolkit` (FRE-1751) after `make dev-agent-build`:
+
+1. The command reads each asset of `config/artifact_lib_manifest.json` from R2 (key `lib/<path>`).
+2. It checks every file against its SHA-384 pin in `config/artifact_lib_substitution_map.json`. One bad
+   file stops the command before it creates anything, and an older volume stays as it was.
+3. It replaces the volume, writes `toolkit-manifest.json` with the toolkit digest, reads the volume
+   back, and checks it again. A failure removes the new volume.
+4. It prints the digest. The T5 publish check records that digest (ADR-0159 D7.5, FRE-1686).
+
+Run it again after any change of a pin, or when the launcher reports a wrong toolkit volume. The
+command needs `AGENT_R2_*` in the environment and refuses a volume that a container uses.
+
+The launcher copies the files out of the volume before every job and checks them against the pins in
+the committed config. A missing, changed or extra file stops the job (`DevAgentToolkitError`). The
+check reads bytes, not a label, so a half-copied volume never reaches an agent.
 
 ### Notes for FRE-1685 and FRE-1686
 

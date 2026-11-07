@@ -1603,6 +1603,11 @@ class LiteLLMClient:
 
         start_time = time.monotonic()
         started_at = datetime.now(timezone.utc)
+        # FRE-1683 (ADR-0159 D5.10): every cancellation point between the reserve and the final
+        # commit settles the reservation now, never at the reaper's TTL. `dispatched` is set just
+        # before the request can leave the process; `settled` once a branch has settled.
+        dispatched = False
+        settled = False
 
         # ADR-0129 D3 / FRE-1067: the model-call span wraps ONLY the provider
         # call + response parsing (through usage extraction) — deliberately
@@ -1643,6 +1648,7 @@ class LiteLLMClient:
                     # litellm's dynamic attributes (usage, tool_calls), which its
                     # stubs do not declare.
                     response: Any
+                    dispatched = True
                     try:
                         if responses_request is not None:
                             response = await aresponses_as_chat(responses_request)
@@ -1657,6 +1663,7 @@ class LiteLLMClient:
                         # the provider, which can still bill it, so commit the estimate and do not
                         # refund. This can overcount a call that the provider did not bill. Then
                         # propagate the cancellation — never swallow it.
+                        settled = True
                         try:
                             await gate.commit(
                                 reservation_id,
@@ -1686,6 +1693,7 @@ class LiteLLMClient:
                         raise
                     except Exception as e:
                         # Refund the reservation so the counter doesn't leak headroom.
+                        settled = True
                         try:
                             await gate.refund(reservation_id, trace_id=trace_id)
                         except Exception as refund_exc:  # noqa: BLE001
@@ -1793,6 +1801,33 @@ class LiteLLMClient:
                     error=str(refund_exc),
                 )
             raise
+        except asyncio.CancelledError:
+            # FRE-1683: a cancel in the slot wait (no request sent) refunds. A cancel after the
+            # request left (in the slot's exit) commits the estimate, as FRE-1733 does. Shielded,
+            # so a second cancel cannot abandon the settlement.
+            if not settled:
+                try:
+                    if dispatched:
+                        await asyncio.shield(
+                            gate.commit(
+                                reservation_id,
+                                reservation_amount,
+                                trace_id=trace_id,
+                                session_id=trace_ctx.session_id,
+                            )
+                        )
+                    else:
+                        await asyncio.shield(gate.refund(reservation_id, trace_id=trace_id))
+                except Exception as settle_exc:  # noqa: BLE001
+                    log.error(
+                        "litellm_settle_after_cancel_failed",
+                        trace_id=trace_id,
+                        session_id=trace_ctx.session_id,
+                        reservation_id=str(reservation_id),
+                        dispatched=dispatched,
+                        error=str(settle_exc),
+                    )
+            raise
 
         # Cost tracking — reconcile via litellm.completion_cost(), guarded so an
         # unmapped dated response id can't silently commit $0 (ADR-0101 §8b AC-11).
@@ -1810,11 +1845,15 @@ class LiteLLMClient:
         from decimal import Decimal as _Decimal  # noqa: PLC0415 — local alias
 
         try:
-            await gate.commit(
-                reservation_id,
-                _Decimal(str(cost)),
-                trace_id=trace_id,
-                session_id=trace_ctx.session_id,
+            # FRE-1683: shielded, so a cancel here (a caller's deadline) cannot abandon the
+            # transaction and leave the reservation active until the reaper expires it.
+            await asyncio.shield(
+                gate.commit(
+                    reservation_id,
+                    _Decimal(str(cost)),
+                    trace_id=trace_id,
+                    session_id=trace_ctx.session_id,
+                )
             )
         except Exception as commit_exc:  # noqa: BLE001
             # If the commit fails (DB hiccup), we'd rather log loudly than

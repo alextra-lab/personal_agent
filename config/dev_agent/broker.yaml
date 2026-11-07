@@ -1,0 +1,39 @@
+# The broker of the development agent (ADR-0159 D4.3, D5; FRE-1683).
+#
+# personal_agent.dev_broker.config loads this file. A change here changes a spend cap or a security
+# boundary: review it as one.
+
+# D5.12: the caps are the owner's numbers in EUR (FRE-1679, 2026-10-24). The ledger currency is
+# USD, so the broker applies this factor. It is the same factor as the Scaleway prices in
+# config/models.yaml (EUR x 1.18), so a cap and a price use one rate.
+eur_to_usd: "1.18"
+job_cap_eur: "2.00"
+month_cap_eur: "30.00"
+
+# D5.10: a cost-gate reservation expires after 180 s, so the broker ends every model call at 150 s.
+call_timeout_seconds: 150
+# D5.11: no call starts this many seconds before a cost-gate window boundary (00:00 UTC).
+boundary_guard_seconds: 150
+# D5.10: the most output tokens one call can request. The worst case of a call is priced at this.
+max_output_tokens: 8192
+# The prompt-token bound of a call is the UTF-8 byte length of its messages and tools as JSON, plus
+# this. The models use byte-level BPE tokenizers (a token covers at least one byte), so the
+# bound is a worst case, not an estimate.
+prompt_overhead_tokens: 1024
+# The largest request body that the model route reads.
+max_request_bytes: 8388608
+
+# D5.13: the models that a job token can name. Catalog keys in config/models.yaml.
+# qwen3.8-27b on Scaleway is not here yet: no record holds its Scaleway price (FRE-1683 handoff).
+models:
+  - deepseek-v4.1-flash-scaleway
+  - glm-5.3-scaleway
+default_model: deepseek-v4.1-flash-scaleway
+
+# D4.3: the model route listens on the broker's dev-agent address, the control API on its
+# cloud-sim address. control_subnet is the fixed subnet of cloud-sim (docker-compose.cloud.yml).
+model_port: 8700
+control_port: 8701
+control_subnet: 172.25.0.0/16
+# The port of `opencode serve` in the agent container. The relay forwards to it only.
+opencode_port: 4096

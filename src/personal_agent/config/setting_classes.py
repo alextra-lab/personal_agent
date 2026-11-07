@@ -351,6 +351,7 @@ READ_ONLY_SETTINGS: Mapping[str, str] = {
     "anthropic_api_key": _SECRET,
     "artifact_resolve_internal_token": _SECRET,
     "database_admin_url": _SECRET,
+    "dev_broker_control_secret": _SECRET,
     "linear_api_key": _SECRET,
     "managed_database_url": _SECRET,
     "managed_embedding_token": _SECRET,

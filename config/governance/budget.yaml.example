@@ -71,6 +71,14 @@ roles:
     default_output_tokens: 1024
     safety_factor: 1.2
     on_denial: raise        # user-facing build path (ADR-0118 T1) — mirrors main_inference
+  # ADR-0159 D5.10 (FRE-1683): the development agent's model calls, reserved by the broker.
+  # default_output_tokens is the broker's output clamp (config/dev_agent/broker.yaml) and the
+  # safety factor is 1.0, so the reservation is the call's worst case. A denial returns an error
+  # to the agent; the broker releases its own reservation.
+  dev_agent:
+    default_output_tokens: 8192
+    safety_factor: 1.0
+    on_denial: raise
 
 # Roles deliberately run WITHOUT a per-role dollar cap (FRE-989 finding two).
 #
@@ -85,6 +93,10 @@ uncapped_roles:
   - insights
   - promotion
   - freshness
+  # The broker caps dev_agent itself: EUR 2 per job and EUR 30 per UTC month, in atomic counters
+  # with no time limit (ADR-0159 D5.5-D5.7). A daily cap here would add a second, shorter window
+  # that can deny a call in the middle of a job.
+  - dev_agent
 
 # PLACEHOLDER VALUES — set these to your own ceilings in `budget.yaml`.
 # The (time_window, role) pairs mirror the real deployment's shape; only the

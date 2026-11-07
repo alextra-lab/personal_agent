@@ -50,6 +50,7 @@ class ModelRole(str, Enum):
     ENTAILMENT = "entailment"  # ADR-0138 D3(d) entailment judge (FRE-1286)
     SKILL_ROUTING = "skill_routing"  # no caller since FRE-1577; cost rows and budget keep it
     STUDY = "study"  # matrix-independent — scripts/study/categorizer.py
+    DEV_AGENT = "dev_agent"  # matrix-independent — the dev-agent broker (ADR-0159 D5, FRE-1683)
 
     @classmethod
     def from_str(cls, value: str) -> "ModelRole | None":

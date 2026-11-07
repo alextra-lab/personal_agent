@@ -325,6 +325,7 @@ _BY_GROUP: Mapping[str, tuple[str, ...]] = {
         "abuse_ch_auth_key",
         "anthropic_api_key",
         "artifact_resolve_internal_token",
+        "dev_broker_control_secret",
         "linear_api_key",
         "managed_embedding_token",
         "neo4j_password",

@@ -110,6 +110,9 @@ BUDGET_ROLE_BY_FACTORY_NAME: dict[str, str] = {
     # ($5 daily / $7 weekly, FRE-839) but was absent here, so the role-name door
     # resolved it to main_inference and its isolation did not apply.
     "study": "study",
+    # ADR-0159 D5.10 (FRE-1683): the development agent's model calls, made by the broker. The
+    # broker's own job and month counters cap this lane; the cost gate adds the global caps.
+    "dev_agent": "dev_agent",
 }
 
 

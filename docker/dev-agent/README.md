@@ -58,3 +58,45 @@ control. A probe that never reaches anything proves nothing, so the control must
 - **Residual risk.** The proxy decides by the host name of the `CONNECT` target. It cannot read the encrypted tunnel.
   The agent can send data to `registry.npmjs.org`. It cannot send it anywhere else.
 - **Observed on 2026-11-06.** On `dev-agent`, external names do not resolve (no DNS path out). A connection to the network's `.1` address on port 22 times out.
+
+## The broker (FRE-1683)
+
+`seshat-dev-broker` (in `docker-compose.cloud.yml`) runs `python -m personal_agent.dev_broker` from the gateway
+image. It has two listeners, each on the broker's own address on one network:
+
+| Network | Port | Listener | Authenticated by |
+|---|---|---|---|
+| `dev-agent` | 8700 | `POST /v1/chat/completions`, OpenAI-compatible, `stream` supported | the job token (`Authorization: Bearer`) |
+| `cloud-sim` | 8701 | `/{method} /relay/{job_id}/{path}` to the job's OpenCode server, and `/healthz` | `X-Dev-Broker-Secret` |
+
+Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration `0038_dev_broker.sql`.
+
+### First deploy (master)
+
+1. Add the role `dev_agent` to the real `config/governance/budget.yaml`, as in `budget.yaml.example` (the role
+   block and the `uncapped_roles` entry). Without it, the gateway refuses to start after its rebuild
+   (`validate_role_totality`).
+2. Apply `docker/postgres/migrations/0038_dev_broker.sql` with `AGENT_DATABASE_ADMIN_URL`.
+3. Generate two values (`openssl rand -hex 32`). Put them in `/opt/seshat/.env` as `DEV_BROKER_DB_PASSWORD` and
+   `AGENT_DEV_BROKER_CONTROL_SECRET`, and in `pass`. Then run
+   `ALTER ROLE seshat_dev_broker PASSWORD '<DEV_BROKER_DB_PASSWORD>'`.
+4. Rebuild `seshat-gateway` (new `ModelRole`, the settings field, the `respond()` settle fix).
+5. `docker compose -f docker-compose.cloud.yml up -d --build seshat-dev-broker`.
+6. `make dev-broker-verify`. Every section of the report must be empty and `result` must be `PASS`.
+
+### Notes for FRE-1684
+
+- **Tokens.** `personal_agent.dev_broker.tokens.issue_job_token` (before the agent container starts) and
+  `revoke_job_token` (first step of every end state) run on the gateway's pool. The broker's role cannot insert a
+  token. The supervisor reads `dev_job_tokens.status` and `stop_reason` on each lease renewal.
+- **Container name.** Name the agent container `agent_container_name(job_id)`
+  (`personal_agent.dev_agent.container_spec`). The relay resolves that name and nothing else.
+- **OpenCode provider.** Point OpenCode's OpenAI-compatible provider at `http://dev-broker:8700/v1`, with
+  `SESHAT_JOB_TOKEN` as the API key and the job's catalog key (for example `deepseek-v4.1-flash-scaleway`) as the
+  model id. Any other model id is refused.
+- **Relay.** Send the OpenCode server password as `Authorization` through the relay. The relay forwards it and
+  strips the control secret.
+- **Spend.** `dev_job_spend` holds a job's committed and reserved spend. `dev_job_calls` is the per-call ledger.
+  A call that a crashed broker left `reserved` keeps counting as spent.
+- **Stored cap overrides.** The broker's role has no grant on `settings_overrides` (ADR-0159 D4.4). Its cost gate
+  enforces the file caps, not a cap that the owner stores in the PWA. Its own job and month caps still apply.

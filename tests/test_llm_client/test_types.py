@@ -49,9 +49,9 @@ class TestModelRole:
         role_values = {role.value for role in ModelRole}
         assert _MATRIX_INDEPENDENT_ROLES <= role_values
 
-    def test_model_role_sixteen_members(self) -> None:
-        """Fourteen from FRE-1037, plus FRE-1281's classifier and FRE-1286's judge."""
-        assert len(list(ModelRole)) == 16
+    def test_model_role_seventeen_members(self) -> None:
+        """Fourteen from FRE-1037, FRE-1281's classifier, FRE-1286's judge, FRE-1683's broker."""
+        assert len(list(ModelRole)) == 17
         assert ModelRole.SPAN_EXTRACTION == "span_extraction"
         assert ModelRole.ENTAILMENT == "entailment"
         assert ModelRole.COMPRESSOR == "compressor"

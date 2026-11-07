@@ -13,7 +13,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.seshat_effort import (
@@ -40,6 +40,9 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 #: Phase 1) may take before the previously Neo4j-independent list/get endpoints
 #: degrade to no label/digest rather than hang on an unreachable graph.
 _DIGEST_HYDRATION_TIMEOUT_SECONDS = 3.0
+
+#: Longest search text that ``GET /sessions?q=`` accepts (FRE-1746). Longer text is a 422.
+_SEARCH_QUERY_MAX_LENGTH = 200
 
 #: Sessionless config read (ADR-0121 T5, FRE-920) — no ``/sessions`` prefix,
 #: mounted directly under ``/api/v1`` alongside ``router`` so a brand-new
@@ -109,14 +112,18 @@ async def _require_request_user_id(request: Request, db: AsyncSession) -> UUID:
 async def list_sessions(
     request: Request,
     limit: int = 20,
+    q: str | None = Query(default=None, max_length=_SEARCH_QUERY_MAX_LENGTH),  # noqa: B008
     token: TokenInfo = Depends(require_scope("sessions:read")),  # noqa: B008
     db: AsyncSession = Depends(_get_db),  # noqa: B008
 ) -> list[dict[str, Any]]:
-    """List recent sessions ordered by last activity.
+    """List recent sessions ordered by last activity, or search the caller's sessions.
 
     Args:
         request: FastAPI request (injected).
         limit: Maximum number of sessions to return (default 20).
+        q: Search text (FRE-1746). When it has non-blank text, the list holds the caller's
+            sessions whose user or assistant messages contain it, of any age, newest first.
+            When it is missing or blank, the list holds the recent sessions.
         token: Validated bearer token with ``sessions:read`` scope.
         db: Async SQLAlchemy session (injected).
 
@@ -128,16 +135,22 @@ async def list_sessions(
 
     user_id = await _require_request_user_id(request, db)
     ctx = SystemTraceContext.new("session_api")
+    term = (q or "").strip()
+    # The search text is the owner's words, so the log holds its length and never the text.
     log.info(
         "gateway_sessions_list",
         limit=limit,
+        search_length=len(term),
         token_name=token.name,
         user_id=str(user_id),
         trace_id=ctx.trace_id,
     )
 
     repo = SessionRepository(db)
-    sessions = await repo.list_recent(limit, user_id=user_id)
+    if term:
+        sessions = await repo.search(term, limit, user_id=user_id)
+    else:
+        sessions = await repo.list_recent(limit, user_id=user_id)
     digest_views = await _fetch_session_digest_views(
         request, [str(s.session_id) for s in sessions], ctx=ctx
     )

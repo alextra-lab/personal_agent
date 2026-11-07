@@ -13,10 +13,12 @@ The broker refuses to start unless:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import signal
 import socket
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network
 
@@ -133,6 +135,20 @@ def check_egress_guard(guard: DomainGuard, provider_url: str) -> None:
         raise BrokerStartupError(f"the egress guard allows more than the provider: {allowed}")
 
 
+class _Server(uvicorn.Server):
+    """A uvicorn server that leaves signals to the broker.
+
+    Two servers that each capture SIGTERM pass it from one to the other, and the last re-raise
+    falls to the default handler, which kills the process before its cleanup runs. The broker
+    installs one handler that stops both servers instead.
+    """
+
+    @contextlib.contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        """Install no signal handler."""
+        yield
+
+
 #: Seconds past the call limit after which a ``reserved`` call is stale, and the sweep interval.
 STALE_MARGIN_SECONDS = 60.0
 SWEEP_INTERVAL_SECONDS = 60.0
@@ -219,7 +235,7 @@ async def run(config: BrokerConfig) -> None:
     route = ModelRoute(
         config=config,
         ledger=ledger,
-        dispatcher=LiteLLMDispatcher(),
+        dispatcher=LiteLLMDispatcher(config.models),
         catalog=model_config.models,
         clock=clock,
     )
@@ -232,7 +248,7 @@ async def run(config: BrokerConfig) -> None:
         clock=clock,
     )
     servers = [
-        uvicorn.Server(
+        _Server(
             uvicorn.Config(
                 build_model_app(route),
                 host=str(addresses.model),
@@ -240,9 +256,11 @@ async def run(config: BrokerConfig) -> None:
                 lifespan="off",
                 access_log=False,
                 log_config=None,
+                # In-flight model calls finish and settle before the process exits.
+                timeout_graceful_shutdown=int(config.call_timeout_seconds) + 10,
             )
         ),
-        uvicorn.Server(
+        _Server(
             uvicorn.Config(
                 control_app,
                 host=str(addresses.control),
@@ -250,9 +268,19 @@ async def run(config: BrokerConfig) -> None:
                 lifespan="off",
                 access_log=False,
                 log_config=None,
+                # Relayed event streams never end on their own.
+                timeout_graceful_shutdown=5,
             )
         ),
     ]
+
+    def stop() -> None:
+        for server in servers:
+            server.should_exit = True
+
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(signum, stop)
     log.info(
         "dev_broker_started",
         model_listener=f"{addresses.model}:{config.model_port}",

@@ -30,7 +30,6 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from personal_agent.dev_broker.config import load_broker_config
 from personal_agent.dev_broker.relay import SECRET_HEADER
@@ -118,7 +117,17 @@ def docker(*args: str, env: Mapping[str, str] | None = None) -> subprocess.Compl
     )
 
 
-def inspect_violations(inspect: Mapping[str, Any]) -> list[str]:
+def _obj(value: object) -> Mapping[str, object]:
+    """Return ``value`` as a JSON object, or an empty one. A missing shape fails the checks."""
+    return value if isinstance(value, Mapping) else {}
+
+
+def _items(value: object) -> list[object]:
+    """Return ``value`` as a JSON array, or an empty one."""
+    return list(value) if isinstance(value, list) else []
+
+
+def inspect_violations(inspect: Mapping[str, object]) -> list[str]:
     """Return every way the broker's ``docker inspect`` differs from its declared boundary.
 
     Args:
@@ -127,28 +136,29 @@ def inspect_violations(inspect: Mapping[str, Any]) -> list[str]:
     Returns:
         Human-readable violations; empty when the container matches.
     """
-    host = inspect.get("HostConfig", {})
-    config = inspect.get("Config", {})
+    host = _obj(inspect.get("HostConfig"))
+    config = _obj(inspect.get("Config"))
     problems: list[str] = []
     if host.get("ReadonlyRootfs") is not True:
         problems.append("root filesystem is writable")
-    if "ALL" not in (host.get("CapDrop") or []):
+    if "ALL" not in _items(host.get("CapDrop")):
         problems.append("capabilities are not all dropped")
-    if not any("no-new-privileges" in opt for opt in host.get("SecurityOpt") or []):
+    if not any("no-new-privileges" in str(opt) for opt in _items(host.get("SecurityOpt"))):
         problems.append("no-new-privileges is not set")
     if host.get("Privileged"):
         problems.append("the container is privileged")
     user = str(config.get("User", ""))
     if user in ("", "0", "root") or user.startswith(("0:", "root:")):
         problems.append(f"runs as root (user {user!r})")
-    if inspect.get("Mounts"):
-        problems.append(f"has mounts: {[m.get('Destination') for m in inspect['Mounts']]}")
+    mounts = _items(inspect.get("Mounts"))
+    if mounts:
+        problems.append(f"has mounts: {[_obj(m).get('Destination') for m in mounts]}")
     if host.get("PortBindings"):
         problems.append("publishes ports")
-    networks = set((inspect.get("NetworkSettings", {}).get("Networks") or {}).keys())
+    networks = set(_obj(_obj(inspect.get("NetworkSettings")).get("Networks")))
     if len(networks) != 2:
         problems.append(f"is on {len(networks)} networks, not 2: {sorted(networks)}")
-    names = {entry.split("=", 1)[0] for entry in config.get("Env") or []}
+    names = {str(entry).split("=", 1)[0] for entry in _items(config.get("Env"))}
     extra = sorted(names - EXPECTED_ENV - _IMAGE_ENV)
     if extra:
         problems.append(f"environment holds undeclared variables: {extra}")
@@ -180,24 +190,28 @@ def scan_violations(
     return problems
 
 
-def _broker_inspect() -> Mapping[str, Any]:
+def _broker_inspect() -> Mapping[str, object]:
     ids = docker(
         "ps", "-q", "--filter", f"label=com.docker.compose.service={SERVICE}"
     ).stdout.split()
     if len(ids) != 1:
         raise SystemExit(f"expected one running {SERVICE} container, found {len(ids)}")
-    data: list[Mapping[str, Any]] = json.loads(docker("inspect", ids[0]).stdout)
-    return data[0]
+    data = _items(json.loads(docker("inspect", ids[0]).stdout))
+    if len(data) != 1:
+        raise SystemExit(f"docker inspect returned {len(data)} objects")
+    return _obj(data[0])
 
 
-def _addresses(inspect: Mapping[str, Any]) -> dict[str, str]:
+def _addresses(inspect: Mapping[str, object]) -> dict[str, str]:
     """Map 'cloud-sim' and 'dev-agent' to the real network name and the broker's address."""
     found: dict[str, str] = {}
-    for name, net in (inspect["NetworkSettings"]["Networks"] or {}).items():
+    for name, net in _obj(_obj(inspect.get("NetworkSettings")).get("Networks")).items():
         for key in ("cloud-sim", "dev-agent"):
             if name.endswith(f"_{key}") or name == key:
                 found[key] = name
-                found[f"{key}-ip"] = net["IPAddress"]
+                found[f"{key}-ip"] = str(_obj(net).get("IPAddress", ""))
+    if set(found) != {"cloud-sim", "cloud-sim-ip", "dev-agent", "dev-agent-ip"}:
+        raise SystemExit(f"the broker is not on both networks: {sorted(found)}")
     return found
 
 
@@ -248,9 +262,9 @@ def main(argv: Sequence[str]) -> int:
 
     config = load_broker_config()
     inspect = _broker_inspect()
-    image = str(inspect["Config"]["Image"])
+    image = str(_obj(inspect.get("Config")).get("Image", ""))
     nets = _addresses(inspect)
-    report: dict[str, Any] = {"inspect": inspect_violations(inspect)}
+    report: dict[str, object] = {"inspect": inspect_violations(inspect)}
 
     dev_scan = json.loads(
         _in_scan_container(

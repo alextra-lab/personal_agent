@@ -17,10 +17,13 @@ from datetime import datetime
 from decimal import ROUND_UP, Decimal
 from typing import Literal, Protocol
 
+import asyncpg  # type: ignore[import-untyped]
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from personal_agent.cost_gate.policy import BudgetConfigError
+from personal_agent.cost_gate.role_map import UnknownBudgetRoleError
 from personal_agent.cost_gate.types import BudgetDenied
 from personal_agent.dev_broker.clock import Clock, seconds_until_safe
 from personal_agent.dev_broker.config import BrokerConfig
@@ -32,14 +35,17 @@ from personal_agent.dev_broker.ledger import (
     Failed,
     GateDenied,
     Outcome,
+    ProviderError,
     Refusal,
     Settled,
     TimedOut,
     TokenGrant,
 )
 from personal_agent.dev_broker.tokens import hash_token
+from personal_agent.llm_client.concurrency import InferenceSlotTimeout
 from personal_agent.llm_client.models import ModelDefinition
 from personal_agent.llm_client.types import LLMClientError, LLMResponse
+from personal_agent.security import EgressBlockedError
 from personal_agent.telemetry.trace import TraceContext
 
 log = structlog.get_logger(__name__)
@@ -53,6 +59,8 @@ _REFUSAL_STATUS: dict[str, int] = {
     "expired_token": 403,
     "wrong_model": 403,
     "cap_reached": 403,
+    # Calls in flight hold the headroom; retry once they settle.
+    "cap_busy": 429,
 }
 
 
@@ -110,12 +118,26 @@ def _positive_int(value: object) -> int | None:
     return None
 
 
+def _text_only(content: object) -> bool:
+    """Return whether a message's content is text: absent, a string, or a list of text parts."""
+    if content is None or isinstance(content, str):
+        return True
+    if not isinstance(content, list):
+        return False
+    return all(
+        isinstance(part, Mapping)
+        and part.get("type") == "text"
+        and isinstance(part.get("text"), str)
+        for part in content
+    )
+
+
 def _temperature(value: object) -> float | None | Literal[False]:
     """Return a request's temperature, ``None`` when absent, or ``False`` when it is unusable."""
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
+        return False
     try:
         number = float(value)
     except OverflowError:
@@ -197,6 +219,10 @@ class ModelRoute:
             or not all(isinstance(m, Mapping) for m in messages)
         ):
             return _error(400, "invalid_request", "messages must be a non-empty list of objects")
+        if not all(_text_only(m.get("content")) for m in messages):
+            # The byte bound holds for text only. An image part costs far more tokens than its
+            # bytes, and the job's models have no vision (config/models.yaml).
+            return _error(400, "invalid_request", "only text content is accepted")
         if tools is not None and (
             not isinstance(tools, list) or not all(isinstance(t, Mapping) for t in tools)
         ):
@@ -298,9 +324,8 @@ class ModelRoute:
         except BudgetDenied:
             outcome = GateDenied()
             result = _error(503, "budget_denied", "the global cost cap refused the call")
-        except LLMClientError as exc:
-            # The provider refused or failed the request, which is not billed.
-            outcome = Failed()
+        except Exception as exc:  # noqa: BLE001 — classified below; never left unsettled
+            outcome = failure_outcome(exc)
             log.warning(
                 "dev_broker_dispatch_failed",
                 job_id=str(admitted.job_id),
@@ -308,21 +333,9 @@ class ModelRoute:
                 trace_id=admitted.trace_id.hex,
                 error_type=type(exc).__name__,
                 error=str(exc),
+                outcome=type(outcome).__name__,
             )
-            result = _error(502, "provider_error", "the model provider returned an error")
-        except Exception as exc:  # noqa: BLE001
-            # Any other error may come after the provider answered and billed: keep the worst
-            # case and stop the job, as for a cost that cannot be computed (D5.8).
-            outcome = CostUnknown()
-            log.error(
-                "dev_broker_dispatch_error_after_send",
-                job_id=str(admitted.job_id),
-                call_id=str(admitted.call_id),
-                trace_id=admitted.trace_id.hex,
-                error_type=type(exc).__name__,
-                error=str(exc),
-            )
-            result = _error(502, "broker_error", "the broker could not complete the call")
+            result = _error(502, "provider_error", "the model call failed")
         else:
             outcome = outcome_of(response)
             result = RouteResult(
@@ -340,6 +353,46 @@ class ModelRoute:
     def _refused(self, refusal: Refusal) -> RouteResult:
         status = _REFUSAL_STATUS[refusal.reason]
         return _error(status, refusal.reason, f"the broker refused the call: {refusal.reason}")
+
+
+#: Errors that ``LiteLLMClient.respond`` raises only before the request leaves the process.
+_NOT_SENT: tuple[type[BaseException], ...] = (
+    BudgetConfigError,
+    UnknownBudgetRoleError,
+    EgressBlockedError,
+    InferenceSlotTimeout,
+    asyncpg.PostgresError,
+    OSError,
+)
+
+
+def failure_outcome(exc: Exception) -> Failed | ProviderError | CostUnknown:
+    """Return the settle outcome of a call that raised, on the side that keeps the cap (D5.8).
+
+    - Not sent (config, egress guard, slot wait, cost-gate database): nothing was billed.
+    - ``LLMClientError`` with no cause: ``respond`` refused before dispatch (no provider, no key).
+    - ``LLMClientError`` caused by a 4xx: the provider rejected the request, so it did not bill.
+    - Any other ``LLMClientError`` (5xx, timeout, a connection lost while reading the answer):
+      the provider may have generated and billed, so the worst case stays spent.
+    - Anything else came after the answer (parsing): worst case, and the job stops.
+
+    Args:
+        exc: What the dispatch raised.
+
+    Returns:
+        The outcome.
+    """
+    if isinstance(exc, _NOT_SENT):
+        return Failed()
+    if isinstance(exc, LLMClientError):
+        cause = exc.__cause__
+        if cause is None:
+            return Failed()
+        status = getattr(cause, "status_code", None)
+        if isinstance(status, int) and 400 <= status < 500:
+            return Failed()
+        return ProviderError()
+    return CostUnknown()
 
 
 def outcome_of(response: LLMResponse) -> Settled | CostUnknown:

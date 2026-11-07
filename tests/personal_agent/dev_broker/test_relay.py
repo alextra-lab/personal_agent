@@ -191,3 +191,77 @@ async def test_the_production_client_reaches_only_its_target() -> None:
             await client.get("http://github.com/")
     finally:
         await client.aclose()
+
+
+async def test_an_open_stream_ends_when_the_job_is_revoked() -> None:
+    """D8.8.1: revocation cuts every path, including an event stream that is already open."""
+    import asyncio
+
+    job_id = uuid4()
+    ledger = _Ledger({job_id})
+
+    class _Endless(httpx.AsyncByteStream):
+        async def __aiter__(self):  # type: ignore[no-untyped-def]
+            while True:
+                yield b"data: {}\n\n"
+                await asyncio.sleep(0.01)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_Endless(), headers={"content-type": "text/event-stream"})
+
+    async def resolve(_host: str) -> list[IPv4Address]:
+        return [_AGENT_IP]
+
+    app = build_control_app(
+        secret=_SECRET,
+        ledger=ledger,
+        resolver=resolve,
+        subnet=_SUBNET,
+        opencode_port=4096,
+        clock=FakeClock(_NOW),
+        upstream_factory=lambda target: create_guarded_http_client(
+            guard=DomainGuard(mode=GuardMode.ALLOWLIST, allowlist=frozenset({str(target)})),
+            transport=httpx.MockTransport(handler),
+        ),
+        revocation_check_seconds=0.05,
+    )
+    # httpx's ASGI transport buffers a whole body, so drive the app over raw ASGI instead.
+    chunks = 0
+    ended = asyncio.Event()
+
+    requested = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal requested
+        if not requested:  # the (empty) request body first
+            requested = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await ended.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        nonlocal chunks
+        if message["type"] == "http.response.body":
+            if message.get("body"):
+                chunks += 1
+                if chunks == 3:
+                    ledger.open_jobs.clear()  # the gateway revokes the token
+            if not message.get("more_body", False):
+                ended.set()
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": f"/relay/{job_id}/event",
+        "raw_path": f"/relay/{job_id}/event".encode(),
+        "query_string": b"",
+        "headers": [(SECRET_HEADER.lower().encode(), _SECRET.encode())],
+        "server": ("broker", 8701),
+        "client": ("172.25.0.2", 5000),
+    }
+    await asyncio.wait_for(app(scope, receive, send), timeout=3)
+    assert ended.is_set()
+    assert chunks >= 3

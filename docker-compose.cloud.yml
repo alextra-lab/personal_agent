@@ -661,6 +661,8 @@ services:
       AGENT_URL_GUARD_ALLOWLIST: '["api.scaleway.ai"]'
       AGENT_OTEL_EXPORTER_ENDPOINT: otel-collector:4317
     command: ["/app/.venv/bin/python", "-m", "personal_agent.dev_broker"]
+    # A model call can run 150 s. On stop, the broker lets in-flight calls finish and settle.
+    stop_grace_period: 3m
     healthcheck:
       test: ["CMD", "/app/.venv/bin/python", "-m", "personal_agent.dev_broker", "--health"]
       interval: 30s

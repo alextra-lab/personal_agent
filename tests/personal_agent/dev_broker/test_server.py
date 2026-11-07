@@ -169,3 +169,18 @@ class TestReconciler:
                 interval_seconds=60,
             )
         assert calls == [210, 210, 210]
+
+
+class TestSignals:
+    def test_the_servers_install_no_signal_handler(self) -> None:
+        """One broker handler stops both servers; uvicorn's own capture would kill the process."""
+        import signal
+
+        import uvicorn
+
+        from personal_agent.dev_broker.server import _Server
+
+        before = signal.getsignal(signal.SIGTERM)
+        server = _Server(uvicorn.Config(app=lambda *_: None, host="127.0.0.1", port=1))
+        with server.capture_signals():
+            assert signal.getsignal(signal.SIGTERM) is before

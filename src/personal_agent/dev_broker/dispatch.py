@@ -55,11 +55,31 @@ class Dispatcher(Protocol):
         ...
 
 
+#: The longest wait for an inference slot. A wait that runs out raises ``InferenceSlotTimeout``
+#: before anything is sent, so the call is released at zero and the agent can retry.
+SLOT_TIMEOUT_SECONDS = 10.0
+
+
 class LiteLLMDispatcher:
     """Dispatch through ``LiteLLMClient`` with the ``dev_agent`` budget role."""
 
+    def __init__(self, model_keys: Sequence[str]) -> None:
+        """Build one client per model, at startup, so a factory error stops the broker early.
+
+        Args:
+            model_keys: The catalog keys that the broker serves.
+
+        Raises:
+            ValueError: If a key is unknown to the catalog.
+        """
+        from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
+
+        self._clients = {
+            key: get_llm_client_for_key(key, budget_role="dev_agent") for key in model_keys
+        }
+
     async def dispatch(self, request: ModelRequest, trace_ctx: TraceContext) -> LLMResponse:
-        """Send ``request`` through the model catalog's client for its key.
+        """Send ``request`` through its model's client.
 
         Args:
             request: The forwarded request.
@@ -68,10 +88,7 @@ class LiteLLMDispatcher:
         Returns:
             The normalized response.
         """
-        from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
-
-        client = get_llm_client_for_key(request.model_key, budget_role="dev_agent")
-        response: LLMResponse = await client.respond(
+        response: LLMResponse = await self._clients[request.model_key].respond(
             role=ModelRole.DEV_AGENT,
             messages=[dict(message) for message in request.messages],
             trace_ctx=trace_ctx,
@@ -83,5 +100,6 @@ class LiteLLMDispatcher:
             ),
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            priority_timeout=SLOT_TIMEOUT_SECONDS,
         )
         return response

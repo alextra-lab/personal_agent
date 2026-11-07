@@ -590,7 +590,8 @@ CREATE TABLE IF NOT EXISTS dev_job_calls (
     reserved_usd          NUMERIC(12, 6) NOT NULL,
     settled_usd           NUMERIC(12, 6),
     status                TEXT NOT NULL CHECK (status IN (
-        'reserved', 'settled', 'cost_unknown', 'timed_out', 'cancelled', 'failed', 'gate_denied'
+        'reserved', 'settled', 'cost_unknown', 'timed_out', 'cancelled', 'provider_error',
+        'failed', 'gate_denied'
     )),
     created_at            TIMESTAMPTZ NOT NULL,
     settled_at            TIMESTAMPTZ

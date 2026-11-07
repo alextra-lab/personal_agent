@@ -76,7 +76,8 @@ Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration
 1. Add the role `dev_agent` to the real `config/governance/budget.yaml`, as in `budget.yaml.example` (the role
    block and the `uncapped_roles` entry). Without it, the gateway refuses to start after its rebuild
    (`validate_role_totality`).
-2. Apply `docker/postgres/migrations/0038_dev_broker.sql` with `AGENT_DATABASE_ADMIN_URL`.
+2. Apply `docker/postgres/migrations/0038_dev_broker.sql` with `AGENT_DATABASE_ADMIN_URL`. It creates the role
+   `seshat_dev_broker` with no password, so nothing can log in as it before step 3.
 3. Generate two values (`openssl rand -hex 32`). Put them in `/opt/seshat/.env` as `DEV_BROKER_DB_PASSWORD` and
    `AGENT_DEV_BROKER_CONTROL_SECRET`, and in `pass`. Then run
    `ALTER ROLE seshat_dev_broker PASSWORD '<DEV_BROKER_DB_PASSWORD>'`. The compose file defaults both to empty,
@@ -100,7 +101,16 @@ Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration
 - **Spend.** `dev_job_spend` holds a job's committed and reserved spend. `dev_job_calls` is the per-call ledger.
   A call that stays `reserved` past the call limit plus 60 s (a failed settle, or a broker that died mid-call)
   is settled as `cancelled` by the broker's sweep, at start and every 60 s. Its worst case stays spent.
-- **Errors.** A provider error (`LLMClientError`) settles at zero. Any other error after the send keeps the
-  worst case and stops the token with `cost_unknown`, because the provider may have billed the call.
+- **Errors.** A failure before the send (config, egress guard, a 10 s slot wait, the cost-gate database) or a
+  4xx from the provider settles at zero. A 5xx, a timeout or a connection lost after the send keeps the worst
+  case (`provider_error`), because the provider may have billed. Any other error after the answer keeps the
+  worst case and stops the token with `cost_unknown`.
+- **Refusals.** 403 `cap_reached` stops the token: committed spend plus this call passes a cap. 429 `cap_busy`
+  does not: only the worst cases of calls in flight cause it, and a retry can pass once they settle.
+- **Input.** Message content must be text (a string or `text` parts). Any other part is refused, because the
+  worst case bounds text only.
+- **Stop.** One signal handler stops both listeners. In-flight model calls get up to 160 s to finish and
+  settle (`stop_grace_period: 3m`). An open relayed stream re-checks its job every 5 s and ends after
+  revocation.
 - **Stored cap overrides.** The broker's role has no grant on `settings_overrides` (ADR-0159 D4.4). Its cost gate
   enforces the file caps, not a cap that the owner stores in the PWA. Its own job and month caps still apply.

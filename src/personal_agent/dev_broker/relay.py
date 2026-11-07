@@ -5,7 +5,8 @@ The gateway is not on ``dev-agent``, so it talks to OpenCode through this relay.
 - accepts a request only with the control secret, which only the gateway holds;
 - takes its target from the job id alone: the job's container name, resolved on ``dev-agent``,
   and the OpenCode port. No header, path or query can name another host or port;
-- forwards only while the job's token is ``active`` or ``stopped``, never after revocation;
+- forwards only while the job's token is ``active`` or ``stopped``, never after revocation: an open
+  stream re-checks every few seconds and closes once the job is revoked;
 - refuses a name that resolves to any address outside the ``dev-agent`` subnet;
 - forwards a fixed set of request headers, follows no redirect, and streams the answer back.
 
@@ -15,8 +16,10 @@ It has no general proxy function.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import socket
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from ipaddress import IPv4Address, IPv4Network
@@ -73,6 +76,9 @@ async def resolve_ipv4(host: str) -> list[IPv4Address]:
 
 UpstreamFactory = Callable[[IPv4Address], httpx.AsyncClient]
 
+#: How often an open relayed stream re-checks that its job is still current.
+REVOCATION_CHECK_SECONDS = 5.0
+
 
 def guarded_upstream_client(target: IPv4Address) -> httpx.AsyncClient:
     """Return a client that can reach ``target`` and nothing else (ADR-0132 D2).
@@ -118,6 +124,7 @@ def build_control_app(
     opencode_port: int,
     clock: Clock,
     upstream_factory: UpstreamFactory = guarded_upstream_client,
+    revocation_check_seconds: float = REVOCATION_CHECK_SECONDS,
 ) -> FastAPI:
     """Build the ASGI app of the control listener.
 
@@ -129,6 +136,7 @@ def build_control_app(
         opencode_port: The OpenCode server port.
         clock: The time source.
         upstream_factory: Builds the client that forwards to one target address.
+        revocation_check_seconds: How often an open stream re-checks that its job is current.
 
     Returns:
         The app.
@@ -194,12 +202,43 @@ def build_control_app(
             return _denied(502, "upstream_unreachable")
 
         async def relayed() -> AsyncIterator[bytes]:
-            # Closes the answer and the client however the stream ends: done, an upstream
-            # error mid-stream, or the gateway going away.
+            # One task reads and checks. The job is re-checked when no chunk arrives within the
+            # interval, and at most once per interval between chunks, so a long-lived stream (the
+            # OpenCode event stream) ends soon after revocation. The answer and the client close
+            # however the stream ends: done, revoked, an upstream error, or the gateway leaving.
+            chunks = answer.aiter_bytes()
+
+            async def next_chunk() -> bytes:
+                return await anext(chunks)
+
+            pending: asyncio.Task[bytes] | None = None
+            checked_at = time.monotonic()
             try:
-                async for chunk in answer.aiter_bytes():
-                    yield chunk
+                while True:
+                    if pending is None:
+                        pending = asyncio.create_task(next_chunk())
+                    done, _ = await asyncio.wait({pending}, timeout=revocation_check_seconds)
+                    if done:
+                        try:
+                            chunk = pending.result()
+                        except StopAsyncIteration:
+                            return
+                        pending = None
+                        yield chunk
+                    if time.monotonic() - checked_at >= revocation_check_seconds or not done:
+                        checked_at = time.monotonic()
+                        if await ledger.relay_open(job_id, now=clock.now()) is None:
+                            log.info(
+                                "dev_broker_relay_closed_on_revocation",
+                                job_id=str(job_id),
+                                trace_id=trace_id.hex,
+                            )
+                            return
             finally:
+                if pending is not None and not pending.done():
+                    pending.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, httpx.HTTPError):
+                        await pending
                 await answer.aclose()
                 await upstream.aclose()
 

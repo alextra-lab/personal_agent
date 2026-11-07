@@ -22,6 +22,7 @@ from personal_agent.dev_broker.ledger import (
     Cancelled,
     CostUnknown,
     Failed,
+    ProviderError,
     Refusal,
     Settled,
     SpendLedger,
@@ -130,18 +131,36 @@ class TestReserve:
         self, broker_pool: asyncpg.Pool, job: _Job
     ) -> None:
         ledger = _ledger(broker_pool, job_cap=Decimal("0.15"))
-        assert isinstance(await _reserve(ledger, job, "0.10"), Admitted)
+        first = await _reserve(ledger, job, "0.10")
+        assert isinstance(first, Admitted)
+        await ledger.settle(first, Settled(Decimal("0.10"), 1, 1), now=job.now)
 
         refused = await _reserve(ledger, job, "0.10")
 
         assert isinstance(refused, Refusal)
         assert refused.reason == "cap_reached"
         assert await _token(broker_pool, job.job_id) == ("stopped", "cap_reached")
-        assert await _spend(broker_pool, job.job_id) == (Decimal("0"), Decimal("0.100000"))
+        assert await _spend(broker_pool, job.job_id) == (Decimal("0.100000"), Decimal("0"))
+
+    async def test_a_refusal_caused_by_calls_in_flight_does_not_stop_the_token(
+        self, broker_pool: asyncpg.Pool, job: _Job
+    ) -> None:
+        """In-flight worst cases mostly come back, so the job may retry once they settle."""
+        ledger = _ledger(broker_pool, job_cap=Decimal("0.15"))
+        first = await _reserve(ledger, job, "0.10")
+        assert isinstance(first, Admitted)
+
+        busy = await _reserve(ledger, job, "0.10")
+
+        assert isinstance(busy, Refusal)
+        assert busy.reason == "cap_busy"
+        assert await _token(broker_pool, job.job_id) == ("active", None)
+        await ledger.settle(first, Settled(Decimal("0.01"), 1, 1), now=job.now)
+        assert isinstance(await _reserve(ledger, job, "0.10"), Admitted)
         calls = await broker_pool.fetchval(
             "SELECT count(*) FROM dev_job_calls WHERE job_id = $1", job.job_id
         )
-        assert calls == 1
+        assert calls == 2  # the first and the third: a refusal writes no call row
 
     async def test_a_stopped_token_is_refused(self, broker_pool: asyncpg.Pool, job: _Job) -> None:
         ledger = _ledger(broker_pool, job_cap=Decimal("0.05"))
@@ -266,6 +285,7 @@ class TestSettle:
         [
             (TimedOut(), "timed_out", Decimal("0.100000")),
             (Cancelled(), "cancelled", Decimal("0.100000")),
+            (ProviderError(), "provider_error", Decimal("0.100000")),
             (Failed(), "failed", Decimal("0")),
         ],
     )
@@ -273,7 +293,7 @@ class TestSettle:
         self,
         broker_pool: asyncpg.Pool,
         job: _Job,
-        outcome: TimedOut | Cancelled | Failed,
+        outcome: TimedOut | Cancelled | ProviderError | Failed,
         status: str,
         spent: Decimal,
     ) -> None:

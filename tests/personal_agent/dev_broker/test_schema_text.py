@@ -66,6 +66,14 @@ class TestMigration:
                 assert "INSERT" not in grant
                 assert "DELETE" not in grant
 
+    def test_the_migration_ships_no_password(self) -> None:
+        """A known password would let anything on cloud-sim log in until the deploy's ALTER."""
+        sql = "\n".join(
+            line for line in _migration().splitlines() if not line.lstrip().startswith("--")
+        )
+        assert "CREATE ROLE seshat_dev_broker LOGIN;" in sql
+        assert "PASSWORD" not in sql
+
     def test_documents_the_admin_apply_and_the_password(self) -> None:
         text = _migration()
         assert "AGENT_DATABASE_ADMIN_URL" in text

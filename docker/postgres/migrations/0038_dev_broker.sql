@@ -20,9 +20,13 @@
 --   psql "$(echo $AGENT_DATABASE_ADMIN_URL | sed 's|postgresql+asyncpg|postgresql|')" \
 --     -f docker/postgres/migrations/0038_dev_broker.sql
 --
--- PRODUCTION PASSWORD: this ships the dev password. In prod, after applying, set the real secret
--- and put the same value in /opt/seshat/.env as DEV_BROKER_DB_PASSWORD:
+-- PRODUCTION PASSWORD: this migration creates the role with NO password, so nothing can log in as
+-- it until the deploy sets the real secret. Put the same value in /opt/seshat/.env as
+-- DEV_BROKER_DB_PASSWORD:
 --   ALTER ROLE seshat_dev_broker PASSWORD '<DEV_BROKER_DB_PASSWORD>';
+-- (A known password here would let anything on cloud-sim log in as a role that can write the
+-- cost-gate counters, until someone remembers the ALTER.) init.sql keeps a dev password, because
+-- only fresh local, test and CI stacks run it.
 --
 -- Idempotent. Fresh installs receive this via docker/postgres/init.sql (empty volume only); this
 -- file brings existing prod/dev/test/eval DBs current.
@@ -69,7 +73,8 @@ CREATE TABLE IF NOT EXISTS dev_job_calls (
     reserved_usd          NUMERIC(12, 6) NOT NULL,
     settled_usd           NUMERIC(12, 6),
     status                TEXT NOT NULL CHECK (status IN (
-        'reserved', 'settled', 'cost_unknown', 'timed_out', 'cancelled', 'failed', 'gate_denied'
+        'reserved', 'settled', 'cost_unknown', 'timed_out', 'cancelled', 'provider_error',
+        'failed', 'gate_denied'
     )),
     created_at            TIMESTAMPTZ NOT NULL,
     settled_at            TIMESTAMPTZ
@@ -80,7 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_dev_job_calls_job ON dev_job_calls (job_id, creat
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'seshat_dev_broker') THEN
-        CREATE ROLE seshat_dev_broker LOGIN PASSWORD 'seshat_dev_broker_dev_password';
+        -- No password: login fails until the deploy sets one (see PRODUCTION PASSWORD above).
+        CREATE ROLE seshat_dev_broker LOGIN;
     END IF;
 END
 $$;

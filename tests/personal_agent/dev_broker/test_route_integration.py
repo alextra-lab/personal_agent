@@ -22,12 +22,14 @@ import pytest
 import pytest_asyncio
 
 from personal_agent.config import load_model_config, settings
+from personal_agent.config.config_guard import repo_root
 from personal_agent.cost_gate import (
     BudgetConfig,
     CapEntry,
     CostGate,
     OnDenialBehaviour,
     RoleConfig,
+    load_budget_config,
     set_default_gate,
 )
 from personal_agent.dev_broker.config import load_broker_config
@@ -116,7 +118,8 @@ async def test_ten_parallel_calls_never_pass_the_job_cap(
     statuses = sorted(r.status_code for r in responses)
     admitted = statuses.count(200)
     assert admitted >= 1
-    assert set(statuses) <= {200, 403}
+    # A refusal while the admitted calls are in flight is temporary (429 cap_busy).
+    assert set(statuses) <= {200, 429}
     rows = await broker_pool.fetch(
         "SELECT reserved_usd, status FROM dev_job_calls WHERE job_id = $1", job.job_id
     )
@@ -128,7 +131,8 @@ async def test_ten_parallel_calls_never_pass_the_job_cap(
     token = await broker_pool.fetchrow(
         "SELECT status, stop_reason FROM dev_job_tokens WHERE job_id = $1", job.job_id
     )
-    assert (token["status"], token["stop_reason"]) == ("stopped", "cap_reached")
+    # The admitted calls settled at a fraction of their worst case, so the job is not done.
+    assert (token["status"], token["stop_reason"]) == ("active", None)
 
 
 @pytest_asyncio.fixture
@@ -166,12 +170,17 @@ async def test_a_call_held_past_the_limit_settles_before_the_gate_ttl(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(settings, "scaleway_secret_key", "test-key")
+    # CI has no budget.yaml (it is gitignored); respond() reads the role's estimate from it.
+    example = repo_root() / "config" / "governance" / "budget.yaml.example"
+    monkeypatch.setattr(
+        "personal_agent.cost_gate.load_budget_config", lambda: load_budget_config(example)
+    )
     register_model_pricing(load_model_config())
     config = load_broker_config().model_copy(update={"call_timeout_seconds": 0.5})
     route = ModelRoute(
         config=config,
         ledger=SpendLedger(broker_pool, job_cap_usd=Decimal("2.36"), month_cap_usd=Decimal("35.4")),
-        dispatcher=LiteLLMDispatcher(),
+        dispatcher=LiteLLMDispatcher([_MODEL]),
         catalog=load_model_config().models,
         clock=FakeClock(_NOW),
     )

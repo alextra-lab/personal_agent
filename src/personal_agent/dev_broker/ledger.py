@@ -30,7 +30,7 @@ from personal_agent.dev_broker.clock import month_start
 log = structlog.get_logger(__name__)
 
 RefusalReason = Literal[
-    "unknown_token", "inactive_token", "expired_token", "wrong_model", "cap_reached"
+    "unknown_token", "inactive_token", "expired_token", "wrong_model", "cap_reached", "cap_busy"
 ]
 
 
@@ -117,7 +117,12 @@ class GateDenied:
     """The cost gate denied the call before any request. Nothing was billed."""
 
 
-Outcome = Settled | CostUnknown | TimedOut | Cancelled | Failed | GateDenied
+@dataclass(frozen=True)
+class ProviderError:
+    """The provider failed after the request left. It may have billed: the worst case stays spent."""
+
+
+Outcome = Settled | CostUnknown | TimedOut | Cancelled | ProviderError | Failed | GateDenied
 
 
 def _token_refusal(row: asyncpg.Record | None, model_key: str, now: datetime) -> Refusal | None:
@@ -243,35 +248,47 @@ class SpendLedger:
                 "INSERT INTO dev_month_spend (month_start) VALUES ($1) ON CONFLICT DO NOTHING",
                 month,
             )
-            job_total: Decimal = await conn.fetchval(
-                "SELECT committed_usd + reserved_usd FROM dev_job_spend WHERE job_id = $1 "
+            job_row = await conn.fetchrow(
+                "SELECT committed_usd, reserved_usd FROM dev_job_spend WHERE job_id = $1 "
                 "FOR UPDATE",
                 job_id,
             )
-            month_total: Decimal = await conn.fetchval(
-                "SELECT committed_usd + reserved_usd FROM dev_month_spend WHERE month_start = $1 "
+            month_row = await conn.fetchrow(
+                "SELECT committed_usd, reserved_usd FROM dev_month_spend WHERE month_start = $1 "
                 "FOR UPDATE",
                 month,
             )
+            job_committed: Decimal = job_row["committed_usd"]
+            month_committed: Decimal = month_row["committed_usd"]
+            job_total = job_committed + job_row["reserved_usd"]
+            month_total = month_committed + month_row["reserved_usd"]
             if job_total + amount_usd > self._job_cap or month_total + amount_usd > self._month_cap:
-                await conn.execute(
-                    """
-                    UPDATE dev_job_tokens
-                       SET status = 'stopped', stop_reason = 'cap_reached', updated_at = $2
-                     WHERE token_hash = $1
-                    """,
-                    token_hash,
-                    now,
+                # The committed spend alone decides whether the job is done. Calls in flight
+                # hold worst cases that mostly come back, so a refusal that only they cause is
+                # temporary: the agent can retry once they settle.
+                exhausted = (
+                    job_committed + amount_usd > self._job_cap
+                    or month_committed + amount_usd > self._month_cap
                 )
+                if exhausted:
+                    await conn.execute(
+                        """
+                        UPDATE dev_job_tokens
+                           SET status = 'stopped', stop_reason = 'cap_reached', updated_at = $2
+                         WHERE token_hash = $1
+                        """,
+                        token_hash,
+                        now,
+                    )
                 log.warning(
-                    "dev_broker_cap_reached",
+                    "dev_broker_cap_reached" if exhausted else "dev_broker_cap_busy",
                     job_id=str(job_id),
                     trace_id=trace_id.hex,
                     amount_usd=float(amount_usd),
                     job_total_usd=float(job_total),
                     month_total_usd=float(month_total),
                 )
-                return Refusal("cap_reached", trace_id)
+                return Refusal("cap_reached" if exhausted else "cap_busy", trace_id)
 
             await conn.execute(
                 "UPDATE dev_job_spend SET reserved_usd = reserved_usd + $2, updated_at = $3 "
@@ -473,5 +490,7 @@ class SpendLedger:
                 return "cancelled", reserved, None, None, None
             case Failed():
                 return "failed", Decimal(0), None, None, None
+            case ProviderError():
+                return "provider_error", reserved, None, None, None
             case GateDenied():
                 return "gate_denied", Decimal(0), None, None, None

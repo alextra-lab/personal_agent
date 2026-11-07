@@ -14,7 +14,9 @@ import httpx
 import pytest
 import pytest_asyncio
 from personal_agent.dev_broker.dispatch import ModelRequest
-from personal_agent.dev_broker.model_route import ModelRoute, build_model_app
+from personal_agent.cost_gate.policy import BudgetConfigError
+from personal_agent.dev_broker.model_route import ModelRoute, build_model_app, failure_outcome
+from personal_agent.llm_client.concurrency import InferenceSlotTimeout
 
 from personal_agent.config import load_model_config
 from personal_agent.cost_gate.types import BudgetDenied
@@ -24,6 +26,7 @@ from personal_agent.dev_broker.ledger import (
     CostUnknown,
     Failed,
     GateDenied,
+    ProviderError,
     Refusal,
     Settled,
     TimedOut,
@@ -396,3 +399,102 @@ class TestStreaming:
             (0, "c1", "a"),
             (1, "c2", "b"),
         ]
+
+
+class TestFailureClassification:
+    """Every failure settles on the side that keeps the cap, without phantom spend (D5.8)."""
+
+    @staticmethod
+    def _wrapped(cause: BaseException | None) -> LLMClientError:
+        error = LLMClientError("LiteLLM call failed")
+        error.__cause__ = cause
+        return error
+
+    @staticmethod
+    def _status(code: int) -> Exception:
+        error = RuntimeError(f"HTTP {code}")
+        error.status_code = code  # type: ignore[attr-defined]
+        return error
+
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            # Raised before anything leaves the process.
+            (BudgetConfigError("Budget config not found"), Failed()),
+            (InferenceSlotTimeout("no slot"), Failed()),
+            (OSError("connection refused"), Failed()),
+            # respond() refused before dispatch: no cause.
+            (None, Failed()),
+            # The provider rejected the request: not billed.
+            ("400", Failed()),
+            ("429", Failed()),
+            # The provider failed after the request left: may be billed.
+            ("500", ProviderError()),
+            ("timeout", ProviderError()),
+            # After the answer: worst case and the job stops.
+            (KeyError("choices"), CostUnknown()),
+        ],
+    )
+    async def test_the_outcome_of_each_failure(self, exc: object, expected: object) -> None:
+        if exc is None:
+            error: Exception = self._wrapped(None)
+        elif exc == "400":
+            error = self._wrapped(self._status(400))
+        elif exc == "429":
+            error = self._wrapped(self._status(429))
+        elif exc == "500":
+            error = self._wrapped(self._status(500))
+        elif exc == "timeout":
+            error = self._wrapped(TimeoutError("read timeout"))
+        else:
+            assert isinstance(exc, Exception)
+            error = exc
+        assert failure_outcome(error) == expected
+
+    async def test_a_failure_before_the_send_is_not_charged(self) -> None:
+        """The CI failure of 2026-11-07: a missing budget.yaml must not charge or stop the job."""
+
+        async def fail(_r: ModelRequest, _t: TraceContext) -> LLMResponse:
+            raise BudgetConfigError("Budget config not found")
+
+        setup = _Setup(dispatcher=FakeDispatcher(fail))
+        assert (await _post(setup, _body())).status_code == 502
+        assert [outcome for _, outcome in setup.ledger.settled] == [Failed()]
+
+
+class TestInputRules:
+    @pytest.mark.parametrize(
+        "content",
+        [
+            [{"type": "image_url", "image_url": {"url": "https://x/big.png"}}],
+            [{"type": "text", "text": "a"}, {"type": "input_audio", "input_audio": {}}],
+            [{"type": "text", "text": 5}],
+            {"type": "text", "text": "a"},
+        ],
+    )
+    async def test_only_text_content_is_accepted(self, setup: _Setup, content: object) -> None:
+        body = {"model": _MODEL, "messages": [{"role": "user", "content": content}]}
+        response = await _post(setup, body)
+        assert response.status_code == 400
+        assert setup.ledger.reserved == []
+
+    async def test_text_parts_are_accepted(self, setup: _Setup) -> None:
+        body = {
+            "model": _MODEL,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+        assert (await _post(setup, body)).status_code == 200
+
+    @pytest.mark.parametrize("temperature", ["0.2", True, [1]])
+    async def test_a_temperature_that_is_not_a_number_is_400(
+        self, setup: _Setup, temperature: object
+    ) -> None:
+        response = await _post(setup, _body(temperature=temperature))
+        assert response.status_code == 400
+        assert setup.ledger.reserved == []
+
+    async def test_a_refusal_caused_by_calls_in_flight_is_429(self, setup: _Setup) -> None:
+        setup.ledger.refuse_reserve = Refusal("cap_busy")
+        response = await _post(setup, _body())
+        assert response.status_code == 429
+        assert response.json()["error"]["code"] == "cap_busy"

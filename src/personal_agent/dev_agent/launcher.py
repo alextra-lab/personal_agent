@@ -703,6 +703,8 @@ class DockerLauncher:
         labels: list[str] = []
         for key, value in self._job_labels(job_id, "check-input").items():
             labels += ["--label", f"{key}={value}"]
+        # A helper left by an earlier attempt would block the name.
+        await self._docker("rm", "-f", helper)
         try:
             await self._require(
                 "check input container create",

@@ -103,6 +103,13 @@ CALLS_FETCH = GOOD_PAGE.replace(
     "const out = document.getElementById('out'); fetch('/data.json').catch(() => {});",
 )
 
+# Code review finding 3: page code that writes the benign Chromium text must not hide an error.
+SPOOFS_BENIGN = GOOD_PAGE.replace(
+    "const out = document.getElementById('out');",
+    "const out = document.getElementById('out');"
+    " console.error(\"Unrecognized Content-Security-Policy directive 'webrtc'.\");",
+)
+
 
 def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
     result = subprocess.run(["docker", *args], capture_output=True, timeout=120, check=False)
@@ -266,6 +273,14 @@ class TestSeededPages:
         assert steps["load"]["passed"] is True and steps["interaction"]["passed"] is True
         assert steps["repo_tests"]["passed"] is False
         assert "the repo has no test" in steps["repo_tests"]["messages"]
+        await _assert_not_published(delivery, job)
+
+    async def test_a_page_that_spoofs_the_benign_message_fails_the_load(
+        self, delivery: Delivery, live: Live, make_job: MakeJob
+    ) -> None:
+        job = await _run(delivery, live, make_job, Seed(SPOOFS_BENIGN))
+        steps = await _steps(delivery, job.id)
+        assert steps["load"]["passed"] is False
         await _assert_not_published(delivery, job)
 
 

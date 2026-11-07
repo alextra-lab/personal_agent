@@ -25,8 +25,15 @@ const TOOLKIT = '/srv/artifact-lib';
 const CHECK_DIR = '/opt/check';
 const PREFIX = 'SESHAT_CHECK_RESULT ';
 // Chromium does not know the `webrtc` directive of the production CSP, and logs it on every page
-// (FRE-1682 README). This one message is not a page error.
-const BENIGN = "Unrecognized Content-Security-Policy directive 'webrtc'";
+// (FRE-1682 README). This one message is not a page error. It is matched by its exact text and by
+// its position (line 0, column 0, which no page script has), so page code cannot hide an error
+// behind it.
+const BENIGN = "Unrecognized Content-Security-Policy directive 'webrtc'.";
+
+function benign(message) {
+  const at = message.location();
+  return message.text() === BENIGN && at.lineNumber === 0 && at.columnNumber === 0;
+}
 const MAX_MESSAGES = 50;
 const MAX_MESSAGE_CHARS = 500;
 const MAX_CONTROLS = 200;
@@ -66,7 +73,7 @@ async function watch(context, page) {
     );
   });
   page.on('console', (m) => {
-    if (m.type() === 'error' && !m.text().includes(BENIGN)) record.console.push(m.text());
+    if (m.type() === 'error' && !benign(m)) record.console.push(m.text());
   });
   page.on('pageerror', (e) => record.page.push(String(e)));
   page.on('dialog', (d) => d.dismiss().catch(() => {}));

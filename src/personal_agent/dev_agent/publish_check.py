@@ -219,13 +219,34 @@ def check_inputs_tar(page: bytes, tests: Mapping[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
+def page_problem_of(page: bytes) -> str | None:
+    """Return why the page cannot be published as it is, or ``None``.
+
+    The artifact path stores non-empty text, so a page that is not UTF-8, or is empty or blank,
+    fails the load step instead of failing later at the publish.
+
+    Args:
+        page: The page bytes.
+
+    Returns:
+        The reason, or ``None``.
+    """
+    try:
+        text = page.decode("utf-8")
+    except UnicodeDecodeError:
+        return "dist/index.html is not valid UTF-8"
+    if not text.strip():
+        return "dist/index.html is empty"
+    return None
+
+
 def check_result(
     setup: CheckSetup,
     page_steps: Sequence[CheckStep],
     tests_steps: Sequence[CheckStep],
     csp_manifest_digest: str | None,
     *,
-    page_is_utf8: bool,
+    page_problem: str | None,
 ) -> CheckResult:
     """Combine the two runs into the stored result.
 
@@ -234,18 +255,15 @@ def check_result(
         page_steps: The steps of the page run.
         tests_steps: The steps of the tests run.
         csp_manifest_digest: The digest that the page run reported.
-        page_is_utf8: Whether the page bytes are valid UTF-8. The artifact path stores text, so a
-            page that is not UTF-8 fails the load step.
+        page_problem: What :func:`page_problem_of` found. It fails the load step.
 
     Returns:
         The result.
     """
     steps = list(page_steps)
-    if not page_is_utf8 and steps and steps[0].name == "load":
+    if page_problem is not None and steps and steps[0].name == "load":
         load = steps[0]
-        steps[0] = CheckStep(
-            "load", False, _clip(["dist/index.html is not valid UTF-8", *load.messages])
-        )
+        steps[0] = CheckStep("load", False, _clip([page_problem, *load.messages]))
     return CheckResult(
         steps=(*steps, *tests_steps),
         image_digest=setup.image_id,

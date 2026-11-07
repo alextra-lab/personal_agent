@@ -16,6 +16,7 @@ from personal_agent.dev_agent.publish_check import (
     CheckStep,
     check_inputs_tar,
     check_result,
+    page_problem_of,
     parse_check_output,
 )
 from personal_agent.dev_agent.supervisor import SupervisorPolicy
@@ -89,10 +90,12 @@ class TestParse:
 
 
 class TestResult:
-    def _result(self, page: dict[str, object], tests: dict[str, object], utf8: bool = True):  # type: ignore[no-untyped-def]
+    def _result(
+        self, page: dict[str, object], tests: dict[str, object], problem: str | None = None
+    ):  # type: ignore[no-untyped-def]
         page_steps, digest = parse_check_output("page", _out(page))
         tests_steps, _ = parse_check_output("tests", _out(tests))
-        return check_result(SETUP, page_steps, tests_steps, digest, page_is_utf8=utf8)
+        return check_result(SETUP, page_steps, tests_steps, digest, page_problem=problem)
 
     def test_three_passing_steps_pass_and_carry_the_three_digests(self) -> None:
         result = self._result(_page(), _tests())
@@ -116,10 +119,24 @@ class TestResult:
     ) -> None:
         assert self._result(page, tests).passed is False
 
-    def test_a_page_that_is_not_utf8_fails_the_load_step(self) -> None:
-        result = self._result(_page(), _tests(), utf8=False)
+    @pytest.mark.parametrize(
+        ("page", "why"),
+        [
+            (b"\xff\xfe<p>", "dist/index.html is not valid UTF-8"),
+            (b"", "dist/index.html is empty"),
+            (b" \n\t", "dist/index.html is empty"),
+        ],
+    )
+    def test_a_page_that_cannot_be_published_fails_the_load_step(
+        self, page: bytes, why: str
+    ) -> None:
+        """Code review finding 1: it fails the check, not the publish."""
+        result = self._result(_page(), _tests(), page_problem_of(page))
         assert result.passed is False
-        assert result.steps[0].messages[0] == "dist/index.html is not valid UTF-8"
+        assert result.steps[0].messages[0] == why
+
+    def test_a_normal_page_has_no_problem(self) -> None:
+        assert page_problem_of("<p>é</p>".encode()) is None
 
     def test_a_missing_manifest_digest_fails_the_check(self) -> None:
         result = check_result(
@@ -127,7 +144,7 @@ class TestResult:
             [CheckStep("load", True, ()), CheckStep("interaction", True, ())],
             [CheckStep("repo_tests", True, ())],
             None,
-            page_is_utf8=True,
+            page_problem=None,
         )
         assert result.passed is False
 

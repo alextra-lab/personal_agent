@@ -58,6 +58,7 @@ from personal_agent.dev_agent.publish_check import (
     CheckStep,
     check_inputs_tar,
     check_result,
+    page_problem_of,
     parse_check_output,
 )
 from personal_agent.dev_agent.supervisor import Fence, PreparedJob
@@ -404,7 +405,16 @@ class GitHubRepoPipeline:
             raise DevJobRefusedError("no_result")
         remote = await self._host.remote(job.repo)
         async with self._mirror() as mirror:
-            head = await mirror.fetch(remote, f"refs/heads/{job_branch(job.id)}")
+            try:
+                head = await mirror.fetch(remote, f"refs/heads/{job_branch(job.id)}")
+            except DevAgentRepoError as exc:
+                log.warning(
+                    "dev_job_result_fetch_failed",
+                    job_id=str(job.id),
+                    error=str(exc)[:300],
+                    trace_id=job.trace_id.hex,
+                )
+                raise DevJobRefusedError("result_unreadable") from exc
             if head != commit:
                 raise DevJobRefusedError("result_moved")
             try:
@@ -451,11 +461,7 @@ class GitHubRepoPipeline:
             raise DevJobRefusedError("check_unavailable")
         checker = self._checker
         page, tests = await self._result_files(job, result_commit, with_tests=True)
-        try:
-            page.decode("utf-8")
-            page_is_utf8 = True
-        except UnicodeDecodeError:
-            page_is_utf8 = False
+        page_problem = page_problem_of(page)
         inputs = check_inputs_tar(page, tests)
 
         async def prepare(conn: asyncpg.Connection) -> CheckSetup:
@@ -487,7 +493,7 @@ class GitHubRepoPipeline:
             raise DevJobRefusedError("check_unavailable") from exc
         finally:
             await self._remove_check(job, fence)
-        result = check_result(setup, page_steps, tests_steps, manifest, page_is_utf8=page_is_utf8)
+        result = check_result(setup, page_steps, tests_steps, manifest, page_problem=page_problem)
         await self._record_check(job, fence, result)
         return result.passed
 

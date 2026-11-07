@@ -87,8 +87,9 @@ def _check_ref(ref: str) -> str:
 
 
 def _check_branch(branch: str) -> str:
-    if not _BRANCH.match(branch) or ".." in branch or branch.endswith(("/", ".lock")):
+    if not _BRANCH.match(branch):
         raise ValueError(f"{branch!r} is not a plain branch name")
+    _check_ref(f"refs/heads/{branch}")
     return branch
 
 
@@ -133,7 +134,7 @@ class GitMirror:
         Yields:
             The mirror.
         """
-        root = Path(tempfile.mkdtemp(prefix="seshat-dev-mirror-"))
+        root = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="seshat-dev-mirror-"))
         mirror = cls(root, runner)
         try:
             await mirror._git("init", "-q", "--bare", str(mirror._git_dir), bare=False)

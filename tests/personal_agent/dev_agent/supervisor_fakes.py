@@ -152,6 +152,7 @@ class RecordingPipeline:
         refuse_prepare: str | None = None,
         refuse_handoff: str | None = None,
         advance_failures: int = 0,
+        refuse_check: str | None = None,
     ) -> None:
         self.result = result
         self.passes = passes
@@ -159,6 +160,7 @@ class RecordingPipeline:
         self.refuse_prepare = refuse_prepare
         self.refuse_handoff = refuse_handoff
         self.advance_failures = advance_failures
+        self.refuse_check = refuse_check
         self.in_delivery = asyncio.Event()
         self.calls: list[str] = []
         self.seen_results: list[str | None] = []
@@ -180,6 +182,8 @@ class RecordingPipeline:
     async def check(self, job: DevJob, result_commit: str, fence: Fence) -> bool:
         del job, fence
         self.calls.append(f"check {result_commit}")
+        if self.refuse_check is not None:
+            raise DevJobRefusedError(self.refuse_check)
         return self.passes
 
     async def deliver(self, job: DevJob, fence: Fence) -> None:

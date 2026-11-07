@@ -27,6 +27,7 @@ import jwt
 import structlog
 
 from personal_agent.exceptions import DevAgentRepoError
+from personal_agent.security import check_egress_or_raise
 
 log = structlog.get_logger(__name__)
 
@@ -181,7 +182,7 @@ class GitHubAppHost:
         try:
             return await self._client.request(
                 method,
-                f"{self._config.api_url}{path}",
+                f"{self._config.api_url.rstrip('/')}{path}",
                 headers=self._headers(bearer),
                 json=body,
                 timeout=_HTTP_TIMEOUT_SECONDS,
@@ -302,10 +303,13 @@ class GitHubAppHost:
             DevAgentRepoError: If the token cannot be minted.
         """
         _check_name(name)
+        url = f"{self._config.git_url}/{self._config.org}/{name}.git"
+        # ADR-0132 D2: git's egress gets the same DomainGuard check as the API client.
+        check_egress_or_raise(url)
         token = await self._token({"contents": "write", "metadata": "read"}, [name])
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         return GitRemote(
-            url=f"{self._config.git_url}/{self._config.org}/{name}.git",
+            url=url,
             env={
                 "GIT_CONFIG_COUNT": "1",
                 "GIT_CONFIG_KEY_0": f"http.{self._config.git_url}/.extraHeader",

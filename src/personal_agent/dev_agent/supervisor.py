@@ -5,8 +5,9 @@ the lease with a :class:`LeaseKeeper`, and does every external action through a 
 
 A job's path:
 
-1. fenced ``issue_token`` → ``running`` → the pipeline's ``prepare`` (the repo and the workspace
-   clone, FRE-1685) → fenced ``start_container`` (sets ``started_at``);
+1. ``running`` → the pipeline's ``prepare`` (the repo and the workspace clone, FRE-1685) →
+   fenced ``issue_token`` → fenced ``start_container`` (sets ``started_at``). The token is issued
+   after ``prepare``, so the time of ``prepare`` does not use up the token's grace;
 2. the adapter runs the task until it ends, the 30-minute limit passes, or the broker stops the
    token (``cap_reached`` / ``cost_unknown``, D5.8);
 3. fenced ``revoke_token`` and ``stop_agent`` (D8.8.1), then the pipeline's handoff;
@@ -518,6 +519,16 @@ class JobSupervisor:
                 log.warning(
                     "dev_job_work_stopped_lease_lost", job_id=str(job.id), trace_id=job.trace_id.hex
                 )
+            except DevJobRefusedError as refused:
+                # Any pipeline step's refusal keeps its reason (the JobResultPipeline contract).
+                log.warning(
+                    "dev_job_refused",
+                    job_id=str(job.id),
+                    reason=refused.reason,
+                    trace_id=job.trace_id.hex,
+                )
+                with contextlib.suppress(Exception):
+                    await self._end(job, fence, JobState.FAILED, refused.reason)
             except _EndFailedError as failed:
                 # Retry the same end once. A second failure leaves the job to recovery.
                 log.error(
@@ -576,7 +587,6 @@ class JobSupervisor:
                 expires_at=expires,
             )
 
-        token = await fence.run("issue_token", issue)
         await self._store.transition(fence.lease, JobState.RUNNING)
         try:
             prepared = await self._pipeline.prepare(job, fence)
@@ -590,6 +600,7 @@ class JobSupervisor:
             await self._end(job, fence, JobState.FAILED, refused.reason)
             return
         job = prepared.job
+        token = await fence.run("issue_token", issue)
 
         async def start(conn: asyncpg.Connection) -> None:
             del conn

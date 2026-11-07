@@ -176,12 +176,17 @@ class GitHubRepoPipeline:
             The job with ``repo`` and ``base_commit``, and the workspace tar.
 
         Raises:
-            DevJobRefusedError: If the fix source is refused, or its commit is not in its repo.
+            DevJobRefusedError: If the fix source is refused, its repo is no longer private, or its
+                commit is not in its repo.
         """
         source = None if job.mode == "build" else await self._resolve_source(job)
         branch = job_branch(job.id)
         if isinstance(source, _AgentSource):
             repo, base = source.repo, source.commit
+            # D8.2 holds for every write, not only at creation: refuse a repo that is no longer
+            # private.
+            if not await self._host.is_private(repo):
+                raise DevJobRefusedError("repo_not_private")
             remote = await self._host.remote(repo)
             async with self._mirror() as mirror:
                 head = await mirror.fetch(remote, f"refs/heads/{job_branch(source.job_id)}")
@@ -236,7 +241,8 @@ class GitHubRepoPipeline:
 
         Raises:
             DevJobRefusedError: ``handoff_failed`` (no bundle), ``bundle_invalid``,
-                ``head_not_descendant``, ``tree_has_link``, ``page_missing`` or ``page_too_large``.
+                ``head_not_descendant``, ``tree_has_link``, ``page_missing``, ``page_too_large`` or
+                ``result_push_failed``.
         """
         if job.repo is None or job.base_commit is None:
             raise DevJobRefusedError("no_base")
@@ -266,16 +272,21 @@ class GitHubRepoPipeline:
                 return None
             if not await mirror.is_ancestor(base, head):
                 raise DevJobRefusedError("head_not_descendant")
-            problem = await mirror.result_problem(head)
-            if problem is not None:
-                raise DevJobRefusedError(problem)
-            remote = await self._host.remote(repo)
+            try:
+                problem = await mirror.result_problem(head)
+                if problem is not None:
+                    raise DevJobRefusedError(problem)
+                remote = await self._host.remote(repo)
 
-            async def push_result(conn: asyncpg.Connection) -> None:
-                await mirror.push(remote, head, f"refs/heads/{branch}")
-                await JobStore.record(conn, fence.lease, result_commit=head)
+                async def push_result(conn: asyncpg.Connection) -> None:
+                    await mirror.push(remote, head, f"refs/heads/{branch}")
+                    await JobStore.record(conn, fence.lease, result_commit=head)
 
-            await fence.run("push_result", push_result)
+                await fence.run("push_result", push_result)
+            except (DevAgentRepoError, TimeoutError) as exc:
+                # A git or GitHub failure keeps a stable reason, so the supervisor can still end
+                # the job as timed_out when the limit passed (code review finding 4).
+                raise DevJobRefusedError("result_push_failed") from exc
         log.info(
             "dev_job_result_pushed",
             job_id=str(job.id),

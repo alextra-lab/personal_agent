@@ -432,7 +432,7 @@ class TestRepoHooks:
         assert (row["state"], row["failure_reason"]) == ("failed", "source_not_found")
         assert "start" not in h.docker.ops(job.id)
         assert pipeline.calls == ["prepare"]
-        assert await h.token(job.id) == "revoked"
+        assert await h.token(job.id) is None, "no token is issued before prepare passes"
 
     async def test_a_refused_handoff_ends_failed_with_its_reason(
         self, h: Harness, make_job: MakeJob
@@ -488,3 +488,14 @@ class TestRepoHooks:
         await _wait_end(a)
         row = await h.row(job.id)
         assert (row["state"], row["failure_reason"]) == ("timed_out", "page_missing")
+
+    async def test_a_refused_check_keeps_its_reason(self, h: Harness, make_job: MakeJob) -> None:
+        """Code review finding 2: every step's refusal keeps its reason."""
+        job = await make_job()
+        pipeline = RecordingPipeline(result="abc123", refuse_check="check_refused_reason")
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline)
+        await a.scan_once()
+        await _wait_end(a)
+        row = await h.row(job.id)
+        assert (row["state"], row["failure_reason"]) == ("failed", "check_refused_reason")
+        assert job.id not in h.docker.containers

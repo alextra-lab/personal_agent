@@ -42,6 +42,8 @@ class LocalHost:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.created: list[str] = []
+        self.public: set[str] = set()
+        self.fail_remote = False
 
     async def create_private_repo(self, name: str) -> None:
         path = self.root / f"{name}.git"
@@ -50,12 +52,16 @@ class LocalHost:
             self.created.append(name)
 
     async def remote(self, name: str) -> GitRemote:
+        if self.fail_remote:
+            from personal_agent.exceptions import DevAgentRepoError
+
+            raise DevAgentRepoError("seeded: GitHub token mint failed with HTTP 502")
         path = self.root / f"{name}.git"
         assert path.exists(), f"no repo {name}"
         return GitRemote(url=str(path))
 
     async def is_private(self, name: str) -> bool:
-        return name in self.created
+        return name in self.created and name not in self.public
 
     def ref(self, name: str, ref: str) -> str | None:
         out = subprocess.run(
@@ -399,3 +405,30 @@ class TestAdvanceMain:
         assert env.host.ref(repo, "refs/heads/main") == later.result_commit
         assert (await env.row(older.id))["main_moved"] is False
         assert env.host.ref(repo, f"refs/heads/{job_branch(older.id)}") == older.result_commit
+
+
+class TestReviewFindings:
+    async def test_a_continued_repo_that_is_public_is_refused(
+        self, env: Env, make_job: MakeJob
+    ) -> None:
+        """Code review finding 10: D8.2 holds on every write, not only at creation."""
+        user = await env.user()
+        first, artifact = await build_and_publish(env, make_job, "<p>v1</p>")
+        await env.pool.execute("UPDATE dev_jobs SET user_id = $2 WHERE id = $1", first.id, user)
+        env.host.public.add(first.repo or "")
+        job = await make_job(mode="fix", source_artifact_id=artifact, user_id=user)
+        with pytest.raises(DevJobRefusedError, match="repo_not_private"):
+            await env.pipeline.prepare(job, await env.fence_for(job))
+        assert (await env.row(job.id))["repo"] is None
+
+    async def test_a_github_failure_in_the_push_is_result_push_failed(
+        self, env: Env, make_job: MakeJob
+    ) -> None:
+        """Code review finding 4: a stable reason, so a timed-out job still ends timed_out."""
+        job = await make_job()
+        fence = await env.fence_for(job)
+        prepared = await env.pipeline.prepare(job, fence)
+        await env.agent_commit(prepared.job, prepared.workspace or b"", "<p>page</p>")
+        env.host.fail_remote = True
+        with pytest.raises(DevJobRefusedError, match="result_push_failed"):
+            await env.pipeline.handoff(prepared.job, fence)

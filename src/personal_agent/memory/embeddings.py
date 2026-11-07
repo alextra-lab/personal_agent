@@ -47,6 +47,11 @@ class EmbeddingResponseError(Exception):
     """
 
 
+#: Same-model fallback endpoints that bill per token, mapped to their ledger provider key
+#: (ADR-0121). Only these endpoints get an ``api_costs`` row (FRE-1750). The price is the
+#: "embedding" role's rate; Scaleway lists the same EUR 0.10 per million tokens as OVH.
+_BILLED_FALLBACK_PROVIDERS: dict[str, str] = {"https://api.scaleway.ai/v1": "scaleway"}
+
 #: OVH AI Endpoints rejects a batch bigger than this with HTTP 400 (confirmed
 #: live against the endpoint, FRE-817). The managed embedder call chunks to this
 #: size; the local-fallback call reuses the existing unchunked OpenAI-client path
@@ -188,11 +193,29 @@ async def _generate_vectors(
             error=str(exc),
             fallback_endpoint=settings.local_fallback_embedding_endpoint,
         )
+        start = time.monotonic()
         response = await _call_embeddings_api(
             texts=texts,
             model=settings.local_fallback_embedding_model,
             endpoint=settings.local_fallback_embedding_endpoint,
+            api_key=settings.local_fallback_embedding_token or "unused",
         )
+        latency_ms = int((time.monotonic() - start) * 1000)
+        # Only a billed endpoint gets a cost row. The token alone does not pick the
+        # provider: it only sets the auth header (FRE-1750).
+        billed_provider = _BILLED_FALLBACK_PROVIDERS.get(
+            (settings.local_fallback_embedding_endpoint or "").rstrip("/")
+        )
+        if billed_provider is not None:
+            usage = getattr(response, "usage", None)
+            await _record_embedding_cost(
+                provider=billed_provider,
+                model=settings.local_fallback_embedding_model,
+                total_tokens=getattr(usage, "total_tokens", None),
+                latency_ms=latency_ms,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
         # The same-model local server is not known to honor the OpenAI
         # `dimensions` request param the way OVH does, so it answers at its
         # native width (e.g. 4096 for the 8B model) -- truncate+renormalize
@@ -332,6 +355,62 @@ def _to_target_dimension(vec: list[float], dimensions: int) -> list[float]:
     return _renormalize(vec[:dimensions])
 
 
+async def _record_embedding_cost(
+    *,
+    provider: str,
+    model: str,
+    total_tokens: object,
+    latency_ms: int,
+    trace_id: str | None,
+    session_id: str | None,
+) -> None:
+    """Record one embedding call's vendor cost, or skip it when usage is unusable.
+
+    Args:
+        provider: ADR-0121 catalog provider key the call is billed to.
+        model: Model id requested from the provider.
+        total_tokens: Token count from the response's ``usage`` field. A missing,
+            boolean or negative value skips recording.
+        latency_ms: Wall-clock latency of the vendor call in milliseconds.
+        trace_id: Request/consolidation trace id. ``None`` skips recording.
+        session_id: Session id. ``None`` skips recording.
+    """
+    # bool is an int subclass; excluded explicitly since a boolean token count
+    # is never sane. A malformed/adversarial vendor response (non-numeric,
+    # negative) must degrade to "skip cost recording", never raise into this
+    # already-successful embedding call (security review, FRE-974).
+    if isinstance(total_tokens, int) and not isinstance(total_tokens, bool) and total_tokens >= 0:
+        pricing_eur = _get_embedding_pricing_eur()
+        if pricing_eur is not None:
+            cost_usd = total_tokens * pricing_eur * get_settings().eur_usd_rate
+            logger.info(
+                "embedding_generated",
+                provider=provider,
+                model=model,
+                tokens=total_tokens,
+                cost_usd=cost_usd,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            await record_vendor_cost(
+                provider=provider,
+                model=model,
+                tokens=total_tokens,
+                cost_usd=cost_usd,
+                trace_id=trace_id,
+                session_id=session_id,
+                purpose="embedding",
+                latency_ms=latency_ms,
+            )
+    else:
+        logger.debug(
+            "embedding_cost_usage_missing",
+            provider=provider,
+            model=model,
+            total_tokens=total_tokens,
+        )
+
+
 async def _embed_managed_batch(
     texts: list[str],
     base_url: str,
@@ -387,38 +466,14 @@ async def _embed_managed_batch(
                 "honor the requested width"
             )
 
-    total_tokens = body.get("usage", {}).get("total_tokens")
-    # bool is an int subclass; excluded explicitly since a boolean token count
-    # is never sane. A malformed/adversarial vendor response (non-numeric,
-    # negative) must degrade to "skip cost recording", never raise into this
-    # already-successful embedding call (security review, FRE-974).
-    if isinstance(total_tokens, int) and not isinstance(total_tokens, bool) and total_tokens >= 0:
-        pricing_eur = _get_embedding_pricing_eur()
-        if pricing_eur is not None:
-            cost_usd = total_tokens * pricing_eur * get_settings().eur_usd_rate
-            logger.info(
-                "embedding_generated",
-                provider="ovh",
-                model=model,
-                tokens=total_tokens,
-                cost_usd=cost_usd,
-                trace_id=trace_id,
-                session_id=session_id,
-            )
-            await record_vendor_cost(
-                provider="ovh",
-                model=model,
-                tokens=total_tokens,
-                cost_usd=cost_usd,
-                trace_id=trace_id,
-                session_id=session_id,
-                purpose="embedding",
-                latency_ms=latency_ms,
-            )
-    else:
-        logger.debug(
-            "embedding_cost_usage_missing", provider="ovh", model=model, total_tokens=total_tokens
-        )
+    await _record_embedding_cost(
+        provider="ovh",
+        model=model,
+        total_tokens=body.get("usage", {}).get("total_tokens"),
+        latency_ms=latency_ms,
+        trace_id=trace_id,
+        session_id=session_id,
+    )
 
     return [_renormalize(vec) for vec in vectors]
 

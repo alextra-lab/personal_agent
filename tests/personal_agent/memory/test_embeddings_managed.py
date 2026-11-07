@@ -19,6 +19,7 @@ from personal_agent.config.settings import AppConfig
 from personal_agent.memory.embeddings import (
     EmbeddingResponseError,
     _embed_managed,
+    _get_embedding_pricing_eur,
     generate_embedding,
     generate_embeddings_batch,
 )
@@ -426,6 +427,189 @@ class TestManagedProfileIntegration:
         assert mock_fallback.call_args.kwargs["model"] == "Qwen/Qwen3-Embedding-8B"
 
     @pytest.mark.asyncio
+    async def test_fallback_sends_configured_token(self) -> None:
+        settings = _MANAGED_SETTINGS.model_copy(
+            update={
+                "local_fallback_embedding_endpoint": "https://api.scaleway.ai/v1",
+                "local_fallback_embedding_model": "qwen3-embedding-8b",
+                "local_fallback_embedding_token": "scw-test-token",
+            }
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
+            raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
+
+        with (
+            patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
+            patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
+            patch(
+                "personal_agent.memory.embeddings._call_embeddings_api",
+                new_callable=AsyncMock,
+                return_value=_fake_openai_response([[0.05] * 4096]),
+            ) as mock_fallback,
+        ):
+            embedding = await generate_embedding("hello")
+
+        assert mock_fallback.call_args.kwargs["api_key"] == "scw-test-token"
+        assert len(embedding) == 1024
+
+    @pytest.mark.asyncio
+    async def test_fallback_without_token_sends_unused_key(self) -> None:
+        settings = _MANAGED_SETTINGS.model_copy(
+            update={"local_fallback_embedding_endpoint": "http://local-8b:8503/v1"}
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
+            raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
+
+        with (
+            patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
+            patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
+            patch(
+                "personal_agent.memory.embeddings._call_embeddings_api",
+                new_callable=AsyncMock,
+                return_value=_fake_openai_response([[0.05] * 1024]),
+            ) as mock_fallback,
+        ):
+            await generate_embedding("hello")
+
+        assert mock_fallback.call_args.kwargs["api_key"] == "unused"
+
+    @pytest.mark.asyncio
+    async def test_fallback_with_token_records_scaleway_cost(self) -> None:
+        trace_id = str(uuid4())
+        session_id = str(uuid4())
+        settings = _MANAGED_SETTINGS.model_copy(
+            update={
+                "local_fallback_embedding_endpoint": "https://api.scaleway.ai/v1",
+                "local_fallback_embedding_model": "qwen3-embedding-8b",
+                "local_fallback_embedding_token": "scw-test-token",
+            }
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
+            raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
+
+        with (
+            patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
+            patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
+            patch(
+                "personal_agent.memory.embeddings._call_embeddings_api",
+                new_callable=AsyncMock,
+                return_value=_fake_openai_response([[0.05] * 4096], total_tokens=10),
+            ),
+            patch(
+                "personal_agent.memory.embeddings.record_vendor_cost", new_callable=AsyncMock
+            ) as mock_cost,
+        ):
+            embedding = await generate_embedding("hello", trace_id=trace_id, session_id=session_id)
+
+        assert len(embedding) == 1024
+        norm = sum(x * x for x in embedding) ** 0.5
+        assert norm == pytest.approx(1.0)
+        mock_cost.assert_awaited_once()
+        assert mock_cost.call_args.kwargs["provider"] == "scaleway"
+        assert mock_cost.call_args.kwargs["tokens"] == 10
+        assert mock_cost.call_args.kwargs["cost_usd"] == pytest.approx(
+            10 * _get_embedding_pricing_eur() * settings.eur_usd_rate
+        )
+        assert mock_cost.call_args.kwargs["purpose"] == "embedding"
+        assert mock_cost.call_args.kwargs["trace_id"] == trace_id
+        assert mock_cost.call_args.kwargs["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_fallback_without_token_records_no_cost(self) -> None:
+        settings = _MANAGED_SETTINGS.model_copy(
+            update={"local_fallback_embedding_endpoint": "http://local-8b:8503/v1"}
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
+            raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
+
+        with (
+            patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
+            patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
+            patch(
+                "personal_agent.memory.embeddings._call_embeddings_api",
+                new_callable=AsyncMock,
+                return_value=_fake_openai_response([[0.05] * 1024], total_tokens=10),
+            ),
+            patch(
+                "personal_agent.memory.embeddings.record_vendor_cost", new_callable=AsyncMock
+            ) as mock_cost,
+        ):
+            await generate_embedding("hello", trace_id=str(uuid4()), session_id=str(uuid4()))
+
+        mock_cost.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fallback_token_on_unbilled_endpoint_records_no_cost(self) -> None:
+        settings = _MANAGED_SETTINGS.model_copy(
+            update={
+                "local_fallback_embedding_endpoint": "http://local-8b:8503/v1",
+                "local_fallback_embedding_token": "local-test-token",
+            }
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
+            raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
+
+        with (
+            patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
+            patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
+            patch(
+                "personal_agent.memory.embeddings._call_embeddings_api",
+                new_callable=AsyncMock,
+                return_value=_fake_openai_response([[0.05] * 1024], total_tokens=10),
+            ) as mock_fallback,
+            patch(
+                "personal_agent.memory.embeddings.record_vendor_cost", new_callable=AsyncMock
+            ) as mock_cost,
+        ):
+            await generate_embedding("hello", trace_id=str(uuid4()), session_id=str(uuid4()))
+
+        assert mock_fallback.call_args.kwargs["api_key"] == "local-test-token"
+        mock_cost.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fallback_missing_usage_skips_cost_and_keeps_vector(self) -> None:
+        settings = _MANAGED_SETTINGS.model_copy(
+            update={
+                "local_fallback_embedding_endpoint": "https://api.scaleway.ai/v1",
+                "local_fallback_embedding_model": "qwen3-embedding-8b",
+                "local_fallback_embedding_token": "scw-test-token",
+            }
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
+            raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
+
+        with (
+            patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
+            patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
+            patch(
+                "personal_agent.memory.embeddings._call_embeddings_api",
+                new_callable=AsyncMock,
+                return_value=_fake_openai_response([[0.05] * 4096], total_tokens=None),
+            ),
+            patch(
+                "personal_agent.memory.embeddings.record_vendor_cost", new_callable=AsyncMock
+            ) as mock_cost,
+        ):
+            embedding = await generate_embedding(
+                "hello", trace_id=str(uuid4()), session_id=str(uuid4())
+            )
+
+        assert len(embedding) == 1024
+        mock_cost.assert_not_awaited()
+
+    def test_local_fallback_token_binds_from_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AGENT_LOCAL_FALLBACK_EMBEDDING_TOKEN", "env-test-token")
+        assert AppConfig().local_fallback_embedding_token == "env-test-token"
+
+    @pytest.mark.asyncio
     async def test_managed_failure_no_fallback_returns_zero_vector(self) -> None:
         settings = _MANAGED_SETTINGS.model_copy(update={"local_fallback_embedding_endpoint": None})
 
@@ -463,12 +647,13 @@ class TestManagedProfileIntegration:
         assert embedding == [0.0] * settings.embedding_dimensions
 
 
-def _fake_openai_response(vectors: list[list[float]]) -> object:
+def _fake_openai_response(vectors: list[list[float]], total_tokens: int | None = None) -> object:
     from unittest.mock import MagicMock
 
     data = [MagicMock(embedding=v) for v in vectors]
     resp = MagicMock()
     resp.data = data
+    resp.usage = MagicMock(total_tokens=total_tokens)
     return resp
 
 

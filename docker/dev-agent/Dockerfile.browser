@@ -40,9 +40,9 @@ RUN npm install -g --no-audit --no-fund @opencode/cli@${OPENCODE_VERSION} \
     && rm -rf "$(npm root -g)/@opencode/cli/node_modules" \
     && npm cache clean --force \
     && opencode --version \
-    && mkdir -p /etc/opencode \
-    && echo '{}' > /etc/opencode/opencode.json
-# The permission file of the job (D2.4) replaces /etc/opencode/opencode.json in FRE-1684.
-# An empty file means no rule matches, and OpenCode then asks. A headless job cannot answer, so it stops.
+    && mkdir -p /etc/opencode
+# The job's config and permission file (ADR-0159 D2.4; FRE-1684). The root filesystem is read-only,
+# so the agent cannot change the file. It is defense in depth: the container is the boundary (D2.5).
+COPY --chown=root:root --chmod=0444 opencode.json /etc/opencode/opencode.json
 
 USER 10001:10001

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "seshat": {
+      "name": "Seshat broker",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://dev-broker:8700/v1",
+        "apiKey": "{env:SESHAT_JOB_TOKEN}"
+      },
+      "models": {
+        "deepseek-v4.1-flash-scaleway": {"name": "DeepSeek V4.1 Flash (Scaleway)"},
+        "glm-5.3-scaleway": {"name": "GLM 5.3 (Scaleway)"}
+      }
+    }
+  },
+  "model": "seshat/deepseek-v4.1-flash-scaleway",
+  "permissions": [
+    {"action": "*", "resource": "*", "effect": "deny"},
+    {"action": "read", "resource": "*", "effect": "allow"},
+    {"action": "edit", "resource": "*", "effect": "allow"},
+    {"action": "shell", "resource": "*", "effect": "allow"},
+    {"action": "grep", "resource": "*", "effect": "allow"},
+    {"action": "glob", "resource": "*", "effect": "allow"},
+    {"action": "external_directory", "resource": "*", "effect": "deny"},
+    {"action": "webfetch", "resource": "*", "effect": "deny"},
+    {"action": "websearch", "resource": "*", "effect": "deny"},
+    {"action": "question", "resource": "*", "effect": "deny"},
+    {"action": "subagent", "resource": "*", "effect": "deny"}
+  ]
+}

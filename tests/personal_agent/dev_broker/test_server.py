@@ -11,12 +11,9 @@ from ipaddress import IPv4Address, IPv4Interface, IPv4Network
 
 import pytest
 from fastapi.routing import APIRoute
-from personal_agent.dev_broker.server import (
-    ListenAddresses,
-    check_egress_guard,
-    select_listen_addresses,
-)
 
+from personal_agent.dev_broker.addresses import ListenAddresses, select_listen_addresses
+from personal_agent.dev_broker.server import check_egress_guard
 from personal_agent.exceptions import BrokerStartupError
 from personal_agent.security import DomainGuard, GuardMode
 

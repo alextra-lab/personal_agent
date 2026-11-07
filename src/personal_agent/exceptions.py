@@ -174,3 +174,19 @@ class BrokerStartupError(RuntimeError):
     The broker refuses to start rather than listen on the wrong interface, run without its control
     secret, or dispatch under an egress guard that allows more than its one provider.
     """
+
+
+class LeaseLostError(RuntimeError):
+    """Raised when a dev-agent job supervisor no longer holds the job's lease (ADR-0159 D9.4, D9.5).
+
+    The fenced action that raises it did not run. The supervisor stops all work on the job, and
+    recovery cleans the job up under a new lease.
+    """
+
+
+class DevAgentLaunchError(RuntimeError):
+    """Raised when the dev-agent launcher cannot start, stop or remove a job's containers (FRE-1684).
+
+    Examples: the toolkit volume is missing, ``docker create`` fails, or a container or volume of
+    the job remains after removal.
+    """

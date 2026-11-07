@@ -46,7 +46,7 @@ control. A probe that never reaches anything proves nothing, so the control must
 - **OpenCode pin.** `config/dev_agent/container_profiles.yaml` (`opencode_version`) and `ARG OPENCODE_VERSION` in
   `Dockerfile.browser` hold the same value. A test fails if they differ. OpenCode 2.x is the npm package
   `@opencode/cli`. The command prints `opencode v<version>`.
-- **Permission file.** `/etc/opencode/opencode.json` is `{}` (`OPENCODE_CONFIG` points to it). No rule matches, so OpenCode asks, and a headless job cannot answer. FRE-1684 replaces the file with the D2.4 permission file.
+- **Permission file.** `/etc/opencode/opencode.json` is `opencode.json` of this directory (FRE-1684). See "The job supervisor" below.
 - **Toolkit mount.** The read-only toolkit volume mounts at `/srv/artifact-lib`. Do not mount at `/lib`: on the base image `/lib` is a symlink to `usr/lib`, and a volume there replaces the system libraries. The CSP server serves one root. To serve the toolkit under `/lib/`, link it into the root: `ln -s /srv/artifact-lib <root>/lib`.
 - **Console message `webrtc`.** The production CSP has a `webrtc` directive. Chromium does not know it. It logs
   `Unrecognized Content-Security-Policy directive 'webrtc'` as a console error on every page. The publish check
@@ -118,3 +118,45 @@ Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration
   revocation.
 - **Stored cap overrides.** The broker's role has no grant on `settings_overrides` (ADR-0159 D4.4). Its cost gate
   enforces the file caps, not a cap that the owner stores in the PWA. Its own job and month caps still apply.
+
+## The job supervisor (FRE-1684)
+
+The gateway runs the supervisor (`personal_agent.dev_agent.supervisor`) when
+`AGENT_DEV_AGENT_SUPERVISOR_ENABLED=true`. It is off by default. The job record is migration
+`0039_dev_jobs.sql`.
+
+- **Lease.** 2 minutes, renewed every 30 s. All work stops after 60 s with no renewal. Postgres time
+  (`clock_timestamp()`) is the authority for the lease and the 30-minute limit.
+- **Fence.** Every external action runs in a transaction that holds the job row's lock until the
+  action returns, and is logged in `dev_job_actions`. Recovery takes jobs with `SKIP LOCKED`, so the
+  lease cannot change hands during an action.
+- **End state.** Revoke the token, remove the job's containers and volume, verify, then write the end
+  state, in one fenced action. A failed cleanup leaves the job active until recovery cleans it.
+- **Labels.** `seshat.dev_job=<job id>` and `seshat.dev_job.scope=<AGENT_DEV_AGENT_LABEL_SCOPE>` on
+  the container and the workspace volume `seshat-dev-ws-<job id>`. Every listing filters on the scope.
+- **OpenCode.** `opencode.json` is the config and the D2.4 permission file. The provider `seshat` is
+  the broker route. The rules start with `* * deny` and contain no `ask`, because OpenCode 2.2.5 puts
+  the file's rules after its built-in rules (some of which ask) and the last match wins. Checked
+  against `GET /api/agent` of a running server on 2026-11-07.
+
+### Deploy (master)
+
+1. `make dev-agent-build`. The agent image now holds `opencode.json`.
+2. Apply `docker/postgres/migrations/0039_dev_jobs.sql` with `AGENT_DATABASE_ADMIN_URL`.
+3. Rebuild `seshat-gateway` and `seshat-dev-broker`. Leave the supervisor off.
+4. Check: `docker inspect --format '{{.State.Health.Status}}' seshat-seshat-dev-broker-1` prints
+   `healthy` (the health check no longer imports the cost gate).
+
+Before the supervisor can run a job, the toolkit volume (`AGENT_DEV_AGENT_TOOLKIT_VOLUME`) must exist
+with the pinned toolkit. The launcher refuses to start a job without it. Filling that volume is a
+separate ticket.
+
+### Notes for FRE-1685 and FRE-1686
+
+- Implement `JobResultPipeline` (`handoff`, `check`, `deliver`). Do every external action through
+  `fence.run(action, operation)`. The supervisor revokes the token and stops the agent container
+  before `handoff`. Bound every action: `SupervisorPolicy.action_timeout_seconds` cancels it otherwise.
+- `deliver` must be idempotent (D9.8). Recovery calls it again for a job that crashed in `delivering`.
+- Start the handoff and check containers with the job label and the scope label, so `remove` and the
+  orphan sweep find them.
+

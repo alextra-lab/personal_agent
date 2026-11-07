@@ -130,6 +130,59 @@ def test_list_sessions_returns_list() -> None:
     assert list_recent_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
 
 
+def _get_sessions(query_string: str) -> tuple[Any, AsyncMock, AsyncMock]:
+    """GET /sessions with ``query_string``; return the response and both repository mocks."""
+    list_recent_mock = AsyncMock(return_value=[_make_session_model()])
+    search_mock = AsyncMock(return_value=[_make_session_model(), _make_session_model()])
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        for name, mock in (("list_recent", list_recent_mock), ("search", search_mock)):
+            stack.enter_context(
+                patch(
+                    f"personal_agent.service.repositories.session_repository.SessionRepository.{name}",
+                    mock,
+                )
+            )
+        app = _build_app_with_db_factory(AsyncMock())
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions{query_string}", headers=_AUTH_HEADERS)
+    return resp, list_recent_mock, search_mock
+
+
+def test_list_sessions_with_q_searches_the_callers_sessions() -> None:
+    """FRE-1746 AC-1/AC-2: ``q`` calls ``search`` scoped to the caller, with the stripped term."""
+    resp, list_recent_mock, search_mock = _get_sessions("?limit=7&q=%20quokka%20")
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+    assert {"session_id", "message_count", "turn_count", "title"} <= resp.json()[0].keys()
+    list_recent_mock.assert_not_awaited()
+    search_mock.assert_awaited_once()
+    assert search_mock.await_args.args == ("quokka", 7)
+    assert search_mock.await_args.kwargs == {"user_id": _TEST_USER_ID}
+
+
+@pytest.mark.parametrize("query_string", ["", "?q=", "?q=%20%20%09", "?limit=5&q="])
+def test_list_sessions_with_blank_q_lists_recent(query_string: str) -> None:
+    """FRE-1746 AC-3: a missing, empty or blank ``q`` is the unchanged recent list."""
+    resp, list_recent_mock, search_mock = _get_sessions(query_string)
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+    search_mock.assert_not_awaited()
+    list_recent_mock.assert_awaited_once()
+    assert list_recent_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
+
+
+def test_list_sessions_rejects_an_overlong_q() -> None:
+    """FRE-1746: ``q`` over 200 characters is a 422, and no query runs."""
+    resp, list_recent_mock, search_mock = _get_sessions(f"?q={'a' * 201}")
+
+    assert resp.status_code == 422
+    list_recent_mock.assert_not_awaited()
+    search_mock.assert_not_awaited()
+
+
 def test_list_sessions_401_without_cf_access_header() -> None:
     """GET /sessions returns 401 when the CF Access header is absent."""
     db_session = AsyncMock()

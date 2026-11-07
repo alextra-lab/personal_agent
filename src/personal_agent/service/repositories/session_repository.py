@@ -19,6 +19,50 @@ from personal_agent.service.models import SessionCreate, SessionModel, SessionUp
 # the top-level message dict OR under ``message["metadata"]``; either is fine.
 _REQUIRED_ASSISTANT_FIELDS: tuple[str, ...] = ("model", "model_role", "model_config_path")
 
+# FRE-1746 — conversation search. ``!`` is the LIKE escape character, so the SQL needs no backslash
+# literal (which depends on ``standard_conforming_strings``). Every ``jsonb_array_elements`` input
+# is behind a ``CASE jsonb_typeof`` guard because the column holds arbitrary JSON, and ``->>`` would
+# stringify an object value. The predicate refers to ``sessions`` and binds ``:pattern``.
+_LIKE_ESCAPE = "!"
+_MESSAGE_TEXT_MATCH = """
+EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(
+        CASE jsonb_typeof(sessions.messages) WHEN 'array' THEN sessions.messages ELSE '[]'::jsonb END
+    ) AS m
+    WHERE jsonb_typeof(m) = 'object'
+      AND m->>'role' IN ('user', 'assistant')
+      AND (
+        (jsonb_typeof(m->'content') = 'string' AND m->>'content' ILIKE :pattern ESCAPE '!')
+        OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(
+                CASE jsonb_typeof(m->'content') WHEN 'array' THEN m->'content' ELSE '[]'::jsonb END
+            ) AS b
+            WHERE jsonb_typeof(b) = 'object'
+              AND b->>'type' = 'text'
+              AND jsonb_typeof(b->'text') = 'string'
+              AND b->>'text' ILIKE :pattern ESCAPE '!'
+        )
+      )
+)
+"""
+
+
+def _escape_like(term: str) -> str:
+    """Escape ``term`` so ``LIKE`` matches it literally, using ``!`` as the escape character.
+
+    The escape character is replaced first, so the escapes added for ``%`` and ``_`` stay intact.
+
+    Args:
+        term: Raw search text.
+
+    Returns:
+        The text with ``!``, ``%`` and ``_`` each preceded by ``!``.
+    """
+    escaped = term.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+    return escaped.replace("%", f"{_LIKE_ESCAPE}%").replace("_", f"{_LIKE_ESCAPE}_")
+
 
 class SessionRepository:
     """Repository for session CRUD operations.
@@ -292,6 +336,37 @@ class SessionRepository:
         stmt = select(SessionModel).order_by(SessionModel.last_active_at.desc()).limit(limit)
         if user_id is not None:
             stmt = stmt.where(SessionModel.user_id == user_id)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def search(self, query: str, limit: int, *, user_id: UUID) -> list[SessionModel]:
+        """Find a user's sessions whose user or assistant message text contains ``query``.
+
+        The match is a case-insensitive substring match over the text of ``user`` and
+        ``assistant`` messages (FRE-1746). For block content it reads only ``text`` blocks, as
+        ``get_text_content`` does. Role names, attribution fields and non-text blocks never match.
+        A session whose messages the retention sweep cleared has no text and never matches.
+
+        Args:
+            query: The text to find. ``%``, ``_`` and the escape character match literally.
+            limit: Maximum number to return.
+            user_id: Owner of the sessions. Required: there is no unscoped search.
+
+        Returns:
+            Matching sessions ordered by last_active_at DESC.
+        """
+        if "\x00" in query:
+            # Postgres text cannot hold a NUL, and JSONB rejects one in stored text: no match,
+            # and the bound parameter would raise.
+            return []
+        pattern = f"%{_escape_like(query)}%"
+        has_match = text(_MESSAGE_TEXT_MATCH).bindparams(pattern=pattern)
+        stmt = (
+            select(SessionModel)
+            .where(SessionModel.user_id == user_id, has_match)
+            .order_by(SessionModel.last_active_at.desc())
+            .limit(limit)
+        )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

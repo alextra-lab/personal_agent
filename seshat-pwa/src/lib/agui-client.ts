@@ -757,15 +757,19 @@ export interface ServerMessage {
 }
 
 /**
- * List recent sessions from the backend.
+ * List recent sessions from the backend, or search them (FRE-1746).
  *
  * @param limit - Maximum number of sessions to return (default 20).
+ * @param query - Text to find in the user's own messages. A missing or blank
+ *   query sends no `q`, so the call lists the recent sessions.
  * @returns Array of session summaries, most-recent first.
  * @throws Error when the backend returns a non-2xx status.
  */
-export async function listSessions(limit = 20): Promise<SessionSummary[]> {
+export async function listSessions(limit = 20, query?: string): Promise<SessionSummary[]> {
+  const term = query?.trim();
+  const search = term ? `&q=${encodeURIComponent(term)}` : '';
   const resp = await fetch(
-    `${SESHAT_API}/api/v1/sessions?limit=${limit}`,
+    `${SESHAT_API}/api/v1/sessions?limit=${limit}${search}`,
     { headers: authHeaders() },
   );
   if (!resp.ok) throw new Error(`listSessions failed: ${resp.status}`);

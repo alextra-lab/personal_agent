@@ -79,7 +79,8 @@ Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration
 2. Apply `docker/postgres/migrations/0038_dev_broker.sql` with `AGENT_DATABASE_ADMIN_URL`.
 3. Generate two values (`openssl rand -hex 32`). Put them in `/opt/seshat/.env` as `DEV_BROKER_DB_PASSWORD` and
    `AGENT_DEV_BROKER_CONTROL_SECRET`, and in `pass`. Then run
-   `ALTER ROLE seshat_dev_broker PASSWORD '<DEV_BROKER_DB_PASSWORD>'`.
+   `ALTER ROLE seshat_dev_broker PASSWORD '<DEV_BROKER_DB_PASSWORD>'`. The compose file defaults both to empty,
+   so other services deploy without them, and the broker refuses to start (or to log in) until they are set.
 4. Rebuild `seshat-gateway` (new `ModelRole`, the settings field, the `respond()` settle fix).
 5. `docker compose -f docker-compose.cloud.yml up -d --build seshat-dev-broker`.
 6. `make dev-broker-verify`. Every section of the report must be empty and `result` must be `PASS`.
@@ -97,6 +98,9 @@ Limits and models are in `config/dev_agent/broker.yaml`. The ledger is migration
 - **Relay.** Send the OpenCode server password as `Authorization` through the relay. The relay forwards it and
   strips the control secret.
 - **Spend.** `dev_job_spend` holds a job's committed and reserved spend. `dev_job_calls` is the per-call ledger.
-  A call that a crashed broker left `reserved` keeps counting as spent.
+  A call that stays `reserved` past the call limit plus 60 s (a failed settle, or a broker that died mid-call)
+  is settled as `cancelled` by the broker's sweep, at start and every 60 s. Its worst case stays spent.
+- **Errors.** A provider error (`LLMClientError`) settles at zero. Any other error after the send keeps the
+  worst case and stops the token with `cost_unknown`, because the provider may have billed the call.
 - **Stored cap overrides.** The broker's role has no grant on `settings_overrides` (ADR-0159 D4.4). Its cost gate
   enforces the file caps, not a cap that the owner stores in the PWA. Its own job and month caps still apply.

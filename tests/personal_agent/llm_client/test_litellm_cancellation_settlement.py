@@ -256,3 +256,35 @@ class TestEveryCancellationSettles:
 
         assert finished == [(_RESERVATION, Decimal("0.002"))]
         gate.refund.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_second_cancel_during_the_cancel_branch_commit_lets_it_finish(
+        self, gate: MagicMock
+    ) -> None:
+        """The FRE-1733 branch commits after a cancel. A second cancel must not abandon it."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+        finished: list[tuple[object, ...]] = []
+
+        async def slow_commit(*args: object, **_kwargs: object) -> None:
+            started.set()
+            await release.wait()
+            finished.append(args)
+
+        async def hang(**_kwargs: object) -> None:
+            await asyncio.Event().wait()
+
+        gate.commit = AsyncMock(side_effect=slow_commit)
+        task = asyncio.create_task(_respond_with(gate=gate, acompletion=AsyncMock(side_effect=hang)))
+        await asyncio.sleep(0.05)
+        task.cancel()  # first cancel: the call is in flight
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()  # second cancel: during the commit
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert finished == [(_RESERVATION, _ESTIMATE)]
+        gate.refund.assert_not_awaited()

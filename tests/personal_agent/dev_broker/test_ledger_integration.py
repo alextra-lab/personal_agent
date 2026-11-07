@@ -357,3 +357,35 @@ class TestMonthBoundary:
                 await admin_pool.execute(
                     "DELETE FROM dev_month_spend WHERE month_start = $1", start
                 )
+
+
+class TestStaleReservations:
+    async def test_a_stale_reservation_is_settled_at_the_worst_case(
+        self, broker_pool: asyncpg.Pool, job: _Job
+    ) -> None:
+        """A settle that failed, or a broker that died, never leaves a reservation for good."""
+        ledger = _ledger(broker_pool)
+        old = await _reserve(ledger, job, "0.10", now=job.now)
+        fresh = await _reserve(ledger, job, "0.05", now=job.now + timedelta(seconds=200))
+        assert isinstance(old, Admitted) and isinstance(fresh, Admitted)
+
+        swept = await ledger.settle_stale(
+            now=job.now + timedelta(seconds=240), older_than_seconds=210
+        )
+
+        assert swept == 1
+        statuses = dict(
+            await broker_pool.fetch(
+                "SELECT call_id, status FROM dev_job_calls WHERE job_id = $1", job.job_id
+            )
+        )
+        assert statuses == {old.call_id: "cancelled", fresh.call_id: "reserved"}
+        assert await _spend(broker_pool, job.job_id) == (Decimal("0.100000"), Decimal("0.050000"))
+
+    async def test_a_sweep_with_nothing_stale_changes_nothing(
+        self, broker_pool: asyncpg.Pool, job: _Job
+    ) -> None:
+        ledger = _ledger(broker_pool)
+        await _reserve(ledger, job, "0.10")
+        assert await ledger.settle_stale(now=job.now, older_than_seconds=210) == 0
+        assert await _spend(broker_pool, job.job_id) == (Decimal("0"), Decimal("0.100000"))

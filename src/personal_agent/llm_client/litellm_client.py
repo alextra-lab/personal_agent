@@ -1663,13 +1663,16 @@ class LiteLLMClient:
                         # the provider, which can still bill it, so commit the estimate and do not
                         # refund. This can overcount a call that the provider did not bill. Then
                         # propagate the cancellation — never swallow it.
+                        # FRE-1683: shielded, so a second cancel cannot abandon the commit.
                         settled = True
                         try:
-                            await gate.commit(
-                                reservation_id,
-                                reservation_amount,
-                                trace_id=trace_id,
-                                session_id=trace_ctx.session_id,
+                            await asyncio.shield(
+                                gate.commit(
+                                    reservation_id,
+                                    reservation_amount,
+                                    trace_id=trace_id,
+                                    session_id=trace_ctx.session_id,
+                                )
                             )
                         except Exception as commit_exc:  # noqa: BLE001
                             log.error(
@@ -1695,7 +1698,7 @@ class LiteLLMClient:
                         # Refund the reservation so the counter doesn't leak headroom.
                         settled = True
                         try:
-                            await gate.refund(reservation_id, trace_id=trace_id)
+                            await asyncio.shield(gate.refund(reservation_id, trace_id=trace_id))
                         except Exception as refund_exc:  # noqa: BLE001
                             log.error(
                                 "litellm_refund_after_failure_failed",

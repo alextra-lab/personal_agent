@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_UP, Decimal
-from typing import Protocol
+from typing import Literal, Protocol
 
 import structlog
 from fastapi import FastAPI, Request
@@ -38,7 +39,7 @@ from personal_agent.dev_broker.ledger import (
 )
 from personal_agent.dev_broker.tokens import hash_token
 from personal_agent.llm_client.models import ModelDefinition
-from personal_agent.llm_client.types import LLMResponse
+from personal_agent.llm_client.types import LLMClientError, LLMResponse
 from personal_agent.telemetry.trace import TraceContext
 
 log = structlog.get_logger(__name__)
@@ -107,6 +108,19 @@ def _positive_int(value: object) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return None
+
+
+def _temperature(value: object) -> float | None | Literal[False]:
+    """Return a request's temperature, ``None`` when absent, or ``False`` when it is unusable."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return False
+    return number if math.isfinite(number) else False
 
 
 def prompt_token_bound(
@@ -214,6 +228,26 @@ class ModelRoute:
             + Decimal(max_tokens) * Decimal(str(entry.output_cost_per_token))
         ).quantize(_MICRO_USD, rounding=ROUND_UP)
 
+        # Everything that can fail on the request is built here, before the reserve: from the
+        # reserve on, every path settles (D5.7 reservations have no time limit).
+        temperature = _temperature(body.get("temperature"))
+        if temperature is False:
+            return _error(400, "invalid_request", "temperature must be a finite number")
+        tool_choice = body.get("tool_choice")
+        request = ModelRequest(
+            model_key=model_key,
+            messages=tuple(messages),
+            tools=None if tools is None else tuple(tools),
+            tool_choice=tool_choice if isinstance(tool_choice, (str, Mapping)) else None,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        stream = body.get("stream") is True
+        stream_options = body.get("stream_options")
+        include_usage = (
+            isinstance(stream_options, Mapping) and stream_options.get("include_usage") is True
+        )
+
         await self._hold_before_boundary(grant)
 
         admitted = await self._ledger.reserve(
@@ -227,25 +261,8 @@ class ModelRoute:
         if isinstance(admitted, Refusal):
             return self._refused(admitted)
 
-        temperature = body.get("temperature")
-        tool_choice = body.get("tool_choice")
-        request = ModelRequest(
-            model_key=model_key,
-            messages=tuple(messages),
-            tools=None if tools is None else tuple(tools),
-            tool_choice=tool_choice if isinstance(tool_choice, (str, Mapping)) else None,
-            temperature=float(temperature)
-            if isinstance(temperature, (int, float)) and not isinstance(temperature, bool)
-            else None,
-            max_tokens=max_tokens,
-        )
-        stream_options = body.get("stream_options")
         return await self._dispatch_and_settle(
-            admitted,
-            request,
-            stream=body.get("stream") is True,
-            include_usage=isinstance(stream_options, Mapping)
-            and stream_options.get("include_usage") is True,
+            admitted, request, stream=stream, include_usage=include_usage
         )
 
     async def _hold_before_boundary(self, grant: TokenGrant) -> None:
@@ -281,7 +298,8 @@ class ModelRoute:
         except BudgetDenied:
             outcome = GateDenied()
             result = _error(503, "budget_denied", "the global cost cap refused the call")
-        except Exception as exc:  # noqa: BLE001
+        except LLMClientError as exc:
+            # The provider refused or failed the request, which is not billed.
             outcome = Failed()
             log.warning(
                 "dev_broker_dispatch_failed",
@@ -292,6 +310,19 @@ class ModelRoute:
                 error=str(exc),
             )
             result = _error(502, "provider_error", "the model provider returned an error")
+        except Exception as exc:  # noqa: BLE001
+            # Any other error may come after the provider answered and billed: keep the worst
+            # case and stop the job, as for a cost that cannot be computed (D5.8).
+            outcome = CostUnknown()
+            log.error(
+                "dev_broker_dispatch_error_after_send",
+                job_id=str(admitted.job_id),
+                call_id=str(admitted.call_id),
+                trace_id=admitted.trace_id.hex,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            result = _error(502, "broker_error", "the broker could not complete the call")
         else:
             outcome = outcome_of(response)
             result = RouteResult(
@@ -368,7 +399,10 @@ def completion_body(
     }
     if tool_calls:
         message["tool_calls"] = tool_calls
-    finish_reason = response.get("finish_reason") or ("tool_calls" if tool_calls else "stop")
+    finish_reason = response.get("finish_reason") or "stop"
+    if tool_calls and finish_reason == "stop":
+        # An OpenAI-compatible client runs the tools only on `tool_calls`.
+        finish_reason = "tool_calls"
     return {
         "id": f"chatcmpl-{admitted.call_id.hex}",
         "object": "chat.completion",

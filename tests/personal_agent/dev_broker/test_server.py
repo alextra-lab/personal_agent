@@ -138,3 +138,34 @@ class TestApps:
                 opencode_port=4096,
                 clock=object(),  # type: ignore[arg-type]
             )
+
+
+class TestReconciler:
+    @pytest.mark.asyncio
+    async def test_sweeps_at_once_and_survives_a_failed_sweep(self) -> None:
+        import asyncio
+        from datetime import datetime, timezone
+
+        from personal_agent.dev_broker.server import reconcile_forever
+
+        from .fakes import FakeClock
+
+        calls: list[float] = []
+
+        class _Ledger:
+            async def settle_stale(self, *, now: datetime, older_than_seconds: float) -> int:
+                calls.append(older_than_seconds)
+                if len(calls) == 1:
+                    raise RuntimeError("database down")
+                if len(calls) == 3:
+                    raise asyncio.CancelledError
+                return 2
+
+        with pytest.raises(asyncio.CancelledError):
+            await reconcile_forever(
+                _Ledger(),  # type: ignore[arg-type]
+                FakeClock(datetime(2026, 11, 7, tzinfo=timezone.utc)),
+                older_than_seconds=210,
+                interval_seconds=60,
+            )
+        assert calls == [210, 210, 210]

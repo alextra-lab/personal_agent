@@ -25,7 +25,7 @@ import psutil  # type: ignore[import-untyped]
 import structlog
 import uvicorn
 
-from personal_agent.dev_broker.clock import SystemClock
+from personal_agent.dev_broker.clock import Clock, SystemClock
 from personal_agent.dev_broker.config import BrokerConfig, load_broker_config
 from personal_agent.dev_broker.dispatch import LiteLLMDispatcher
 from personal_agent.dev_broker.ledger import SpendLedger
@@ -133,6 +133,39 @@ def check_egress_guard(guard: DomainGuard, provider_url: str) -> None:
         raise BrokerStartupError(f"the egress guard allows more than the provider: {allowed}")
 
 
+#: Seconds past the call limit after which a ``reserved`` call is stale, and the sweep interval.
+STALE_MARGIN_SECONDS = 60.0
+SWEEP_INTERVAL_SECONDS = 60.0
+
+
+async def reconcile_forever(
+    ledger: SpendLedger, clock: Clock, *, older_than_seconds: float, interval_seconds: float
+) -> None:
+    """Settle stale reservations at once, then on every interval, until cancelled.
+
+    Args:
+        ledger: The spend ledger.
+        clock: The time source.
+        older_than_seconds: The age past which a ``reserved`` call is stale.
+        interval_seconds: Time between sweeps.
+    """
+    while True:
+        try:
+            swept = await ledger.settle_stale(
+                now=clock.now(), older_than_seconds=older_than_seconds
+            )
+            if swept:
+                log.warning("dev_broker_stale_reservations_settled", count=swept, trace_id=None)
+        except Exception as exc:  # noqa: BLE001 — a failed sweep retries at the next interval
+            log.error(
+                "dev_broker_stale_sweep_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                trace_id=None,
+            )
+        await clock.sleep(interval_seconds)
+
+
 async def run(config: BrokerConfig) -> None:
     """Start the broker and serve until a signal stops it.
 
@@ -229,9 +262,18 @@ async def run(config: BrokerConfig) -> None:
         models=list(config.models),
         trace_id=None,
     )
+    sweeper = asyncio.create_task(
+        reconcile_forever(
+            ledger,
+            clock,
+            older_than_seconds=config.call_timeout_seconds + STALE_MARGIN_SECONDS,
+            interval_seconds=SWEEP_INTERVAL_SECONDS,
+        )
+    )
     try:
         await asyncio.gather(*(server.serve() for server in servers))
     finally:
+        sweeper.cancel()
         await pool.close()
         await cost_tracker.disconnect()
         await gate.disconnect()

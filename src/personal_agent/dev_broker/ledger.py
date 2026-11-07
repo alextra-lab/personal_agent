@@ -410,6 +410,49 @@ class SpendLedger:
             stop_reason=stop_reason,
         )
 
+    async def settle_stale(self, *, now: datetime, older_than_seconds: float) -> int:
+        """Settle every call still ``reserved`` after ``older_than_seconds``, keeping the worst case.
+
+        A live call settles within the call limit, so an older reservation belongs to a settle
+        that failed or to a broker that stopped mid-call. It is settled as ``Cancelled``: the worst
+        case stays spent and the reservation is released. A settle that races this one is safe,
+        because both take the call row's lock and only a ``reserved`` row changes.
+
+        Args:
+            now: The current instant.
+            older_than_seconds: The age past which a reservation is stale.
+
+        Returns:
+            The number of calls settled.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT c.call_id, c.job_id, c.reserved_usd, t.trace_id, t.session_id
+              FROM dev_job_calls c JOIN dev_job_tokens t ON t.job_id = c.job_id
+             WHERE c.status = 'reserved'
+               AND c.created_at < $1::timestamptz - make_interval(secs => $2::float8)
+            """,
+            now,
+            older_than_seconds,
+        )
+        for row in rows:
+            admitted = Admitted(
+                row["call_id"],
+                row["job_id"],
+                row["trace_id"],
+                row["session_id"],
+                row["reserved_usd"],
+            )
+            log.warning(
+                "dev_broker_stale_reservation",
+                job_id=str(admitted.job_id),
+                call_id=str(admitted.call_id),
+                trace_id=admitted.trace_id.hex,
+                reserved_usd=float(admitted.reserved_usd),
+            )
+            await self.settle(admitted, Cancelled(), now=now)
+        return len(rows)
+
     @staticmethod
     def _resolve(
         admitted: Admitted, outcome: Outcome

@@ -29,7 +29,7 @@ from personal_agent.dev_broker.ledger import (
     TimedOut,
 )
 from personal_agent.dev_broker.tokens import hash_token
-from personal_agent.llm_client.types import LLMResponse
+from personal_agent.llm_client.types import LLMClientError, LLMResponse
 from personal_agent.telemetry.trace import TraceContext
 
 from .fakes import FakeClock, FakeDispatcher, FakeLedger, llm_response
@@ -116,6 +116,17 @@ class TestRequestValidation:
     async def test_a_body_that_is_not_json_is_400(self, setup: _Setup) -> None:
         response = await _post(setup, b"not json")
         assert response.status_code == 400
+
+    @pytest.mark.parametrize("literal", ["1" + "0" * 400, "1e999"])
+    async def test_an_unusable_temperature_is_400_before_any_reserve(
+        self, setup: _Setup, literal: str
+    ) -> None:
+        """A value that fails to convert must fail before the reserve, never after it."""
+        raw = json.dumps(_body())[:-1] + f', "temperature": {literal}}}'
+        response = await _post(setup, raw.encode())
+        assert response.status_code == 400
+        assert setup.ledger.reserved == []
+        assert setup.ledger.settled == []
 
     async def test_messages_must_be_a_list(self, setup: _Setup) -> None:
         response = await _post(setup, {"model": _MODEL, "messages": "hi"})
@@ -211,6 +222,16 @@ class TestDispatch:
         ]
         assert data["choices"][0]["finish_reason"] == "tool_calls"
 
+    async def test_tool_calls_with_stop_report_tool_calls(self) -> None:
+        call = {"id": "c1", "name": "write", "arguments": "{}"}
+
+        async def handler(_r: ModelRequest, _t: TraceContext) -> LLMResponse:
+            return llm_response(content="", tool_calls=[call], finish_reason="stop")
+
+        setup = _Setup(dispatcher=FakeDispatcher(handler))
+        data = (await _post(setup, _body())).json()
+        assert data["choices"][0]["finish_reason"] == "tool_calls"
+
     @pytest.mark.parametrize(
         "response",
         [
@@ -268,13 +289,24 @@ class TestFailures:
 
     async def test_a_provider_error_releases_the_reservation(self) -> None:
         async def fail(_r: ModelRequest, _t: TraceContext) -> LLMResponse:
-            raise RuntimeError("provider 500")
+            raise LLMClientError("LiteLLM call failed: provider 500")
 
         setup = _Setup(dispatcher=FakeDispatcher(fail))
         response = await _post(setup, _body())
         assert response.status_code == 502
         assert "provider 500" not in response.text
         assert [outcome for _, outcome in setup.ledger.settled] == [Failed()]
+
+    async def test_any_other_error_keeps_the_worst_case(self) -> None:
+        """An error after the send may follow a billed answer: keep the worst case, stop the job."""
+
+        async def fail(_r: ModelRequest, _t: TraceContext) -> LLMResponse:
+            raise KeyError("choices")
+
+        setup = _Setup(dispatcher=FakeDispatcher(fail))
+        response = await _post(setup, _body())
+        assert response.status_code == 502
+        assert [outcome for _, outcome in setup.ledger.settled] == [CostUnknown()]
 
     async def test_a_cancelled_request_keeps_the_worst_case(self) -> None:
         started = asyncio.Event()

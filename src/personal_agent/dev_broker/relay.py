@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import socket
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from ipaddress import IPv4Address, IPv4Network
 from typing import Protocol
@@ -27,7 +27,6 @@ import httpx
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from starlette.background import BackgroundTask
 
 from personal_agent.dev_agent.container_spec import agent_container_name
 from personal_agent.dev_broker.clock import Clock
@@ -179,10 +178,9 @@ def build_control_app(
             for name in _REQUEST_HEADERS
             if (value := request.headers.get(name)) is not None
         }
+        body = await request.body()
         upstream = upstream_factory(addresses[0])
-        outbound = upstream.build_request(
-            request.method, url, headers=headers, content=await request.body()
-        )
+        outbound = upstream.build_request(request.method, url, headers=headers, content=body)
         try:
             answer = await upstream.send(outbound, stream=True, follow_redirects=False)
         except httpx.HTTPError as exc:
@@ -195,9 +193,15 @@ def build_control_app(
             )
             return _denied(502, "upstream_unreachable")
 
-        async def close() -> None:
-            await answer.aclose()
-            await upstream.aclose()
+        async def relayed() -> AsyncIterator[bytes]:
+            # Closes the answer and the client however the stream ends: done, an upstream
+            # error mid-stream, or the gateway going away.
+            try:
+                async for chunk in answer.aiter_bytes():
+                    yield chunk
+            finally:
+                await answer.aclose()
+                await upstream.aclose()
 
         log.info(
             "dev_broker_relayed",
@@ -207,14 +211,13 @@ def build_control_app(
             status=answer.status_code,
         )
         return StreamingResponse(
-            answer.aiter_bytes(),
+            relayed(),
             status_code=answer.status_code,
             headers={
                 name: value
                 for name in _RESPONSE_HEADERS
                 if (value := answer.headers.get(name)) is not None
             },
-            background=BackgroundTask(close),
         )
 
     return app

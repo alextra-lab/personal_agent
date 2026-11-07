@@ -16,18 +16,29 @@
 * :meth:`GitHubRepoPipeline.advance_main` fast-forwards ``main`` to the result after the publish,
   only when the result descends from it (D8.9).
 
-Every GitHub write, every container run and every write of a repo fact goes through ``fence.run``.
-The publish check and delivery are FRE-1686.
+* :meth:`GitHubRepoPipeline.check` runs the publish check on the result commit and stores its
+  result on the job (D7.3–D7.6, FRE-1686).
+
+* :meth:`GitHubRepoPipeline.deliver` publishes ``dist/index.html`` of the result commit through
+  ``artifact_write_executor``, with the result artifact id that it preallocated on the job, so a
+  retry after a crash publishes once (D9.8–D9.10, FRE-1686).
+
+Every GitHub write, every container run, every write of a job fact and the publish go through
+``fence.run``. The check and delivery read the page from a clean mirror, never from the workspace.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+import html as html_lib
+import json
+import re
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg  # type: ignore[import-untyped]
 import structlog
@@ -36,8 +47,26 @@ from personal_agent.dev_agent.git_mirror import MAX_PAGE_BYTES, GitMirror
 from personal_agent.dev_agent.github_app import GitRemote, RepoHost, repo_name
 from personal_agent.dev_agent.jobs import DevJob, JobStore
 from personal_agent.dev_agent.launcher import AgentLauncher
+from personal_agent.dev_agent.publish_check import (
+    MAX_TEST_BYTES,
+    MAX_TEST_FILES,
+    RUN_SECONDS,
+    CheckLauncher,
+    CheckMode,
+    CheckResult,
+    CheckSetup,
+    CheckStep,
+    check_inputs_tar,
+    check_result,
+    parse_check_output,
+)
 from personal_agent.dev_agent.supervisor import Fence, PreparedJob
-from personal_agent.exceptions import DevAgentLaunchError, DevAgentRepoError, DevJobRefusedError
+from personal_agent.exceptions import (
+    DevAgentLaunchError,
+    DevAgentRepoError,
+    DevAgentToolkitError,
+    DevJobRefusedError,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -47,7 +76,13 @@ DEFAULT_TEMPLATE_DIR: Path = (
 )
 MAIN = "refs/heads/main"
 
+#: The content type of a published page (the artifact path's HTML type).
+PAGE_CONTENT_TYPE = "text/html; charset=utf-8"
+_TITLE = re.compile(rb"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
 MirrorFactory = Callable[[], AbstractAsyncContextManager[GitMirror]]
+#: Tells the job's session that its page is published. Arguments: the job, the write result.
+ArtifactNotifier = Callable[[DevJob, Mapping[str, object]], Awaitable[None]]
 
 
 class PageReader(Protocol):
@@ -91,8 +126,60 @@ def _open_mirror() -> AbstractAsyncContextManager[GitMirror]:
     return GitMirror.open()
 
 
+@dataclass(frozen=True)
+class _PublishContext:
+    """The identity that ``artifact_write_executor`` reads from its ``ctx`` (D9.9)."""
+
+    user_id: UUID
+    session_id: UUID
+    trace_id: str
+
+
+def page_title(page: bytes) -> str | None:
+    """Return the text of the page's ``<title>``, for the artifact card, or ``None``.
+
+    Args:
+        page: The page bytes.
+
+    Returns:
+        The title, with entities decoded and spaces collapsed, at most 200 characters.
+    """
+    found = _TITLE.search(page[:65536])
+    if found is None:
+        return None
+    text = " ".join(html_lib.unescape(found.group(1).decode("utf-8", "replace")).split())
+    return text[:200] or None
+
+
+async def push_artifact_event(job: DevJob, written: Mapping[str, object]) -> None:
+    """Push the published page to the job's session as a ``dev_job_artifact`` state event.
+
+    The event is durable in ``session_events``, so a client that connects later replays it. The
+    job card (FRE-1688) renders it.
+
+    Args:
+        job: The job.
+        written: The result of ``artifact_write_executor``.
+    """
+    # Imported here: the transport imports the service layer, which the dev-agent modules do not
+    # need at import time.
+    from personal_agent.transport.agui.transport import _push_event
+    from personal_agent.transport.events import StateUpdateEvent
+
+    value = {
+        "job_id": str(job.id),
+        "artifact_id": written.get("artifact_id"),
+        "public_url": written.get("public_url"),
+        "title": written.get("title"),
+    }
+    session = str(job.session_id)
+    await _push_event(
+        StateUpdateEvent(key="dev_job_artifact", value=value, session_id=session), session
+    )
+
+
 class GitHubRepoPipeline:
-    """The FRE-1685 steps of :class:`~personal_agent.dev_agent.supervisor.JobResultPipeline`."""
+    """The steps of :class:`~personal_agent.dev_agent.supervisor.JobResultPipeline` (FRE-1685, FRE-1686)."""
 
     def __init__(
         self,
@@ -101,6 +188,8 @@ class GitHubRepoPipeline:
         launcher: AgentLauncher,
         host: RepoHost,
         pages: PageReader | None,
+        checker: CheckLauncher | None = None,
+        notify: ArtifactNotifier = push_artifact_event,
         template_dir: Path = DEFAULT_TEMPLATE_DIR,
         mirror: MirrorFactory = _open_mirror,
     ) -> None:
@@ -111,6 +200,8 @@ class GitHubRepoPipeline:
             launcher: Runs the handoff container.
             host: The repo host (the GitHub App).
             pages: Reads artifact bytes from R2. ``None`` refuses a fix of a non-agent page.
+            checker: Runs the check containers. ``None`` ends every check ``check_unavailable``.
+            notify: Tells the session that the page is published. A failure is logged only.
             template_dir: The page template.
             mirror: Opens a clean mirror. Tests pass a recording one.
         """
@@ -118,6 +209,8 @@ class GitHubRepoPipeline:
         self._launcher = launcher
         self._host = host
         self._pages = pages
+        self._checker = checker
+        self._notify = notify
         self._template = template_dir
         self._mirror = mirror
 
@@ -296,22 +389,215 @@ class GitHubRepoPipeline:
         )
         return head
 
-    async def check(self, job: DevJob, result_commit: str, fence: Fence) -> bool:
-        """The publish check (D7.3–D7.6) arrives with FRE-1686.
+    async def _result_files(
+        self, job: DevJob, commit: str, *, with_tests: bool
+    ) -> tuple[bytes, dict[str, bytes]]:
+        """Read the page, and the tests if asked, at ``commit`` from a clean mirror.
+
+        The job branch on GitHub must still be at ``commit``: the bytes are those of the result
+        that the handoff pushed, never of the workspace (D9.9).
 
         Raises:
-            NotImplementedError: Always. The supervisor ends the job ``failed``. It is off by
-                default until FRE-1686 lands.
+            DevJobRefusedError: ``no_result``, ``result_moved`` or ``result_unreadable``.
         """
-        raise NotImplementedError("the publish check arrives with FRE-1686")
+        if job.repo is None:
+            raise DevJobRefusedError("no_result")
+        remote = await self._host.remote(job.repo)
+        async with self._mirror() as mirror:
+            head = await mirror.fetch(remote, f"refs/heads/{job_branch(job.id)}")
+            if head != commit:
+                raise DevJobRefusedError("result_moved")
+            try:
+                page = await mirror.read_page(commit)
+                tests = (
+                    await mirror.files_under(
+                        commit, "tests", max_files=MAX_TEST_FILES, max_bytes=MAX_TEST_BYTES
+                    )
+                    if with_tests
+                    else {}
+                )
+            except DevAgentRepoError as exc:
+                log.warning(
+                    "dev_job_result_unreadable",
+                    job_id=str(job.id),
+                    error=str(exc)[:300],
+                    trace_id=job.trace_id.hex,
+                )
+                raise DevJobRefusedError("result_unreadable") from exc
+        return page, tests
+
+    async def check(self, job: DevJob, result_commit: str, fence: Fence) -> bool:
+        """Run the publish check on the result and store its result on the job (D7.3–D7.5).
+
+        Three fenced runs: prepare (the toolkit check, the image id, the input volumes), the
+        ``page`` run and the ``tests`` run, each within its own time limit. The check result is
+        stored in a fourth fenced action. The check containers and volumes are removed after,
+        and the end-state cleanup removes anything that is left, by label.
+
+        Args:
+            job: The job, with ``repo``.
+            result_commit: The result commit.
+            fence: The fence of the job's lease.
+
+        Returns:
+            Whether all three steps passed. A fail ends the job ``failed_check``.
+
+        Raises:
+            DevJobRefusedError: ``check_unavailable`` when the check could not run (no checker, a
+                Docker or toolkit failure, or the fence's action limit). Then the page was not
+                judged, and the job ends ``failed``.
+        """
+        if self._checker is None:
+            raise DevJobRefusedError("check_unavailable")
+        checker = self._checker
+        page, tests = await self._result_files(job, result_commit, with_tests=True)
+        try:
+            page.decode("utf-8")
+            page_is_utf8 = True
+        except UnicodeDecodeError:
+            page_is_utf8 = False
+        inputs = check_inputs_tar(page, tests)
+
+        async def prepare(conn: asyncpg.Connection) -> CheckSetup:
+            del conn
+            return await checker.prepare_check(job.id, inputs)
+
+        def run_in(
+            setup: CheckSetup, mode: CheckMode
+        ) -> Callable[[asyncpg.Connection], Awaitable[tuple[list[CheckStep], str | None]]]:
+            async def run(conn: asyncpg.Connection) -> tuple[list[CheckStep], str | None]:
+                del conn
+                output = await checker.run_check(job.id, setup, mode, RUN_SECONDS[mode])
+                return parse_check_output(mode, output)
+
+            return run
+
+        try:
+            setup = await fence.run("check_prepare", prepare)
+            page_steps, manifest = await fence.run("check_page", run_in(setup, "page"))
+            tests_steps, _ = await fence.run("check_tests", run_in(setup, "tests"))
+        except (DevAgentLaunchError, DevAgentToolkitError, TimeoutError) as exc:
+            log.warning(
+                "dev_job_check_unavailable",
+                job_id=str(job.id),
+                error_type=type(exc).__name__,
+                error=str(exc)[:300],
+                trace_id=job.trace_id.hex,
+            )
+            raise DevJobRefusedError("check_unavailable") from exc
+        finally:
+            await self._remove_check(job, fence)
+        result = check_result(setup, page_steps, tests_steps, manifest, page_is_utf8=page_is_utf8)
+        await self._record_check(job, fence, result)
+        return result.passed
+
+    async def _remove_check(self, job: DevJob, fence: Fence) -> None:
+        """Remove the check's containers and volumes. A failure is left to the end-state cleanup."""
+        if self._checker is None:
+            return
+        checker = self._checker
+
+        async def remove(conn: asyncpg.Connection) -> None:
+            del conn
+            await checker.remove_check(job.id)
+
+        try:
+            await asyncio.shield(fence.run("check_cleanup", remove))
+        except Exception as exc:  # noqa: BLE001 — the end-state cleanup removes it by label
+            log.warning(
+                "dev_job_check_cleanup_failed",
+                job_id=str(job.id),
+                error_type=type(exc).__name__,
+                trace_id=job.trace_id.hex,
+            )
+
+    async def _record_check(self, job: DevJob, fence: Fence, result: CheckResult) -> None:
+        stored = json.dumps(result.to_json())
+
+        async def record(conn: asyncpg.Connection) -> None:
+            await JobStore.record(conn, fence.lease, check_result=stored)
+
+        await fence.run("record_check", record)
+        log.info(
+            "dev_job_checked",
+            job_id=str(job.id),
+            passed=result.passed,
+            steps={s.name: s.passed for s in result.steps},
+            image_digest=result.image_digest,
+            toolkit_digest=result.toolkit_digest,
+            csp_manifest_digest=result.csp_manifest_digest,
+            trace_id=job.trace_id.hex,
+        )
 
     async def deliver(self, job: DevJob, fence: Fence) -> None:
-        """Delivery (D9.8–D9.10) arrives with FRE-1686.
+        """Publish the result page once, also across a crash and a resume (D9.8–D9.10).
+
+        1. A fenced action preallocates the result artifact id on the job, or reads the one that
+           an earlier attempt stored.
+        2. The page is read at the result commit from a clean mirror.
+        3. A fenced action publishes it through ``artifact_write_executor`` with that id, the job's
+           user and session, and the repo name as the slug. The R2 key derives from the id, and
+           the row insert does nothing when the row exists, so a retry leaves one object and one
+           row.
+        4. The session gets a ``dev_job_artifact`` event. A failure there is logged only.
+
+        Args:
+            job: The job, with ``repo`` and ``result_commit``.
+            fence: The fence of the job's lease.
 
         Raises:
-            NotImplementedError: Always.
+            DevJobRefusedError: ``no_result``, ``result_moved``, ``result_unreadable`` or
+                ``page_not_utf8``.
         """
-        raise NotImplementedError("delivery arrives with FRE-1686")
+        # Imported here: the artifact tools import the service layer and the embedder.
+        from personal_agent.tools.artifact_tools import artifact_write_executor
+
+        if job.repo is None or job.result_commit is None:
+            raise DevJobRefusedError("no_result")
+        slug = job.repo
+
+        async def preallocate(conn: asyncpg.Connection) -> UUID:
+            return await JobStore.preallocate_artifact(conn, fence.lease, uuid4())
+
+        artifact_id = await fence.run("preallocate_artifact", preallocate)
+        page, _ = await self._result_files(job, job.result_commit, with_tests=False)
+        try:
+            content = page.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise DevJobRefusedError("page_not_utf8") from exc
+        ctx = _PublishContext(
+            user_id=job.user_id, session_id=job.session_id, trace_id=job.trace_id.hex
+        )
+
+        async def publish(conn: asyncpg.Connection) -> dict[str, object]:
+            del conn
+            return await artifact_write_executor(
+                slug=slug,
+                content_type=PAGE_CONTENT_TYPE,
+                content=content,
+                title=page_title(page),
+                ctx=ctx,
+                _commit_path="dev_agent",
+                _artifact_id=artifact_id,
+            )
+
+        written = await fence.run("publish_artifact", publish)
+        log.info(
+            "dev_job_published",
+            job_id=str(job.id),
+            artifact_id=str(artifact_id),
+            result_commit=job.result_commit,
+            trace_id=job.trace_id.hex,
+        )
+        try:
+            await self._notify(job, written)
+        except Exception as exc:  # noqa: BLE001 — the page is published; the event is a notice
+            log.warning(
+                "dev_job_artifact_event_failed",
+                job_id=str(job.id),
+                error_type=type(exc).__name__,
+                trace_id=job.trace_id.hex,
+            )
 
     async def advance_main(self, job: DevJob, fence: Fence) -> None:
         """Fast-forward ``main`` to the result, only if the result descends from it (D8.9).

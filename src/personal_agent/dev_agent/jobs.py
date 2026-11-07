@@ -503,8 +503,9 @@ class JobStore:
         base_commit: str | None = None,
         result_commit: str | None = None,
         main_moved: bool | None = None,
+        check_result: str | None = None,
     ) -> None:
-        """Store repo facts on the job. Call it only inside a fence, with the fence's connection.
+        """Store repo facts and the check result on the job. Call it only inside a fence, with the fence's connection.
 
         It runs in the same transaction as the fenced action, so a fact is stored only when its
         action returned (FRE-1685). A ``None`` argument leaves its column as it is.
@@ -516,6 +517,7 @@ class JobStore:
             base_commit: The commit that the agent starts from (D8.4).
             result_commit: The head that the gateway pushed to ``job/<job id>`` (D8.8.4).
             main_moved: Whether ``main`` is at the result commit (D8.9).
+            check_result: The publish check result as JSON text (D7.5).
 
         Raises:
             LeaseLostError: If the row did not change.
@@ -526,7 +528,8 @@ class JobStore:
                SET repo = COALESCE($4, repo),
                    base_commit = COALESCE($5, base_commit),
                    result_commit = COALESCE($6, result_commit),
-                   main_moved = COALESCE($7, main_moved)
+                   main_moved = COALESCE($7, main_moved),
+                   check_result = COALESCE($8::jsonb, check_result)
              WHERE {_OWN_ROW}
             RETURNING id
             """,
@@ -537,9 +540,44 @@ class JobStore:
             base_commit,
             result_commit,
             main_moved,
+            check_result,
         )
         if done is None:
             raise LeaseLostError(f"lease {lease.epoch} on job {lease.job_id} is not held")
+
+    @staticmethod
+    async def preallocate_artifact(conn: asyncpg.Connection, lease: Lease, candidate: UUID) -> UUID:
+        """Return the job's result artifact id, and store ``candidate`` if it has none (D9.8).
+
+        Call it only inside a fence. A retry after a crash gets the id of the first call, so the
+        R2 key and the ``artifacts`` row stay the same.
+
+        Args:
+            conn: The fenced transaction's connection.
+            lease: The lease of the fence.
+            candidate: A new id, used only when the job has none yet.
+
+        Returns:
+            The job's result artifact id.
+
+        Raises:
+            LeaseLostError: If the row did not change.
+        """
+        artifact_id = await conn.fetchval(
+            f"""
+            UPDATE dev_jobs
+               SET result_artifact_id = COALESCE(result_artifact_id, $4)
+             WHERE {_OWN_ROW}
+            RETURNING result_artifact_id
+            """,
+            lease.job_id,
+            lease.epoch,
+            lease.owner,
+            candidate,
+        )
+        if artifact_id is None:
+            raise LeaseLostError(f"lease {lease.epoch} on job {lease.job_id} is not held")
+        return UUID(str(artifact_id))
 
     async def seconds_left(self, job_id: UUID, limit_seconds: float) -> float:
         """Return the time left before the job's limit, from Postgres time (D9.7).

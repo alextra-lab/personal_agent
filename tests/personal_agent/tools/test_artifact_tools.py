@@ -101,6 +101,9 @@ class _FakeStore:
         self.get_calls.append(r2_key)
         return self._payloads.get(r2_key, b"")
 
+    async def delete(self, r2_key: str, *, trace_id: str | None = None) -> None:
+        self._payloads.pop(r2_key, None)
+
 
 class _FakeSession:
     def __init__(self) -> None:
@@ -2907,3 +2910,106 @@ async def test_envelope_probe_skipped_without_public_url(
     )
 
     artifact_tools.probe_served_envelope.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# artifact_write — a preallocated id (ADR-0159 D9.8, FRE-1686)
+# ---------------------------------------------------------------------------
+
+
+def _insert_sql(session: _FakeSession) -> str:
+    return next(sql for sql, _ in session.calls if "INSERT INTO artifacts" in sql)
+
+
+@pytest.mark.asyncio
+async def test_a_preallocated_id_fixes_the_r2_key_across_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two writes with one preallocated id put the same key and return that id."""
+    store = _FakeStore()
+    session = _install_fakes(monkeypatch, store=store)
+    artifact_id = uuid4()
+    ctx = _ctx(session_id=uuid4())
+
+    outs = [
+        await artifact_tools.artifact_write_executor(
+            slug="page-1234abcd",
+            content_type="text/html; charset=utf-8",
+            content="<h1>x</h1>",
+            ctx=ctx,
+            _artifact_id=artifact_id,
+        )
+        for _ in range(2)
+    ]
+
+    assert [o["artifact_id"] for o in outs] == [str(artifact_id)] * 2
+    keys = [c["r2_key"] for c in store.put_calls]
+    assert len(set(keys)) == 1 and str(artifact_id) in keys[0]
+    assert "ON CONFLICT (id) DO NOTHING" in _insert_sql(session)
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_with_the_same_row_is_a_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The row exists already with the same owner and key: the write returns that id."""
+    store = _FakeStore()
+    session = _install_fakes(monkeypatch, store=store)
+    artifact_id, ctx = uuid4(), _ctx(session_id=uuid4())
+    key = artifact_tools.build_r2_key(
+        type="artifact",
+        user_id=ctx.user_id,
+        session_id=ctx.session_id,
+        artifact_id=artifact_id,
+        slug="page-1",
+        ext="html",
+    )
+    session.enqueue(MagicMock(first=MagicMock(return_value=None)))  # the insert did nothing
+    session.enqueue(
+        MagicMock(first=MagicMock(return_value=SimpleNamespace(user_id=ctx.user_id, r2_key=key)))
+    )
+
+    out = await artifact_tools.artifact_write_executor(
+        slug="page-1",
+        content_type="text/html; charset=utf-8",
+        content="<h1>x</h1>",
+        ctx=ctx,
+        _artifact_id=artifact_id,
+    )
+
+    assert out["artifact_id"] == str(artifact_id)
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_with_another_row_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The id belongs to a row of another user or key: the write raises id_conflict."""
+    store = _FakeStore()
+    session = _install_fakes(monkeypatch, store=store)
+    session.enqueue(MagicMock(first=MagicMock(return_value=None)))
+    session.enqueue(
+        MagicMock(first=MagicMock(return_value=SimpleNamespace(user_id=uuid4(), r2_key="other")))
+    )
+
+    with pytest.raises(artifact_tools.ArtifactWriteError) as caught:
+        await artifact_tools.artifact_write_executor(
+            slug="page-1",
+            content_type="text/html; charset=utf-8",
+            content="<h1>x</h1>",
+            ctx=_ctx(session_id=uuid4()),
+            _artifact_id=uuid4(),
+        )
+    assert caught.value.code == "id_conflict"
+    assert store._payloads == {}, "the refused write leaves no orphan object"
+
+
+@pytest.mark.asyncio
+async def test_no_preallocated_id_keeps_a_new_id_and_the_plain_insert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without ``_artifact_id`` the write is as before: a new id, no conflict clause."""
+    store = _FakeStore()
+    session = _install_fakes(monkeypatch, store=store)
+
+    await artifact_tools.artifact_write_executor(
+        slug="q3", content_type="text/html; charset=utf-8", content="<h1>x</h1>", ctx=_ctx()
+    )
+
+    assert "ON CONFLICT" not in _insert_sql(session)

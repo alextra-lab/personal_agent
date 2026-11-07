@@ -319,11 +319,11 @@ class NoResultPipeline:
 
     async def check(self, job: DevJob, result_commit: str, fence: Fence) -> bool:
         """Never reached without a handoff."""
-        raise NotImplementedError("the publish check arrives with FRE-1686")
+        raise NotImplementedError("NoResultPipeline has no result to check")
 
     async def deliver(self, job: DevJob, fence: Fence) -> None:
         """Never reached without a check."""
-        raise NotImplementedError("delivery arrives with FRE-1686")
+        raise NotImplementedError("NoResultPipeline has no result to deliver")
 
     async def advance_main(self, job: DevJob, fence: Fence) -> None:
         """Never reached without a delivery."""
@@ -675,6 +675,15 @@ class JobSupervisor:
             await self._pipeline.deliver(job, fence)
         except LeaseLostError:
             raise
+        except DevJobRefusedError as refused:
+            log.warning(
+                "dev_job_delivery_refused",
+                job_id=str(job.id),
+                reason=refused.reason,
+                trace_id=job.trace_id.hex,
+            )
+            await self._end(job, fence, JobState.FAILED, refused.reason, revoked=True)
+            return
         except Exception as exc:  # noqa: BLE001 — a delivery error ends the job; a crash resumes it
             log.error(
                 "dev_job_delivery_failed",

@@ -19,6 +19,12 @@ COPY probe.py browser-smoke.mjs /opt/probe/
 COPY --from=csp csp-server.ts csp-serve.ts /opt/csp/
 COPY csp-manifest.json /opt/csp/csp-manifest.json
 
+# The publish check (ADR-0159 D7.3-D7.5; FRE-1686). The check container has no network, so the
+# image holds @playwright/test for the repo tests. Same version as the page template and the base.
+WORKDIR /opt/check
+RUN npm install --no-audit --no-fund --omit=dev @playwright/test@1.60.0 && npm cache clean --force
+COPY publish-check.mjs repo-tests.config.mjs /opt/check/
+
 # Mount points, so a named volume starts with the right owner.
 RUN mkdir -p /workspace /srv/artifact-lib /input/dist /input/tests \
     && chown 10001:10001 /workspace

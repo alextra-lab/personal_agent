@@ -214,3 +214,49 @@ ADR-0159 D8. The gateway holds the GitHub App key and is the only party that wri
    `uv run python scripts/verify_dev_agent_github.py` (with the same four variables) prints
    `"ok": true`. It creates one private `probe-…` repo, which stays.
 
+
+## The publish check and delivery (FRE-1686)
+
+ADR-0159 D7.3–D7.7 and D9.8–D9.10. `GitHubRepoPipeline.check` and `deliver`.
+
+### The check
+
+- The gateway reads `dist/index.html` and `tests/` at the result commit from a clean mirror, with
+  `cat-file` (never `git archive`, because `.gitattributes` can change archive bytes). Only
+  `dist/index.html` is served, because production publishes only that file.
+- Two input volumes (`seshat-dev-check-dist-<job>`, `seshat-dev-check-tests-<job>`) are filled
+  through a helper container that never starts. The check containers mount them read-only.
+- The check container runs twice, from the image **id**, with the `check` profile:
+  1. `page` (90 s): `publish-check.mjs page`. **Load**: zero console errors, page errors and CSP
+     violations. **Generic interaction**: every visible, enabled button, input, select, textarea
+     and `[role=button]`, operated with fixed values. An action that fails on such a control is a
+     fail. No model-written Node code runs in this container.
+  2. `tests` (200 s): the repo's Playwright tests under Seshat's `repo-tests.config.mjs`, with
+     `PAGE_URL` set. No test is a fail. The repo's own Playwright config is not used.
+  The repo tests are model code. In one container they could forge the result line of the first
+  run, so they get a container of their own.
+- The result (each step, the messages, the image id, the toolkit digest, the CSP manifest digest)
+  is stored in `dev_jobs.check_result`. A fail ends the job `failed_check` and publishes nothing.
+  A Docker or toolkit failure ends it `failed`/`check_unavailable`.
+- The known benign console error `Unrecognized Content-Security-Policy directive 'webrtc'` is
+  ignored.
+
+### Delivery
+
+- A fenced action preallocates `dev_jobs.result_artifact_id`, or reads the one that an earlier
+  attempt stored.
+- A fenced action publishes the page bytes of the result commit with `artifact_write_executor`,
+  with `_artifact_id` set, the job's user and session, and the repo name as the slug. The R2 key
+  derives from the id. The insert is `ON CONFLICT (id) DO NOTHING`. So a resumed delivery after a
+  crash leaves one R2 object and one `artifacts` row.
+- The session gets a `dev_job_artifact` state event (job id, artifact id, public URL, title). The
+  job card of FRE-1688 renders it.
+
+### Deploy (master)
+
+1. `make dev-agent-build`. The check image gets `publish-check.mjs`, `repo-tests.config.mjs` and
+   `@playwright/test` 1.60.0.
+2. Rebuild `seshat-gateway`. Leave the supervisor off. No migration: `check_result` and
+   `result_artifact_id` exist since `0039_dev_jobs.sql`.
+3. Check: `docker run --rm --network none seshat-dev-check:0.1 ls /opt/check` lists
+   `node_modules`, `publish-check.mjs` and `repo-tests.config.mjs`.

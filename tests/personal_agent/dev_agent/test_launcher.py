@@ -15,6 +15,7 @@ from personal_agent.dev_agent.container_spec import agent_container_name, load_p
 from personal_agent.dev_agent.launcher import (
     JOB_LABEL,
     OPENCODE_COMMAND,
+    SCOPE_LABEL,
     CommandResult,
     DockerLauncher,
     workspace_volume_name,
@@ -51,6 +52,7 @@ def _launcher(fake: FakeDocker) -> DockerLauncher:
         load_profiles().agent,
         network_name="seshat_dev-agent",
         toolkit_volume="toolkit",
+        scope="prod",
         runner=fake,
     )
 
@@ -70,6 +72,8 @@ class TestStart:
         create, env = fake.calls[2]
         assert create[create.index("--name") + 1] == agent_container_name(job)
         assert f"{JOB_LABEL}={job}" in create
+        assert f"{SCOPE_LABEL}=prod" in create
+        assert f"{SCOPE_LABEL}=prod" in fake.calls[1][0]
         assert create[create.index("--network") + 1] == "seshat_dev-agent"
         assert f"{workspace_volume_name(job)}:/workspace" in create
         assert "toolkit:/srv/artifact-lib:ro" in create
@@ -113,6 +117,7 @@ class TestRemove:
         listings = [argv for argv in argvs if argv[1] == "ps" or argv[1:3] == ["volume", "ls"]]
         assert len(listings) == 4
         assert all(f"label={JOB_LABEL}={job}" in argv for argv in listings)
+        assert all(f"label={SCOPE_LABEL}=prod" in argv for argv in listings)
 
     async def test_a_remaining_container_raises(self) -> None:
         job = uuid4()
@@ -125,7 +130,7 @@ class TestRemove:
             return CommandResult(0, "", "")
 
         launcher = DockerLauncher(
-            load_profiles().agent, network_name="n", toolkit_volume="t", runner=sticky
+            load_profiles().agent, network_name="n", toolkit_volume="t", scope="prod", runner=sticky
         )
         with pytest.raises(DevAgentLaunchError, match="still has"):
             await launcher.remove(job)
@@ -143,6 +148,10 @@ class TestLabels:
             return CommandResult(0, f"{a}\n{b}\n", "")
 
         launcher = DockerLauncher(
-            load_profiles().agent, network_name="n", toolkit_volume="t", runner=listing
+            load_profiles().agent,
+            network_name="n",
+            toolkit_volume="t",
+            scope="prod",
+            runner=listing,
         )
         assert await launcher.labelled_job_ids() == {a, b}

@@ -26,6 +26,8 @@ The page is done when it loads with zero console errors, zero page errors and ze
 
 `tests/` holds at least one Playwright test. Each test operates the page's controls and asserts their effect. A test that only loads the page is not enough. Seshat runs these tests before it publishes the page, with no network. A repo with no test fails.
 
+Seshat runs the tests with its own Playwright setup, not with this repo's: one worker, 30 seconds per test, files named `*.spec.mjs` or `*.test.mjs` in `tests/`. Open the page with `page.goto(process.env.PAGE_URL)`. Only `dist/index.html` and `/lib/` are served.
+
 Example:
 
 ```js

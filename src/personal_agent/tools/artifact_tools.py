@@ -63,6 +63,7 @@ ArtifactWriteCode = Literal[
     "invalid_base64",
     "too_large",
     "invalid_slug",
+    "id_conflict",
 ]
 ArtifactListCode = ArtifactSharedCode
 ArtifactReadCode = Literal[ArtifactSharedCode, "invalid_artifact_id", "not_found"]
@@ -421,6 +422,7 @@ async def artifact_write_executor(
     tags: list[str] | None = None,
     ctx: Any = None,
     _commit_path: str = "direct_write",
+    _artifact_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Write a human-facing artifact to R2 and record the Postgres row.
 
@@ -435,6 +437,11 @@ async def artifact_write_executor(
     at the edge and emits ``artifact_envelope_integrity`` (FRE-512, ADR-0089 D5)
     — never load-bearing.
 
+    ``_artifact_id`` is internal-only too: the dev-agent delivery passes the id that it
+    preallocated on the job (ADR-0159 D9.8). The R2 key derives from it, so a retry puts the
+    same key, and the row insert does nothing when the row exists already. A row with that id
+    but another owner or key is refused.
+
     Args:
         slug: Human-readable kebab-case handle (validated by build_r2_key).
         content_type: MIME type from ``_ALLOWED_CONTENT_TYPES``.
@@ -444,6 +451,8 @@ async def artifact_write_executor(
         tags: Optional list of free-form tags.
         ctx: Orchestrator ``ExecutionContext`` with ``user_id`` / ``session_id`` /
             ``trace_id``.
+        _commit_path: The commit-path label (internal).
+        _artifact_id: A preallocated artifact id (internal), or ``None`` for a new one.
 
     Returns:
         ``{"artifact_id", "public_url", "slug", "content_type", "size_bytes",
@@ -451,7 +460,8 @@ async def artifact_write_executor(
 
     Raises:
         ArtifactWriteError: On an unconfigured substrate, disallowed content_type,
-            empty/oversized content, invalid slug, or base64 decode failure.
+            empty/oversized content, invalid slug, base64 decode failure, or a
+            preallocated id that another row holds (``id_conflict``).
         ArtifactError: On missing identity.
     """
     store = get_artifact_store()
@@ -488,7 +498,7 @@ async def artifact_write_executor(
     session_id = _resolve_session_id(ctx)
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
 
-    artifact_id = uuid4()
+    artifact_id = _artifact_id or uuid4()
     ext = _EXT_BY_CONTENT_TYPE[content_type]
     try:
         r2_key = build_r2_key(
@@ -540,10 +550,12 @@ async def artifact_write_executor(
         trace_id=trace_id,
     )
 
+    # A preallocated id makes the insert a no-op on a retry (ADR-0159 D9.8).
+    on_conflict = "ON CONFLICT (id) DO NOTHING RETURNING id" if _artifact_id else ""
     async with AsyncSessionLocal() as session:
-        await session.execute(
+        inserted = await session.execute(
             text(
-                """
+                f"""
                 INSERT INTO artifacts (
                     id, user_id, session_id, type, slug, title, summary,
                     content_type, size_bytes, r2_key, tags, embedding,
@@ -555,6 +567,7 @@ async def artifact_write_executor(
                     CAST(:embedding AS vector),
                     'agent', NOW()
                 )
+                {on_conflict}
                 """
             ),
             {
@@ -571,6 +584,24 @@ async def artifact_write_executor(
                 "embedding": emb_literal,
             },
         )
+        if _artifact_id is not None and inserted.first() is None:
+            existing = (
+                await session.execute(
+                    text("SELECT user_id, r2_key FROM artifacts WHERE id = :id"),
+                    {"id": artifact_id},
+                )
+            ).first()
+            if existing is None or existing.user_id != user_id or existing.r2_key != r2_key:
+                # The key is ours, not the other row's: remove what this call put, so the
+                # refusal leaves no orphan object.
+                await store.delete(r2_key, trace_id=trace_id)
+                raise ArtifactWriteError(
+                    "id_conflict",
+                    f"artifact id {artifact_id} belongs to another artifact.",
+                    retryable=False,
+                    next_action="Do not retry with this id.",
+                )
+            log.info("artifact_write_row_exists", trace_id=trace_id, artifact_id=str(artifact_id))
         await session.commit()
 
     log.info(

@@ -319,11 +319,11 @@ class NoResultPipeline:
 
     async def check(self, job: DevJob, result_commit: str, fence: Fence) -> bool:
         """Never reached without a handoff."""
-        raise NotImplementedError("the publish check arrives with FRE-1686")
+        raise NotImplementedError("NoResultPipeline has no result to check")
 
     async def deliver(self, job: DevJob, fence: Fence) -> None:
         """Never reached without a check."""
-        raise NotImplementedError("delivery arrives with FRE-1686")
+        raise NotImplementedError("NoResultPipeline has no result to deliver")
 
     async def advance_main(self, job: DevJob, fence: Fence) -> None:
         """Never reached without a delivery."""
@@ -671,21 +671,39 @@ class JobSupervisor:
         await self._deliver(job, fence)
 
     async def _deliver(self, job: DevJob, fence: Fence) -> None:
-        try:
-            await self._pipeline.deliver(job, fence)
-        except LeaseLostError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — a delivery error ends the job; a crash resumes it
-            log.error(
-                "dev_job_delivery_failed",
-                job_id=str(job.id),
-                error_type=type(exc).__name__,
-                trace_id=job.trace_id.hex,
-            )
-            await self._end(
-                job, fence, JobState.FAILED, f"delivery_failed: {type(exc).__name__}", revoked=True
-            )
-            return
+        """Deliver, with one retry: delivery is idempotent (D9.8), so a retry publishes once."""
+        for attempt in (1, 2):
+            try:
+                await self._pipeline.deliver(job, fence)
+                break
+            except LeaseLostError:
+                raise
+            except DevJobRefusedError as refused:
+                log.warning(
+                    "dev_job_delivery_refused",
+                    job_id=str(job.id),
+                    reason=refused.reason,
+                    trace_id=job.trace_id.hex,
+                )
+                await self._end(job, fence, JobState.FAILED, refused.reason, revoked=True)
+                return
+            except Exception as exc:  # noqa: BLE001 — retried once; then the job ends failed
+                log.error(
+                    "dev_job_delivery_failed",
+                    job_id=str(job.id),
+                    attempt=attempt,
+                    error_type=type(exc).__name__,
+                    trace_id=job.trace_id.hex,
+                )
+                if attempt == 2:
+                    await self._end(
+                        job,
+                        fence,
+                        JobState.FAILED,
+                        f"delivery_failed: {type(exc).__name__}",
+                        revoked=True,
+                    )
+                    return
         await self._advance_main(job, fence)
         await self._end(job, fence, JobState.SUCCEEDED, None, revoked=True)
 

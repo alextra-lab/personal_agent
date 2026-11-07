@@ -34,10 +34,12 @@ from personal_agent.dev_agent.container_spec import (
     agent_container_name,
     build_create_args,
 )
+from personal_agent.dev_agent.publish_check import CheckMode, CheckSetup
 from personal_agent.dev_agent.toolkit import (
     ToolkitAsset,
     check_toolkit_contents,
     read_toolkit_volume,
+    toolkit_digest,
 )
 from personal_agent.exceptions import DevAgentLaunchError
 
@@ -92,6 +94,44 @@ def handoff_volume_name(job_id: UUID) -> str:
         A Docker name.
     """
     return f"seshat-dev-out-{job_id}"
+
+
+def check_container_name(job_id: UUID, mode: CheckMode) -> str:
+    """Return the name of one run of a job's check container.
+
+    Args:
+        job_id: The job.
+        mode: The run, ``page`` or ``tests``.
+
+    Returns:
+        A Docker name.
+    """
+    return f"seshat-dev-check-{mode}-{job_id}"
+
+
+def check_volume_names(job_id: UUID) -> dict[str, str]:
+    """Return the check's input volume for each mount target (D7.3).
+
+    Args:
+        job_id: The job.
+
+    Returns:
+        ``/input/dist`` and ``/input/tests`` to their volume names.
+    """
+    return {
+        "/input/dist": f"seshat-dev-check-dist-{job_id}",
+        "/input/tests": f"seshat-dev-check-tests-{job_id}",
+    }
+
+
+def _check_helper_name(job_id: UUID) -> str:
+    return f"seshat-dev-check-in-{job_id}"
+
+
+#: The command of the check container. The mode is the last argument.
+CHECK_COMMAND: tuple[str, ...] = ("node", "/opt/check/publish-check.mjs")
+#: The most output that one check run may print.
+MAX_CHECK_OUTPUT = 1024 * 1024
 
 
 def parse_single_file_tar(data: bytes, name: str, max_bytes: int) -> bytes:
@@ -367,6 +407,7 @@ class DockerLauncher:
         toolkit_assets: Sequence[ToolkitAsset],
         scope: str,
         handoff_profile: ContainerProfile | None = None,
+        check_profile: ContainerProfile | None = None,
         runner: CommandRunner = run_command,
         bytes_runner: BytesRunner | None = None,
     ) -> None:
@@ -379,6 +420,7 @@ class DockerLauncher:
             toolkit_assets: The pins that the volume's files must match before each job (FRE-1751).
             scope: The supervisor scope, put on every container and volume and used in every listing.
             handoff_profile: The ``handoff`` profile. Required for :meth:`bundle_workspace`.
+            check_profile: The ``check`` profile. Required for the publish check (FRE-1686).
             runner: Runs the ``docker`` CLI. Tests pass a fake.
             bytes_runner: Runs the ``docker`` CLI with binary input or output. Defaults to
                 :func:`run_bytes`.
@@ -389,6 +431,7 @@ class DockerLauncher:
         self._toolkit_assets = tuple(toolkit_assets)
         self._scope = scope
         self._handoff = handoff_profile
+        self._check = check_profile
         self._run = runner
         self._run_bytes: BytesRunner = bytes_runner or run_bytes
 
@@ -415,6 +458,19 @@ class DockerLauncher:
             )
         return result.stdout
 
+    async def _verify_toolkit(self) -> str:
+        """Check the toolkit volume against the pins, and return its digest."""
+        # Never create the toolkit volume here: Docker would create an empty one, and a missing
+        # toolkit would look like a present one.
+        await self._require("toolkit volume check", "volume", "inspect", self._toolkit)
+        # The volume is checked by its bytes before every job and every check: a half-copied or
+        # edited volume must not reach an agent or a check (FRE-1751).
+        check_toolkit_contents(
+            self._toolkit_assets,
+            await read_toolkit_volume(self._toolkit, self._profile.image, self._run),
+        )
+        return toolkit_digest(self._toolkit_assets)
+
     async def start(
         self,
         job_id: UUID,
@@ -436,15 +492,7 @@ class DockerLauncher:
             DevAgentLaunchError: If the toolkit volume is missing or a Docker call fails.
             DevAgentToolkitError: If a file of the toolkit volume is missing, changed or extra.
         """
-        # Never create the toolkit volume here: Docker would create an empty one, and a missing
-        # toolkit would look like a present one.
-        await self._require("toolkit volume check", "volume", "inspect", self._toolkit)
-        # The volume is checked by its bytes before every job: a half-copied or edited volume
-        # must not reach an agent (FRE-1751).
-        check_toolkit_contents(
-            self._toolkit_assets,
-            await read_toolkit_volume(self._toolkit, self._profile.image, self._run),
-        )
+        await self._verify_toolkit()
         volume = workspace_volume_name(job_id)
         await self._require(
             "workspace volume create",
@@ -574,7 +622,7 @@ class DockerLauncher:
             raise DevAgentLaunchError("the launcher has no handoff profile")
         name = handoff_container_name(job_id)
         out = handoff_volume_name(job_id)
-        labels = {JOB_LABEL: str(job_id), SCOPE_LABEL: self._scope, f"{JOB_LABEL}.kind": "handoff"}
+        labels = self._job_labels(job_id, "handoff")
         await self._docker("rm", "-f", name)
         try:
             await self._require(
@@ -607,3 +655,134 @@ class DockerLauncher:
             await self._docker("volume", "rm", "-f", out)
         log.info("dev_agent_handoff_bundled", job_id=str(job_id), bytes=len(bundle), trace_id=None)
         return bundle
+
+    def _check_profile(self) -> ContainerProfile:
+        if self._check is None:
+            raise DevAgentLaunchError("the launcher has no check profile")
+        return self._check
+
+    def _job_labels(self, job_id: UUID, kind: str) -> dict[str, str]:
+        return {JOB_LABEL: str(job_id), SCOPE_LABEL: self._scope, f"{JOB_LABEL}.kind": kind}
+
+    async def prepare_check(self, job_id: UUID, inputs: bytes) -> CheckSetup:
+        """Check the toolkit, resolve the check image, and fill the input volumes (D7.3).
+
+        The two input volumes carry the job labels. A helper container that never starts (no
+        network) mounts them read-write and receives ``inputs`` with ``docker cp``. The check
+        containers mount them read-only.
+
+        Args:
+            job_id: The job.
+            inputs: The tar of :func:`~personal_agent.dev_agent.publish_check.check_inputs_tar`.
+
+        Returns:
+            The image id and the toolkit digest.
+
+        Raises:
+            DevAgentLaunchError: If the profile is not set or a Docker call fails.
+            DevAgentToolkitError: If the toolkit volume differs from the pins.
+        """
+        profile = self._check_profile()
+        digest = await self._verify_toolkit()
+        image_id = (
+            await self._require(
+                "check image inspect", "image", "inspect", "--format", "{{.Id}}", profile.image
+            )
+        ).strip()
+        for volume in check_volume_names(job_id).values():
+            await self._require(
+                "check volume create",
+                "volume", "create",
+                "--label", f"{JOB_LABEL}={job_id}", "--label", f"{SCOPE_LABEL}={self._scope}",
+                volume,
+            )  # fmt: skip
+        helper = _check_helper_name(job_id)
+        mounts: list[str] = []
+        for target, volume in check_volume_names(job_id).items():
+            mounts += ["-v", f"{volume}:{target}"]
+        labels: list[str] = []
+        for key, value in self._job_labels(job_id, "check-input").items():
+            labels += ["--label", f"{key}={value}"]
+        # A helper left by an earlier attempt would block the name.
+        await self._docker("rm", "-f", helper)
+        try:
+            await self._require(
+                "check input container create",
+                "create", "--name", helper, "--network", "none", *labels, *mounts, image_id,
+            )  # fmt: skip
+            await self._bytes(
+                "check input copy",
+                "cp", "-", f"{helper}:/input",
+                stdin=inputs, timeout=DOCKER_TIMEOUT_SECONDS, max_stdout=65536,
+            )  # fmt: skip
+        finally:
+            await asyncio.shield(self._docker("rm", "-f", helper))
+        return CheckSetup(image_id=image_id, toolkit_digest=digest)
+
+    async def run_check(
+        self, job_id: UUID, setup: CheckSetup, mode: CheckMode, timeout: float
+    ) -> BytesResult:
+        """Run one check container to its end, then remove it (D7.3, D7.4).
+
+        The container has the ``check`` profile and starts from the image id of ``setup``. Its
+        removal is shielded, so a cancelled caller still removes it.
+
+        Args:
+            job_id: The job. :meth:`prepare_check` ran for it.
+            setup: What :meth:`prepare_check` returned.
+            mode: The run, ``page`` or ``tests``.
+            timeout: The time limit of the run. A timeout returns exit status 124.
+
+        Returns:
+            The output of the run. A nonzero exit is returned, not raised.
+
+        Raises:
+            DevAgentLaunchError: If the profile is not set, the container cannot be created, or
+                Docker cannot start it.
+        """
+        profile = self._check_profile().model_copy(update={"image": setup.image_id})
+        name = check_container_name(job_id, mode)
+        await self._docker("rm", "-f", name)
+        try:
+            args = build_create_args(
+                profile,
+                name=name,
+                network_name="none",
+                labels=self._job_labels(job_id, "check"),
+                volumes={**check_volume_names(job_id), "/srv/artifact-lib": self._toolkit},
+            )
+            await self._require("check create", *args[1:], *CHECK_COMMAND, mode)
+            result = await self._run_bytes(
+                ["docker", "start", "-a", name], timeout=timeout, max_stdout=MAX_CHECK_OUTPUT
+            )
+        finally:
+            await asyncio.shield(self._docker("rm", "-f", name))
+        if result.returncode == 125 and not result.stderr.startswith("output passed"):
+            # Docker's own start error, not an exit of the check: the page was not judged.
+            raise DevAgentLaunchError(f"check start failed: {result.stderr.strip()[-300:]}")
+        log.info(
+            "dev_agent_check_run",
+            job_id=str(job_id),
+            mode=mode,
+            returncode=result.returncode,
+            trace_id=None,
+        )
+        return result
+
+    async def remove_check(self, job_id: UUID) -> None:
+        """Remove the check containers and the input volumes of the job.
+
+        Args:
+            job_id: The job.
+
+        Raises:
+            DevAgentLaunchError: If a volume cannot be removed.
+        """
+        names = [check_container_name(job_id, m) for m in ("page", "tests")]
+        await self._docker("rm", "-f", *names, _check_helper_name(job_id))
+        for volume in check_volume_names(job_id).values():
+            result = await self._docker("volume", "rm", "-f", volume)
+            if result.returncode != 0:
+                raise DevAgentLaunchError(
+                    f"check volume remove failed: {result.stderr.strip()[:300]}"
+                )

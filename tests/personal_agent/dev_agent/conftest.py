@@ -13,6 +13,8 @@ approval prefix below, and the fixture deletes those rows before and after each 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import asyncpg  # type: ignore[import-untyped]
@@ -22,6 +24,9 @@ import pytest_asyncio
 from personal_agent.config import settings
 from personal_agent.dev_agent.jobs import DevJob, JobStore
 from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
+
+if TYPE_CHECKING:
+    from .delivery_fakes import Delivery
 
 #: Every test job's approval id starts with this, so cleanup touches test rows only.
 TEST_APPROVAL_PREFIX = "fre1684-test-"
@@ -104,3 +109,15 @@ async def expire_lease(pool: asyncpg.Pool, job_id: UUID) -> None:
         "UPDATE dev_jobs SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE id = $1",
         job_id,
     )
+
+
+@pytest_asyncio.fixture
+async def delivery(
+    admin_pool: asyncpg.Pool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Delivery]:
+    """The check and delivery harness of FRE-1686 (``delivery_fakes.py``)."""
+    from .delivery_fakes import Delivery
+
+    harness = Delivery(admin_pool, tmp_path, monkeypatch)
+    yield harness
+    await harness.cleanup()

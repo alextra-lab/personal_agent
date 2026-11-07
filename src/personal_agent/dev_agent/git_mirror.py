@@ -240,6 +240,72 @@ class GitMirror:
         )
         return result.stdout
 
+    async def files_under(
+        self, commit: str, folder: str, *, max_files: int, max_bytes: int
+    ) -> dict[str, bytes]:
+        """Return every file under ``folder`` at ``commit``, by its path in the repo.
+
+        The bytes come from ``cat-file``, never from ``git archive``: a ``.gitattributes`` file in
+        the tree can change archive bytes (``export-subst``) or drop files (``export-ignore``).
+
+        Args:
+            commit: The commit id.
+            folder: A top-level folder, for example ``tests``.
+            max_files: The most files to accept.
+            max_bytes: The most bytes to accept in total.
+
+        Returns:
+            The files. Empty when the folder does not exist.
+
+        Raises:
+            DevAgentRepoError: If the folder holds a link or a submodule, or passes a cap.
+        """
+        listing = await self._git(
+            "ls-tree", "-r", "-l", "-z", _check_sha(commit), "--", f"{_check_branch(folder)}/"
+        )
+        entries: list[tuple[str, str]] = []
+        total = 0
+        for entry in listing.stdout.split(b"\0"):
+            if not entry:
+                continue
+            meta, _, raw_path = entry.partition(b"\t")
+            mode, _kind, sha, size = meta.decode().split()
+            if mode not in _PAGE_MODES:
+                raise DevAgentRepoError(f"{folder}/ holds an entry that is not a plain file")
+            try:
+                path = raw_path.decode()
+            except UnicodeDecodeError:
+                raise DevAgentRepoError(f"{folder}/ holds a path that is not UTF-8") from None
+            total += int(size)
+            entries.append((path, _check_sha(sha)))
+        if len(entries) > max_files or total > max_bytes:
+            raise DevAgentRepoError(
+                f"{folder}/ passes the cap of {max_files} files or {max_bytes} B"
+            )
+        if not entries:
+            return {}
+        # One process for all blobs. Each answer is "<sha> blob <size>\n<bytes>\n", in order.
+        batch = await self._git(
+            "cat-file",
+            "--batch",
+            stdin="".join(f"{sha}\n" for _, sha in entries).encode(),
+            max_stdout=max_bytes + 128 * len(entries),
+        )
+        files: dict[str, bytes] = {}
+        out, at = batch.stdout, 0
+        for path, sha in entries:
+            try:
+                end = out.index(b"\n", at)
+                got_sha, kind, size = out[at:end].decode().split()
+            except ValueError:
+                raise DevAgentRepoError(f"cat-file gave no blob for {path}") from None
+            if got_sha != sha or kind != "blob":
+                raise DevAgentRepoError(f"cat-file answered {kind} for {path}")
+            start = end + 1
+            files[path] = out[start : start + int(size)]
+            at = start + int(size) + 1
+        return files
+
     async def fetch(self, remote: GitRemote, ref: str) -> str | None:
         """Fetch one ref of a remote into the mirror.
 

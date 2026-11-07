@@ -143,6 +143,7 @@ async def start_supervisor() -> RunningSupervisor | None:
         toolkit_assets=load_toolkit_assets(),
         scope=settings.dev_agent_label_scope,
         handoff_profile=profiles.handoff,
+        check_profile=profiles.check,
     )
     supervisor = JobSupervisor(
         store=JobStore(pool),
@@ -153,6 +154,7 @@ async def start_supervisor() -> RunningSupervisor | None:
             launcher=launcher,
             host=GitHubAppHost(github, http),
             pages=get_artifact_store(),
+            checker=launcher,
         ),
         policy=SupervisorPolicy(time_limit_seconds=float(profiles.agent.wall_clock_seconds)),
     )

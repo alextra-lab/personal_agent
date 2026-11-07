@@ -6,6 +6,7 @@ A fake runner records every ``docker`` call. The live behaviour is in ``test_sup
 
 from __future__ import annotations
 
+import asyncio
 import io
 import tarfile
 from collections.abc import Mapping, Sequence
@@ -15,18 +16,23 @@ import pytest
 
 from personal_agent.dev_agent.container_spec import agent_container_name, load_profiles
 from personal_agent.dev_agent.launcher import (
+    CHECK_COMMAND,
     JOB_LABEL,
     OPENCODE_COMMAND,
     SCOPE_LABEL,
     BytesResult,
     CommandResult,
     DockerLauncher,
+    check_container_name,
+    check_volume_names,
     handoff_container_name,
     handoff_volume_name,
     parse_single_file_tar,
     run_bytes,
     workspace_volume_name,
 )
+from personal_agent.dev_agent.publish_check import CheckSetup
+from personal_agent.dev_agent.toolkit import toolkit_digest
 from personal_agent.exceptions import DevAgentLaunchError, DevAgentToolkitError
 
 from .toolkit_fakes import (
@@ -374,3 +380,115 @@ class TestRunBytes:
         result = await run_bytes(["python3", "-c", script], timeout=10)
         assert result.stdout.strip() == b"done"
         assert len(result.stderr) == 65536
+
+
+class HangingStart(FakeBytes):
+    """A check run whose ``docker start -a`` never returns, until the caller is cancelled."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+
+    async def __call__(self, args: Sequence[str], **kwargs: object) -> BytesResult:  # type: ignore[override]
+        if list(args[1:3]) == ["start", "-a"]:
+            self.started.set()
+            await asyncio.Event().wait()
+        return await super().__call__(args, **kwargs)  # type: ignore[arg-type]
+
+
+def _check_launcher(fake: FakeDocker, raw: FakeBytes) -> DockerLauncher:
+    profiles = load_profiles()
+    return DockerLauncher(
+        profiles.agent,
+        network_name="seshat_dev-agent",
+        toolkit_volume="toolkit",
+        toolkit_assets=synthetic_assets(),
+        scope="prod",
+        check_profile=profiles.check,
+        runner=fake,
+        bytes_runner=raw,
+    )
+
+
+_SETUP = CheckSetup(image_id="sha256:" + "1" * 64, toolkit_digest="sha256:" + "2" * 64)
+
+
+class TestPublishCheck:
+    """The Docker calls of the publish check (ADR-0159 D7.3; FRE-1686)."""
+
+    async def test_prepare_checks_the_toolkit_and_fills_labelled_input_volumes(self) -> None:
+        fake, raw = _fake(), FakeBytes()
+        job = uuid4()
+        setup = await _check_launcher(fake, raw).prepare_check(job, b"INPUTS")
+        assert setup.toolkit_digest == toolkit_digest(synthetic_assets())
+        created = [a for a in fake.argvs() if a[1:3] == ["volume", "create"]]
+        names = sorted(check_volume_names(job).values())
+        assert sorted(a[-1] for a in created[-2:]) == names
+        assert all(f"{SCOPE_LABEL}=prod" in a and f"{JOB_LABEL}={job}" in a for a in created[-2:])
+        ((cp, stdin, _),) = raw.calls
+        assert cp[1:3] == ["cp", "-"] and stdin == b"INPUTS"
+        helper = [a for a in fake.argvs() if a[1] == "create"][-1]
+        assert helper[helper.index("--network") + 1] == "none"
+        assert fake.argvs()[-1][:3] == ["docker", "rm", "-f"], "the helper is removed"
+
+    async def test_a_wrong_toolkit_stops_the_check_before_any_volume(self) -> None:
+        fake, raw = FakeDocker(), FakeBytes()
+        fake.volumes["toolkit"] = {}
+        with pytest.raises(DevAgentToolkitError):
+            await _check_launcher(fake, raw).prepare_check(uuid4(), b"x")
+        assert not [a for a in fake.argvs() if a[1:3] == ["volume", "create"]]
+
+    async def test_a_run_starts_from_the_image_id_with_no_network_and_is_removed(self) -> None:
+        fake, raw = _fake(), FakeBytes()
+        job = uuid4()
+        await _check_launcher(fake, raw).run_check(job, _SETUP, "page", 90.0)
+        create = [a for a in fake.argvs() if a[1] == "create"][-1]
+        assert create[-4:] == [_SETUP.image_id, *CHECK_COMMAND, "page"]
+        assert create[create.index("--network") + 1] == "none"
+        ((start, _, timeout),) = raw.calls
+        assert (
+            start == ["docker", "start", "-a", check_container_name(job, "page")]
+            and timeout == 90.0
+        )
+        assert fake.argvs()[-1] == ["docker", "rm", "-f", check_container_name(job, "page")]
+
+    async def test_a_cancelled_run_still_removes_its_container(self) -> None:
+        """Codex plan review finding 4: a fence cancel must not leave the container."""
+        fake, raw = _fake(), HangingStart()
+        job = uuid4()
+        run = asyncio.create_task(_check_launcher(fake, raw).run_check(job, _SETUP, "tests", 200.0))
+        await raw.started.wait()
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+        assert fake.argvs()[-1] == ["docker", "rm", "-f", check_container_name(job, "tests")]
+
+    async def test_remove_check_removes_both_runs_the_helper_and_both_volumes(self) -> None:
+        fake, raw = _fake(), FakeBytes()
+        job = uuid4()
+        await _check_launcher(fake, raw).remove_check(job)
+        removed = [name for a in fake.argvs() for name in a[3:] if a[1] in ("rm", "volume")]
+        for name in [check_container_name(job, "page"), check_container_name(job, "tests")]:
+            assert name in removed
+        assert set(check_volume_names(job).values()) <= set(removed)
+
+    async def test_a_docker_start_error_is_not_a_page_fail(self) -> None:
+        """/code-review finding 3: exit 125 from Docker raises, so the job ends check_unavailable."""
+        fake, raw = _fake(), FakeBytes(start_status=125)
+        job = uuid4()
+        with pytest.raises(DevAgentLaunchError, match="check start failed"):
+            await _check_launcher(fake, raw).run_check(job, _SETUP, "page", 90.0)
+        assert fake.argvs()[-1] == ["docker", "rm", "-f", check_container_name(job, "page")]
+
+    async def test_the_output_cap_is_the_run_result(self) -> None:
+        """Exit 125 from the output cap is the run's own result: a fail of its steps."""
+        fake = _fake()
+
+        class Capped(FakeBytes):
+            async def __call__(self, args: Sequence[str], **kwargs: object) -> BytesResult:  # type: ignore[override]
+                if list(args[1:3]) == ["start", "-a"]:
+                    return BytesResult(125, b"", "output passed 1048576 bytes")
+                return await super().__call__(args, **kwargs)  # type: ignore[arg-type]
+
+        result = await _check_launcher(fake, Capped()).run_check(uuid4(), _SETUP, "tests", 200.0)
+        assert result.returncode == 125

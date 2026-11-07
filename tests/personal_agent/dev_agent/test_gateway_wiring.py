@@ -1,8 +1,9 @@
 # ruff: noqa: D101, D102
-"""The gateway wiring of the job supervisor (FRE-1684)."""
+"""The gateway wiring of the job supervisor (FRE-1684, FRE-1685)."""
 
 from __future__ import annotations
 
+import base64
 from uuid import uuid4
 
 import pytest
@@ -43,6 +44,38 @@ class TestWiring:
     ) -> None:
         monkeypatch.setattr(gateway.settings, "dev_broker_control_secret", None)
         assert await gateway.start_supervisor() is None
+
+    async def test_no_github_app_starts_no_supervisor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(gateway.settings, "dev_broker_control_secret", "s3cret")
+        monkeypatch.setattr(gateway.settings, "dev_agent_github_app_private_key_b64", None)
+        assert await gateway.start_supervisor() is None
+
+    async def test_github_config_decodes_the_base64_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pem = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"
+        monkeypatch.setattr(gateway.settings, "dev_agent_github_app_id", 5)
+        monkeypatch.setattr(gateway.settings, "dev_agent_github_installation_id", 6)
+        monkeypatch.setattr(gateway.settings, "dev_agent_github_org", "example-org")
+        monkeypatch.setattr(
+            gateway.settings,
+            "dev_agent_github_app_private_key_b64",
+            base64.b64encode(pem.encode()).decode(),
+        )
+        config = gateway.github_config()
+        assert config is not None
+        assert (config.app_id, config.installation_id, config.org) == (5, 6, "example-org")
+        assert config.private_key_pem == pem
+
+    async def test_a_key_that_is_not_pem_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(gateway.settings, "dev_agent_github_app_id", 5)
+        monkeypatch.setattr(gateway.settings, "dev_agent_github_installation_id", 6)
+        monkeypatch.setattr(gateway.settings, "dev_agent_github_org", "example-org")
+        monkeypatch.setattr(
+            gateway.settings, "dev_agent_github_app_private_key_b64", base64.b64encode(b"x").decode()
+        )
+        with pytest.raises(ValueError):
+            gateway.github_config()
 
     async def test_the_relay_factory_yields_an_adapter_and_closes_its_client(self) -> None:
         factory = gateway.relay_adapter_factory("http://dev-broker:8701", "s3cret")

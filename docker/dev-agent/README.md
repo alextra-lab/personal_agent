@@ -164,12 +164,53 @@ The launcher copies the files out of the volume before every job and checks them
 the committed config. A missing, changed or extra file stops the job (`DevAgentToolkitError`). The
 check reads bytes, not a label, so a half-copied volume never reaches an agent.
 
-### Notes for FRE-1685 and FRE-1686
+### Notes for FRE-1686
 
-- Implement `JobResultPipeline` (`handoff`, `check`, `deliver`). Do every external action through
-  `fence.run(action, operation)`. The supervisor revokes the token and stops the agent container
-  before `handoff`. Bound every action: `SupervisorPolicy.action_timeout_seconds` cancels it otherwise.
-- `deliver` must be idempotent (D9.8). Recovery calls it again for a job that crashed in `delivering`.
-- Start the handoff and check containers with the job label and the scope label, so `remove` and the
-  orphan sweep find them.
+- `GitHubRepoPipeline` (`personal_agent.dev_agent.repo_pipeline`) holds `prepare`, `handoff` and
+  `advance_main` (FRE-1685). Add `check` and `deliver` to it. Do every external action through
+  `fence.run(action, operation)`, and bound it: `SupervisorPolicy.action_timeout_seconds` cancels it.
+- `deliver` must be idempotent (D9.8). Recovery calls it again for a job that crashed in `delivering`,
+  and `advance_main` runs after it on both paths.
+- Read `dist/` and `tests/` at the result commit from a clean mirror (`GitMirror.open()`, then
+  `fetch` of `job/<job id>` with `host.remote(repo)`). Never read the workspace.
+- Start the check container with the job label and the scope label, so `remove` and the orphan
+  sweep find it.
+- The page template (`config/dev_agent/page_template/`) pins `@playwright/test` 1.60.0 and serves
+  `dist/` through `playwright/serve.mjs`. The check container has no network, so its image must hold
+  `@playwright/test`. Change the template if the check needs another setup.
+
+## Repos and the handoff (FRE-1685)
+
+ADR-0159 D8. The gateway holds the GitHub App key and is the only party that writes to GitHub.
+
+- **Repo.** `prepare` creates a private repo `<slug>-<8 hex of the job id>` in the organization
+  (`page-…` for a build) and pushes the template commit to `main`. A fix of a page that the agent
+  did not build adds the page as `dist/index.html`. A fix of an agent-built page continues that
+  page's repo from the source job's result commit. The fix source is looked up by artifact id **and**
+  by the job's user. A refused source ends the job `failed`/`source_not_found` and creates no repo.
+- **Workspace.** The gateway clones the base in a temp dir and copies the tar into the new agent
+  container with `docker cp -a` before it starts. The clone is on `job/<job id>` and has no remote.
+- **Handoff.** `handoff-bundle.sh` never opens the workspace as a git repo. It reads the branch head
+  as text, then bundles it from a new repo in `/tmp` that uses only the workspace's object store.
+  The gateway fetches the bundle into a clean mirror (fsck on), requires that the head descends from
+  the base, and refuses a symlink or submodule anywhere in the tree, and a missing or oversized
+  `dist/index.html`. Then it pushes `job/<job id>`, never by force.
+- **main.** After the publish, `advance_main` moves `main` only by fast-forward. `dev_jobs.main_moved`
+  is `true`, `false` (main was not an ancestor, so it stayed), or `NULL` (unknown).
+- **Token scope.** Repo creation uses `administration: write`. Git uses `contents: write` on one
+  named repo. The token reaches git only as an environment header, never on a command line.
+
+### Deploy (master)
+
+1. Rebuild the handoff image: `make dev-agent-build` (the new `handoff-bundle.sh`).
+2. Apply `docker/postgres/migrations/0040_dev_jobs_main_moved.sql` with `AGENT_DATABASE_ADMIN_URL`.
+3. Put the four GitHub values in the gateway's `.env`: `AGENT_DEV_AGENT_GITHUB_APP_ID`,
+   `AGENT_DEV_AGENT_GITHUB_INSTALLATION_ID`, `AGENT_DEV_AGENT_GITHUB_ORG` (the values are on the
+   ticket, FRE-1685), and `AGENT_DEV_AGENT_GITHUB_APP_PRIVATE_KEY_B64`, the output of
+   `pass show seshat/DEV_AGENT_GITHUB_APP_PRIVATE_KEY | base64 -w0`. Without all four the supervisor
+   does not start (it is off by default anyway).
+4. Rebuild `seshat-gateway` (adds `git` to the image). Leave the supervisor off.
+5. Check: `docker exec cloud-sim-seshat-gateway git --version` prints a version, and
+   `uv run python scripts/verify_dev_agent_github.py` (with the same four variables) prints
+   `"ok": true`. It creates one private `probe-…` repo, which stays.
 

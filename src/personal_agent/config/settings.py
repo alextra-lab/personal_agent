@@ -1614,6 +1614,36 @@ class AppConfig(BaseSettings):
             "touches production containers."
         ),
     )
+    dev_agent_github_app_id: int | None = Field(
+        default=None,
+        description=(
+            "App ID of the dev-agent GitHub App (ADR-0159 D8.1, FRE-1685). The supervisor does not "
+            "start without the four dev_agent_github_* values."
+        ),
+    )
+    dev_agent_github_installation_id: int | None = Field(
+        default=None,
+        description="Installation ID of the dev-agent GitHub App on its organization (FRE-1685).",
+    )
+    dev_agent_github_org: str | None = Field(
+        default=None,
+        description=(
+            "The private GitHub organization of the dev-agent repos (ADR-0159 D8.1, FRE-1685). The "
+            "gateway creates every repo there, as private."
+        ),
+    )
+    dev_agent_github_app_private_key_b64: str | None = Field(
+        default=None,
+        description=(
+            "The dev-agent GitHub App private key: the PEM file, base64-encoded on one line "
+            "(FRE-1685). Only the gateway holds it (ADR-0159 D8.2)."
+        ),
+        json_schema_extra={"secret": True},
+    )
+    dev_agent_github_api_url: str = Field(
+        default="https://api.github.com",
+        description="The GitHub REST API base URL of the dev-agent GitHub App (FRE-1685).",
+    )
     eur_usd_rate: float = Field(
         default=1.14,
         gt=0,

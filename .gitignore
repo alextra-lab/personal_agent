@@ -41,6 +41,8 @@ cover/
 *.egg-info/
 **/*.egg-info/
 dist/
+# The dev-agent page template holds an empty dist/ (ADR-0159 D8.5; FRE-1685).
+!config/dev_agent/page_template/dist/
 build/
 *.egg
 

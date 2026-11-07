@@ -198,3 +198,32 @@ class DevAgentToolkitError(DevAgentLaunchError):
     Examples: an asset has no pinned SRI, fetched bytes differ from the pin, or the volume holds a
     file that is missing, changed or extra. It is a launch error, so the supervisor refuses the job.
     """
+
+
+class DevAgentRepoError(RuntimeError):
+    """Raised when a dev-agent repo operation fails (ADR-0159 D8; FRE-1685).
+
+    Examples: a GitHub API call fails, a git command in the gateway's mirror fails, or a repo with
+    the job's name exists but is not private.
+    """
+
+
+class DevJobRefusedError(RuntimeError):
+    """Raised when a dev-agent job cannot go on, for a reason that the job records (FRE-1685).
+
+    The supervisor ends the job as ``failed`` with :attr:`reason`. Examples: the fix source is not
+    an HTML artifact of the requesting user (``source_not_found``), or the agent's head does not
+    descend from the base commit (``head_not_descendant``).
+
+    Attributes:
+        reason: The failure reason stored on the job.
+    """
+
+    def __init__(self, reason: str) -> None:
+        """Create the error.
+
+        Args:
+            reason: The failure reason stored on the job.
+        """
+        super().__init__(reason)
+        self.reason = reason

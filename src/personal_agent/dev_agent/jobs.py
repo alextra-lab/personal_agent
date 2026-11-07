@@ -83,6 +83,8 @@ class DevJob:
         started_at: The agent container start, or ``None`` before it.
         result_commit: The result commit, once the handoff stored it.
         result_artifact_id: The preallocated result artifact id (D9.8).
+        repo: The repo name in the GitHub organization, once ``prepare`` stored it (D8.3).
+        base_commit: The commit that the agent started from, once ``prepare`` stored it (D8.4).
     """
 
     id: UUID
@@ -99,6 +101,8 @@ class DevJob:
     started_at: datetime | None
     result_commit: str | None
     result_artifact_id: UUID | None
+    repo: str | None = None
+    base_commit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,7 @@ class TokenSignal:
 
 _JOB_COLUMNS = """
     id, user_id, session_id, trace_id, approval_request_id, mode, task_text, source_artifact_id,
-    model_id, state, lease_epoch, started_at, result_commit, result_artifact_id
+    model_id, state, lease_epoch, started_at, result_commit, result_artifact_id, repo, base_commit
 """
 
 #: The row predicate of the lease's own row, without the expiry. Valid only inside a fence: the
@@ -165,6 +169,8 @@ def _job(row: asyncpg.Record) -> DevJob:
         started_at=row["started_at"],
         result_commit=row["result_commit"],
         result_artifact_id=row["result_artifact_id"],
+        repo=row["repo"],
+        base_commit=row["base_commit"],
     )
 
 
@@ -484,6 +490,53 @@ class JobStore:
             lease.owner,
             state.value,
             failure_reason,
+        )
+        if done is None:
+            raise LeaseLostError(f"lease {lease.epoch} on job {lease.job_id} is not held")
+
+    @staticmethod
+    async def record(
+        conn: asyncpg.Connection,
+        lease: Lease,
+        *,
+        repo: str | None = None,
+        base_commit: str | None = None,
+        result_commit: str | None = None,
+        main_moved: bool | None = None,
+    ) -> None:
+        """Store repo facts on the job. Call it only inside a fence, with the fence's connection.
+
+        It runs in the same transaction as the fenced action, so a fact is stored only when its
+        action returned (FRE-1685). A ``None`` argument leaves its column as it is.
+
+        Args:
+            conn: The fenced transaction's connection.
+            lease: The lease of the fence.
+            repo: The repo name (D8.3).
+            base_commit: The commit that the agent starts from (D8.4).
+            result_commit: The head that the gateway pushed to ``job/<job id>`` (D8.8.4).
+            main_moved: Whether ``main`` is at the result commit (D8.9).
+
+        Raises:
+            LeaseLostError: If the row did not change.
+        """
+        done = await conn.fetchval(
+            f"""
+            UPDATE dev_jobs
+               SET repo = COALESCE($4, repo),
+                   base_commit = COALESCE($5, base_commit),
+                   result_commit = COALESCE($6, result_commit),
+                   main_moved = COALESCE($7, main_moved)
+             WHERE {_OWN_ROW}
+            RETURNING id
+            """,
+            lease.job_id,
+            lease.epoch,
+            lease.owner,
+            repo,
+            base_commit,
+            result_commit,
+            main_moved,
         )
         if done is None:
             raise LeaseLostError(f"lease {lease.epoch} on job {lease.job_id} is not held")

@@ -94,6 +94,7 @@ cost_gate_reaper_task: asyncio.Task[None] | None = None
 cost_gate_snapshotter_task: asyncio.Task[None] | None = None
 cost_gate_silence_monitor_task: asyncio.Task[None] | None = None
 sandbox_reaper_task: asyncio.Task[None] | None = None
+dev_job_supervisor: "RunningSupervisor | None" = None  # type: ignore  # noqa: F821
 
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
@@ -868,7 +869,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cost_gate_reaper_task, \
         cost_gate_snapshotter_task, \
         cost_gate_silence_monitor_task, \
-        sandbox_reaper_task
+        sandbox_reaper_task, \
+        dev_job_supervisor
 
     # Startup
     log.info("service_starting")
@@ -1116,6 +1118,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 remedy="Orphaned sandbox containers will not be auto-reaped until next restart.",
                 exc_info=True,
             )
+
+        # Dev-agent job supervisor (ADR-0159 D9.4, FRE-1684). It lives in the gateway process so
+        # its job events reach a connected client. Off unless AGENT_DEV_AGENT_SUPERVISOR_ENABLED.
+        if settings.dev_agent_supervisor_enabled:
+            try:
+                from personal_agent.dev_agent.gateway import start_supervisor
+
+                dev_job_supervisor = await start_supervisor()
+            except Exception as dev_job_exc:  # noqa: BLE001
+                log.error(
+                    "dev_job_supervisor_startup_failed",
+                    error=str(dev_job_exc),
+                    remedy="No dev-agent job runs or recovers until the next restart.",
+                    exc_info=True,
+                )
 
         # Connect to Neo4j (if enabled) — non-fatal, matches ES graceful-degradation pattern
         if settings.enable_memory_graph:
@@ -1806,6 +1823,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             except asyncio.CancelledError:
                 pass
             sandbox_reaper_task = None
+        if dev_job_supervisor is not None:
+            from personal_agent.dev_agent.gateway import stop_supervisor
+
+            await stop_supervisor(dev_job_supervisor)
+            dev_job_supervisor = None
         if cost_gate is not None:
             from personal_agent.cost_gate import set_default_gate as _set_default_gate
 

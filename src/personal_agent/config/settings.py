@@ -1567,6 +1567,43 @@ class AppConfig(BaseSettings):
         ),
         json_schema_extra={"secret": True},
     )
+    dev_broker_control_url: str = Field(
+        default="http://dev-broker:8701",
+        description=(
+            "The dev-agent broker's control API on cloud-sim (ADR-0159 D4.3). The gateway reaches "
+            "a job's OpenCode server through its relay (FRE-1684)."
+        ),
+    )
+    dev_agent_supervisor_enabled: bool = Field(
+        default=False,
+        description=(
+            "Start the dev-agent job supervisor in the gateway lifespan (ADR-0159 D9.4, FRE-1684). "
+            "Off by default, so the gateway deploys before migration 0039 and before the agent "
+            "image and the toolkit volume exist."
+        ),
+    )
+    dev_agent_network: str = Field(
+        default="seshat_dev-agent",
+        description=(
+            "The real (project-prefixed) name of the internal dev-agent Docker network "
+            "(ADR-0159 D4.1). The launcher starts each agent container on it."
+        ),
+    )
+    dev_agent_toolkit_volume: str = Field(
+        default="seshat_dev_agent_toolkit",
+        description=(
+            "The named Docker volume with the pinned artifact toolkit, mounted read-only at "
+            "/srv/artifact-lib (ADR-0159 D3.3). The launcher refuses to start a job if it is missing."
+        ),
+    )
+    dev_agent_label_scope: str = Field(
+        default="seshat",
+        description=(
+            "The scope label on every dev-agent container and volume (FRE-1684). The supervisor "
+            "lists and removes only its own scope, so a test run on the same Docker host never "
+            "touches production containers."
+        ),
+    )
     eur_usd_rate: float = Field(
         default=1.14,
         gt=0,

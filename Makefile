@@ -53,7 +53,7 @@ endif
         infra-up infra-down dev \
         deploy build build-full vps-bootstrap \
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
-        sandbox-build dev-agent-build dev-agent-verify dev-broker-verify prompt-show \
+        sandbox-build dev-agent-build dev-agent-toolkit dev-agent-verify dev-broker-verify prompt-show \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
         verify-envelope verify-lib verify-artifact-e2e \
@@ -318,6 +318,9 @@ dev-agent-build:  ## Build the four dev-agent images (check, agent, handoff, pro
 		-f docker/dev-agent/Dockerfile.browser docker/dev-agent/
 	docker build -t seshat-dev-handoff:0.1 -f docker/dev-agent/Dockerfile.handoff docker/dev-agent/
 	docker build -t seshat-dev-proxy:0.1 -f docker/dev-agent/Dockerfile.proxy docker/dev-agent/
+
+dev-agent-toolkit:  ## Fill the dev-agent toolkit volume from the pinned /lib/ bytes in R2, with a SHA-384 check (FRE-1751)
+	uv run python -m scripts.fill_dev_agent_toolkit
 
 dev-agent-verify:  ## Live check of the dev-agent network, proxy and images (ARGS="--compose-project <p> --up --down")
 	uv run python -m scripts.verify_dev_agent_images $(ARGS)

@@ -23,6 +23,7 @@ from personal_agent.dev_agent.container_spec import load_profiles
 from personal_agent.dev_agent.jobs import DevJob, JobStore
 from personal_agent.dev_agent.launcher import DockerLauncher
 from personal_agent.dev_agent.supervisor import AdapterFactory, JobSupervisor, SupervisorPolicy
+from personal_agent.dev_agent.toolkit import load_toolkit_assets
 from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
 
 log = structlog.get_logger(__name__)
@@ -99,6 +100,7 @@ async def start_supervisor() -> RunningSupervisor | None:
             profiles.agent,
             network_name=settings.dev_agent_network,
             toolkit_volume=settings.dev_agent_toolkit_volume,
+            toolkit_assets=load_toolkit_assets(),
             scope=settings.dev_agent_label_scope,
         ),
         adapter_factory=relay_adapter_factory(settings.dev_broker_control_url, secret),

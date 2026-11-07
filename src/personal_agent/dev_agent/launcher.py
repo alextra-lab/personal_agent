@@ -28,6 +28,11 @@ from personal_agent.dev_agent.container_spec import (
     agent_container_name,
     build_create_args,
 )
+from personal_agent.dev_agent.toolkit import (
+    ToolkitAsset,
+    check_toolkit_contents,
+    read_toolkit_volume,
+)
 from personal_agent.exceptions import DevAgentLaunchError
 
 log = structlog.get_logger(__name__)
@@ -149,6 +154,7 @@ class DockerLauncher:
         *,
         network_name: str,
         toolkit_volume: str,
+        toolkit_assets: Sequence[ToolkitAsset],
         scope: str,
         runner: CommandRunner = run_command,
     ) -> None:
@@ -158,12 +164,14 @@ class DockerLauncher:
             profile: The ``agent`` profile of ``container_profiles.yaml``.
             network_name: The real name of the ``dev-agent`` network (project-prefixed).
             toolkit_volume: The named volume that holds the pinned toolkit. It must exist.
+            toolkit_assets: The pins that the volume's files must match before each job (FRE-1751).
             scope: The supervisor scope, put on every container and volume and used in every listing.
             runner: Runs the ``docker`` CLI. Tests pass a fake.
         """
         self._profile = profile
         self._network = network_name
         self._toolkit = toolkit_volume
+        self._toolkit_assets = tuple(toolkit_assets)
         self._scope = scope
         self._run = runner
 
@@ -188,10 +196,17 @@ class DockerLauncher:
 
         Raises:
             DevAgentLaunchError: If the toolkit volume is missing or a Docker call fails.
+            DevAgentToolkitError: If a file of the toolkit volume is missing, changed or extra.
         """
         # Never create the toolkit volume here: Docker would create an empty one, and a missing
         # toolkit would look like a present one.
         await self._require("toolkit volume check", "volume", "inspect", self._toolkit)
+        # The volume is checked by its bytes before every job: a half-copied or edited volume
+        # must not reach an agent (FRE-1751).
+        check_toolkit_contents(
+            self._toolkit_assets,
+            await read_toolkit_volume(self._toolkit, self._profile.image, self._run),
+        )
         workspace = workspace_volume_name(job_id)
         await self._require(
             "workspace volume create",

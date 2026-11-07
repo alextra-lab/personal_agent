@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import asyncpg  # type: ignore[import-untyped]
+from toolkit_fakes import synthetic_assets  # the script directory is on sys.path
 
 from personal_agent.config import settings
 from personal_agent.delegation.protocols import (
@@ -84,7 +85,13 @@ async def main(argv: list[str]) -> None:
     profile = load_profiles().agent.model_copy(update={"image": image})
     supervisor = JobSupervisor(
         store=_SelfPausingStore(pool, pause_before),
-        launcher=DockerLauncher(profile, network_name=network, toolkit_volume=toolkit, scope=scope),
+        launcher=DockerLauncher(
+            profile,
+            network_name=network,
+            toolkit_volume=toolkit,
+            toolkit_assets=synthetic_assets(),
+            scope=scope,
+        ),
         adapter_factory=_factory,  # type: ignore[arg-type]
         policy=LIVE_POLICY,
         owner=owner,

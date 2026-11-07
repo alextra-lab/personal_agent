@@ -163,9 +163,10 @@ async def _generate_vectors(
     failure propagates to the caller — the existing zero-vector fail-open path
     in :func:`generate_embedding` / :func:`generate_embeddings_batch`.
 
-    ``trace_id``/``session_id`` are forwarded only to the managed (OVH,
-    billed) path for cost attribution (FRE-974) — the local paths here are
-    not billed, so there is no cost to attribute.
+    ``trace_id``/``session_id`` are forwarded only to the billed paths for cost
+    attribution (FRE-974, FRE-1750): the managed (OVH) path, and a fallback
+    endpoint listed in ``_BILLED_FALLBACK_PROVIDERS``. Other local paths are not
+    billed, so there is no cost to attribute.
     """
     if _resolve_embedder_kind(settings) != "managed":
         model_id, endpoint, api_key = _get_embedding_config()
@@ -203,19 +204,34 @@ async def _generate_vectors(
         latency_ms = int((time.monotonic() - start) * 1000)
         # Only a billed endpoint gets a cost row. The token alone does not pick the
         # provider: it only sets the auth header (FRE-1750).
-        billed_provider = _BILLED_FALLBACK_PROVIDERS.get(
-            (settings.local_fallback_embedding_endpoint or "").rstrip("/")
-        )
+        fallback_endpoint = (settings.local_fallback_embedding_endpoint or "").rstrip("/").lower()
+        billed_provider = _BILLED_FALLBACK_PROVIDERS.get(fallback_endpoint)
+        if billed_provider is None and settings.local_fallback_embedding_token:
+            logger.warning(
+                "embedding_fallback_token_unbilled",
+                fallback_endpoint=settings.local_fallback_embedding_endpoint,
+                trace_id=trace_id,
+            )
         if billed_provider is not None:
             usage = getattr(response, "usage", None)
-            await _record_embedding_cost(
-                provider=billed_provider,
-                model=settings.local_fallback_embedding_model,
-                total_tokens=getattr(usage, "total_tokens", None),
-                latency_ms=latency_ms,
-                trace_id=trace_id,
-                session_id=session_id,
-            )
+            try:
+                await _record_embedding_cost(
+                    provider=billed_provider,
+                    model=settings.local_fallback_embedding_model,
+                    total_tokens=getattr(usage, "total_tokens", None),
+                    latency_ms=latency_ms,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
+            except Exception as cost_exc:
+                # The vectors are already paid for. A cost failure must not turn them
+                # into a zero vector in generate_embedding (FRE-1750 review).
+                logger.warning(
+                    "embedding_fallback_cost_failed",
+                    error=str(cost_exc),
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
         # The same-model local server is not known to honor the OpenAI
         # `dimensions` request param the way OVH does, so it answers at its
         # native width (e.g. 4096 for the 8B model) -- truncate+renormalize
@@ -239,9 +255,10 @@ async def generate_embedding(
         text: Text to embed. Returns zero vector for empty/None.
         mode: "document" embeds text as-is; "query" prepends the
             Qwen3-Embedding instruction prefix for asymmetric search.
-        trace_id: Request/consolidation trace id, forwarded to the managed
-            (OVH) path for cost attribution (FRE-974). ``None`` skips cost
-            recording for this call, it does not affect the embedding itself.
+        trace_id: Request/consolidation trace id, forwarded to the billed
+            paths (managed OVH, billed fallback) for cost attribution (FRE-974,
+            FRE-1750). ``None`` skips cost recording for this call, it does not
+            affect the embedding itself.
         session_id: Session id, forwarded alongside ``trace_id``. Pass
             :data:`personal_agent.llm_client.cost_tracker.SYSTEM_SESSION_ID`
             for session-less background work so real vendor spend is still
@@ -285,9 +302,10 @@ async def generate_embeddings_batch(
     Args:
         texts: List of texts to embed.
         mode: "document" embeds texts as-is; "query" prepends instruction prefix.
-        trace_id: Request/consolidation trace id, forwarded to the managed
-            (OVH) path for cost attribution (FRE-974). ``None`` skips cost
-            recording for this call, it does not affect the embeddings themselves.
+        trace_id: Request/consolidation trace id, forwarded to the billed
+            paths (managed OVH, billed fallback) for cost attribution (FRE-974,
+            FRE-1750). ``None`` skips cost recording for this call, it does not
+            affect the embeddings themselves.
         session_id: Session id, forwarded alongside ``trace_id``. Pass
             :data:`personal_agent.llm_client.cost_tracker.SYSTEM_SESSION_ID`
             for session-less background work so real vendor spend is still

@@ -499,6 +499,10 @@ class TestManagedProfileIntegration:
                 return_value=_fake_openai_response([[0.05] * 4096], total_tokens=10),
             ),
             patch(
+                "personal_agent.memory.embeddings._get_embedding_pricing_eur",
+                return_value=0.0000001,
+            ),
+            patch(
                 "personal_agent.memory.embeddings.record_vendor_cost", new_callable=AsyncMock
             ) as mock_cost,
         ):
@@ -511,11 +515,44 @@ class TestManagedProfileIntegration:
         assert mock_cost.call_args.kwargs["provider"] == "scaleway"
         assert mock_cost.call_args.kwargs["tokens"] == 10
         assert mock_cost.call_args.kwargs["cost_usd"] == pytest.approx(
-            10 * _get_embedding_pricing_eur() * settings.eur_usd_rate
+            10 * 0.0000001 * settings.eur_usd_rate
         )
         assert mock_cost.call_args.kwargs["purpose"] == "embedding"
         assert mock_cost.call_args.kwargs["trace_id"] == trace_id
         assert mock_cost.call_args.kwargs["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_fallback_cost_failure_keeps_the_vectors(self) -> None:
+        settings = _MANAGED_SETTINGS.model_copy(
+            update={
+                "local_fallback_embedding_endpoint": "https://api.scaleway.ai/v1",
+                "local_fallback_embedding_model": "qwen3-embedding-8b",
+                "local_fallback_embedding_token": "scw-test-token",
+            }
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> list[list[float]]:
+            raise httpx.ConnectError("unreachable", request=httpx.Request("POST", "https://x"))
+
+        with (
+            patch("personal_agent.memory.embeddings.get_settings", return_value=settings),
+            patch("personal_agent.memory.embeddings._embed_managed", side_effect=_boom),
+            patch(
+                "personal_agent.memory.embeddings._call_embeddings_api",
+                new_callable=AsyncMock,
+                return_value=_fake_openai_response([[0.05] * 4096], total_tokens=10),
+            ),
+            patch(
+                "personal_agent.memory.embeddings._get_embedding_pricing_eur",
+                side_effect=RuntimeError("catalog unavailable"),
+            ),
+        ):
+            embedding = await generate_embedding(
+                "hello", trace_id=str(uuid4()), session_id=str(uuid4())
+            )
+
+        assert embedding != [0.0] * 1024
+        assert len(embedding) == 1024
 
     @pytest.mark.asyncio
     async def test_fallback_without_token_records_no_cost(self) -> None:

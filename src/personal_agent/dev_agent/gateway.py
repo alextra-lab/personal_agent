@@ -23,6 +23,7 @@ from personal_agent.delegation.adapters.opencode import OpenCodeAdapter, opencod
 from personal_agent.delegation.protocols import DelegationExecutorProtocol
 from personal_agent.dev_agent.container_spec import load_profiles
 from personal_agent.dev_agent.github_app import GitHubAppConfig, GitHubAppHost
+from personal_agent.dev_agent.job_card import JobEventSink, PoolJobEventSink
 from personal_agent.dev_agent.jobs import DevJob, JobStore
 from personal_agent.dev_agent.launcher import DockerLauncher
 from personal_agent.dev_agent.repo_pipeline import GitHubRepoPipeline
@@ -31,6 +32,7 @@ from personal_agent.dev_agent.toolkit import load_toolkit_assets
 from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
 from personal_agent.security import create_guarded_http_client
 from personal_agent.storage.artifact_store import get_artifact_store
+from personal_agent.transport.agui.transport import emit_dev_job
 
 log = structlog.get_logger(__name__)
 
@@ -67,12 +69,15 @@ class RunningSupervisor:
     http: httpx.AsyncClient
 
 
-def relay_adapter_factory(control_url: str, control_secret: str) -> AdapterFactory:
+def relay_adapter_factory(
+    control_url: str, control_secret: str, events: JobEventSink | None = None
+) -> AdapterFactory:
     """Return the factory that opens a job's :class:`OpenCodeAdapter` through the relay.
 
     Args:
         control_url: The broker's control API.
         control_secret: The relay's secret.
+        events: Receives each step of the OpenCode event stream for the job card (D10.6).
 
     Returns:
         A function of the job and its server password that yields the adapter and closes its
@@ -90,6 +95,8 @@ def relay_adapter_factory(control_url: str, control_secret: str) -> AdapterFacto
 
         async def progress(step: str) -> None:
             log.info("dev_job_progress", job_id=str(job.id), step=step, trace_id=job.trace_id.hex)
+            if events is not None:
+                await events.notify(job.id, "step", step)
 
         try:
             yield OpenCodeAdapter(client, model_id=job.model_id, on_progress=progress)
@@ -160,10 +167,11 @@ async def start_supervisor() -> RunningSupervisor | None:
         handoff_profile=profiles.handoff,
         check_profile=profiles.check,
     )
+    events = PoolJobEventSink(pool, emit_dev_job)
     supervisor = JobSupervisor(
         store=JobStore(pool),
         launcher=launcher,
-        adapter_factory=relay_adapter_factory(settings.dev_broker_control_url, secret),
+        adapter_factory=relay_adapter_factory(settings.dev_broker_control_url, secret, events),
         pipeline=GitHubRepoPipeline(
             pool=pool,
             launcher=launcher,
@@ -172,6 +180,7 @@ async def start_supervisor() -> RunningSupervisor | None:
             checker=launcher,
         ),
         policy=SupervisorPolicy(time_limit_seconds=float(profiles.agent.wall_clock_seconds)),
+        events=events,
     )
     # A fresh context: the task outlives the startup span (ADR-0129 D3, FRE-1069).
     task = asyncio.create_task(supervisor.run_forever(), context=contextvars.Context())

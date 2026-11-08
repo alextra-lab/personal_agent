@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from uuid import uuid4
 
@@ -84,3 +85,68 @@ class TestWiring:
             assert adapter.available()
             client = adapter._client
         assert client.is_closed
+
+
+class _RecordingEvents:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, str, str | None]] = []
+
+    async def notify(self, job_id: object, event: str, step: str | None = None) -> None:
+        self.calls.append((job_id, event, step))
+
+
+class TestJobCardWiring:
+    """FRE-1688 (ADR-0159 D10.6): the production supervisor sends the card events."""
+
+    async def test_an_adapter_step_reaches_the_event_sink(self) -> None:
+        events = _RecordingEvents()
+        factory = gateway.relay_adapter_factory("http://dev-broker:8701", "s3cret", events)  # type: ignore[arg-type]
+        job = _job()
+        async with factory(job, "pw") as adapter:
+            await adapter._on_progress("tool shell")  # type: ignore[attr-defined,misc]
+        assert events.calls == [(job.id, "step", "tool shell")]
+
+    async def test_start_supervisor_gives_the_supervisor_and_the_factory_the_same_sink(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from personal_agent.dev_agent.job_card import PoolJobEventSink
+        from personal_agent.transport.agui.transport import emit_dev_job
+
+        seen: dict[str, object] = {}
+
+        class CapturingSupervisor:
+            owner = "test"
+
+            def __init__(self, **kwargs: object) -> None:
+                seen.update(kwargs)
+
+            async def run_forever(self) -> None:
+                await asyncio.Event().wait()
+
+        def capture_factory(url: str, secret: str, events: object = None) -> object:
+            seen["factory_events"] = events
+            return object()
+
+        monkeypatch.setattr(gateway.settings, "dev_broker_control_secret", "s3cret")
+        monkeypatch.setattr(gateway, "github_config", lambda: MagicMock())
+        monkeypatch.setattr(gateway, "load_profiles", lambda: MagicMock())
+        monkeypatch.setattr(gateway.asyncpg, "create_pool", AsyncMock(return_value=MagicMock()))
+        monkeypatch.setattr(gateway, "create_guarded_http_client", lambda: MagicMock())
+        monkeypatch.setattr(gateway, "DockerLauncher", MagicMock())
+        monkeypatch.setattr(gateway, "load_toolkit_assets", lambda: MagicMock())
+        monkeypatch.setattr(gateway, "GitHubAppHost", MagicMock())
+        monkeypatch.setattr(gateway, "GitHubRepoPipeline", MagicMock())
+        monkeypatch.setattr(gateway, "get_artifact_store", lambda: MagicMock())
+        monkeypatch.setattr(gateway, "JobSupervisor", CapturingSupervisor)
+        monkeypatch.setattr(gateway, "relay_adapter_factory", capture_factory)
+
+        running = await gateway.start_supervisor()
+        assert running is not None
+        running.task.cancel()
+
+        sink = seen["events"]
+        assert isinstance(sink, PoolJobEventSink)
+        assert seen["factory_events"] is sink
+        assert sink._emit is emit_dev_job

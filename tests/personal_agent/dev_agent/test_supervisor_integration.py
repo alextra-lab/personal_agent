@@ -9,8 +9,10 @@ expiry and the 30-minute limit use Postgres time, so the tests seed past instant
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from datetime import timedelta
+from decimal import Decimal
 from uuid import UUID
 
 import asyncpg  # type: ignore[import-untyped]
@@ -18,8 +20,12 @@ import pytest
 import pytest_asyncio
 
 from personal_agent.delegation.protocols import DelegationOutcome, DelegationPackage
+from personal_agent.dev_agent.job_card import CardContext, JobEventSink, PoolJobEventSink
 from personal_agent.dev_agent.jobs import JobStore
 from personal_agent.dev_agent.supervisor import JobSupervisor, SupervisorPolicy
+
+from personal_agent.transport.agui.adapter import to_agui_event
+from personal_agent.transport.agui.transport import emit_dev_job
 
 from .conftest import MakeJob, expire_lease
 from .supervisor_fakes import (
@@ -53,6 +59,7 @@ class Harness:
         pipeline: RecordingPipeline | None = None,
         policy: SupervisorPolicy | None = None,
         clock: ManualClock | None = None,
+        events: JobEventSink | None = None,
     ) -> JobSupervisor:
         sup = JobSupervisor(
             store=store or JobStore(self.pool),
@@ -62,6 +69,7 @@ class Harness:
             policy=policy,
             clock=clock or ManualClock(),
             owner=owner,
+            events=events,
         )
         self.supervisors.append(sup)
         return sup
@@ -499,3 +507,234 @@ class TestRepoHooks:
         row = await h.row(job.id)
         assert (row["state"], row["failure_reason"]) == ("failed", "check_refused_reason")
         assert job.id not in h.docker.containers
+
+
+class CheckWritingPipeline(RecordingPipeline):
+    """A pipeline whose failed check leaves a ``check_result`` row, as the real check does."""
+
+    def __init__(self, pool: asyncpg.Pool, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._pool = pool
+
+    async def check(self, job, result_commit, fence):  # type: ignore[no-untyped-def]
+        await self._pool.execute(
+            "UPDATE dev_jobs SET check_result = $2::jsonb WHERE id = $1",
+            job.id,
+            json.dumps({"passed": False, "steps": [{"name": "load", "passed": False}]}),
+        )
+        return await super().check(job, result_commit, fence)
+
+
+class TestEvents:
+    """FRE-1688 (ADR-0159 D10.6, AC-7): the real sink and ``emit_dev_job``; ``_push_event`` is captured."""
+
+    @pytest.fixture
+    def pushed(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[dict[str, object], str]]:
+        captured: list[tuple[dict[str, object], str]] = []
+
+        async def push(event: object, session_id: str) -> bool:
+            captured.append((to_agui_event(event), session_id))  # type: ignore[arg-type]
+            return True
+
+        monkeypatch.setattr("personal_agent.transport.agui.transport._push_event", push)
+        return captured
+
+    def _sink(self, h: Harness) -> PoolJobEventSink:
+        return PoolJobEventSink(
+            h.pool,
+            emit_dev_job,
+            context=CardContext(cap_usd=Decimal("2.36"), repo_base_url=None),
+        )
+
+    @staticmethod
+    def _cards(pushed: list[tuple[dict[str, object], str]]) -> list[dict[str, object]]:
+        return [e["data"]["value"] for e, _ in pushed if e["data"]["key"] == "dev_job"]  # type: ignore[index]
+
+    async def test_a_restart_end_state_reaches_the_session(
+        self, h: Harness, make_job: MakeJob, pushed: list[tuple[dict[str, object], str]]
+    ) -> None:
+        job = await make_job()
+        clock = ManualClock()
+        a = h.supervisor("sup-a", clock=clock)
+        await a.scan_once()
+        await until(lambda: len(h.timeouts) == 1)
+        await a.stop()
+        assert pushed == []  # the first supervisor has no sink
+
+        await expire_lease(h.pool, job.id)
+        b = h.supervisor("sup-b", events=self._sink(h))
+        await b.scan_once()
+
+        assert [sid for _, sid in pushed] == [str(job.session_id)]
+        envelope, _ = pushed[0]
+        assert envelope["type"] == "STATE_DELTA"
+        card = envelope["data"]["value"]  # type: ignore[index]
+        assert (card["event"], card["state"], card["failure_reason"], card["ended"]) == (
+            "end",
+            "failed",
+            "supervisor_restart",
+            True,
+        )
+        assert card["job_id"] == str(job.id)
+
+    async def test_a_job_that_succeeds_sends_each_state_then_the_end(
+        self, h: Harness, make_job: MakeJob, pushed: list[tuple[dict[str, object], str]]
+    ) -> None:
+        await make_job()
+        pipeline = RecordingPipeline(result="abc123")
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline, events=self._sink(h))
+        await a.scan_once()
+        await _wait_end(a)
+        cards = self._cards(pushed)
+        assert [(c["event"], c["state"]) for c in cards] == [
+            ("state", "running"),
+            ("state", "checking"),
+            ("state", "delivering"),
+            ("end", "succeeded"),
+        ]
+
+    async def test_a_failed_check_sends_its_result_as_an_object(
+        self, h: Harness, make_job: MakeJob, pushed: list[tuple[dict[str, object], str]]
+    ) -> None:
+        await make_job()
+        pipeline = CheckWritingPipeline(h.pool, result="abc123", passes=False)
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=pipeline, events=self._sink(h))
+        await a.scan_once()
+        await _wait_end(a)
+        end = self._cards(pushed)[-1]
+        assert (end["event"], end["state"], end["failure_reason"]) == (
+            "end",
+            "failed_check",
+            "check_failed",
+        )
+        assert end["check_result"] == {"passed": False, "steps": [{"name": "load", "passed": False}]}
+
+    async def test_a_refused_prepare_sends_its_reason(
+        self, h: Harness, make_job: MakeJob, pushed: list[tuple[dict[str, object], str]]
+    ) -> None:
+        await make_job()
+        pipeline = RecordingPipeline(refuse_prepare="source_not_found")
+        a = h.supervisor("sup-a", pipeline=pipeline, events=self._sink(h))
+        await a.scan_once()
+        await _wait_end(a)
+        end = self._cards(pushed)[-1]
+        assert (end["state"], end["failure_reason"]) == ("failed", "source_not_found")
+
+    async def test_the_end_card_spend_equals_the_row(
+        self, h: Harness, make_job: MakeJob, pushed: list[tuple[dict[str, object], str]]
+    ) -> None:
+        job = await make_job()
+        await h.pool.execute(
+            "INSERT INTO dev_job_spend (job_id, committed_usd) VALUES ($1, 0.250000)", job.id
+        )
+        a = h.supervisor(
+            "sup-a",
+            behaviour=succeed,
+            pipeline=RecordingPipeline(result="abc123"),
+            events=self._sink(h),
+        )
+        await a.scan_once()
+        await _wait_end(a)
+        row_spend = await h.pool.fetchval("SELECT spend_usd::text FROM dev_jobs WHERE id = $1", job.id)
+        assert row_spend == "0.250000"
+        assert self._cards(pushed)[-1]["spend_usd"] == row_spend
+
+    async def test_a_sink_that_cannot_send_does_not_change_the_job(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        job = await make_job()
+
+        async def broken(*, session_id: str, payload: dict[str, object]) -> bool:
+            raise ConnectionError("seeded: transport down")
+
+        sink = PoolJobEventSink(h.pool, broken, context=CardContext(None, None))
+        a = h.supervisor(
+            "sup-a", behaviour=succeed, pipeline=RecordingPipeline(result="abc123"), events=sink
+        )
+        await a.scan_once()
+        await _wait_end(a)
+        assert (await h.row(job.id))["state"] == "succeeded"
+
+    async def test_a_sink_that_hangs_does_not_stall_the_job(
+        self, h: Harness, make_job: MakeJob
+    ) -> None:
+        job = await make_job()
+
+        class HangingSink:
+            async def notify(self, job_id: UUID, event: str, step: str | None = None) -> None:
+                await asyncio.Event().wait()
+
+        a = h.supervisor(
+            "sup-a",
+            behaviour=succeed,
+            pipeline=RecordingPipeline(result="abc123"),
+            policy=SupervisorPolicy(notify_timeout_seconds=0.2),
+            events=HangingSink(),  # type: ignore[arg-type]
+        )
+        await a.scan_once()
+        await _wait_end(a)
+        assert (await h.row(job.id))["state"] == "succeeded"
+
+    async def test_a_cancel_of_the_job_task_does_not_drop_the_end_card(self) -> None:
+        """After the end commits, the lease keeper cancels the work task. The end card must survive."""
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        from personal_agent.dev_agent.jobs import DevJob, JobState
+
+        release = asyncio.Event()
+        sent: list[str] = []
+
+        class SlowSink:
+            async def notify(self, job_id: UUID, event: str, step: str | None = None) -> None:
+                await release.wait()
+                sent.append(event)
+
+        job = DevJob(
+            id=uuid4(),
+            user_id=uuid4(),
+            session_id=uuid4(),
+            trace_id=uuid4(),
+            approval_request_id="a",
+            mode="build",
+            task_text="t",
+            source_artifact_id=None,
+            model_id="m",
+            state=JobState.SUCCEEDED,
+            lease_epoch=1,
+            started_at=datetime.now(timezone.utc),
+            result_commit=None,
+            result_artifact_id=None,
+        )
+        sup = JobSupervisor(
+            store=None,  # type: ignore[arg-type]
+            launcher=None,  # type: ignore[arg-type]
+            adapter_factory=None,  # type: ignore[arg-type]
+            events=SlowSink(),  # type: ignore[arg-type]
+        )
+        work = asyncio.create_task(sup._notify(job, "end"))
+        await asyncio.sleep(0.05)  # the send is in progress
+        work.cancel()  # the keeper's cancel of the job task
+        with pytest.raises(asyncio.CancelledError):
+            await work
+        release.set()
+        await until(lambda: sent == ["end"])
+
+    async def test_a_resumed_delivery_sends_the_delivering_state(
+        self, h: Harness, make_job: MakeJob, pushed: list[tuple[dict[str, object], str]]
+    ) -> None:
+        job = await make_job()
+        first = RecordingPipeline(result="abc123", deliver_gate=asyncio.Event())
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=first)
+        await a.scan_once()
+        await first.in_delivery.wait()
+        await a.stop()
+
+        await expire_lease(h.pool, job.id)
+        b = h.supervisor("sup-b", pipeline=RecordingPipeline(result="abc123"), events=self._sink(h))
+        await b.scan_once()
+        await _wait_end(b)
+        assert [(c["event"], c["state"]) for c in self._cards(pushed)] == [
+            ("state", "delivering"),
+            ("end", "succeeded"),
+        ]

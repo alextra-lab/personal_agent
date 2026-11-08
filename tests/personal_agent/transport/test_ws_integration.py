@@ -1070,3 +1070,117 @@ class TestAttach:
                 _assert_effort_frame(second.receive_json(), "standard")
                 assert second.receive_json()["type"] == "REPLAY_COMPLETE"
                 assert old.sender_task.done()
+
+
+def _job_card(state: str, *, event: str = "state", **extra: object) -> dict[str, object]:
+    """A ``dev_job`` payload as the supervisor sends it (FRE-1688)."""
+    card: dict[str, object] = {
+        "event": event,
+        "job_id": "11111111-1111-1111-1111-111111111111",
+        "state": state,
+        "ended": event == "end",
+        "step": None,
+        "spend_usd": "0.123456",
+        "cap_usd": "2.36",
+        "failure_reason": None,
+        "check_result": None,
+        "repo_url": None,
+        "result_artifact_id": None,
+        "main_moved": None,
+    }
+    card.update(extra)
+    return card
+
+
+def _is_job_frame(frame: dict[str, Any], state: str) -> bool:
+    return (
+        frame["type"] == "STATE_DELTA"
+        and frame["data"]["key"] == "dev_job"
+        and frame["data"]["value"]["state"] == state
+    )
+
+
+class TestDevJobCard:
+    """FRE-1688 (ADR-0159 D10.6, AC-7): the job's end state reaches a connected client and a late one."""
+
+    def test_a_connected_client_receives_the_end_state(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        client, _ = harness
+        session_id = str(uuid4())
+        with ws_connect(client, session_id) as ws:
+            end = _job_card("failed", event="end", failure_reason="supervisor_restart")
+            client.post("/__test/dev_job", params={"session_id": session_id}, json=end)
+            frame = ws.receive_json()
+        assert _is_job_frame(frame, "failed")
+        assert frame["data"]["value"]["failure_reason"] == "supervisor_restart"
+        assert isinstance(frame["seq"], int)
+
+    def test_a_client_that_reconnects_with_last_seq_replays_the_end_state(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        client, _ = harness
+        session_id = str(uuid4())
+        client.post(
+            "/__test/dev_job",
+            params={"session_id": session_id},
+            json=_job_card("succeeded", event="end"),
+        )
+        with ws_connect(client, session_id, last_seq=0) as ws:
+            frame = ws.receive_json()
+        assert _is_job_frame(frame, "succeeded")
+
+    def test_a_client_that_attaches_after_the_end_receives_the_snapshot(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        from tests.personal_agent.transport.ws_harness import FakeJobCardStore
+
+        client, _ = harness
+        session_id = str(uuid4())
+        end = _job_card("failed", event="end", failure_reason="supervisor_restart")
+        client.post("/__test/dev_job", params={"session_id": session_id}, json=end)
+        FakeJobCardStore.stored[session_id] = end
+
+        with ws_connect(client, session_id, attach=True) as ws:
+            frames = [ws.receive_json(), ws.receive_json(), ws.receive_json()]
+
+        assert frames[0]["data"]["key"] == "session_effort"
+        assert _is_job_frame(frames[1], "failed")
+        assert frames[1]["seq"] is None
+        assert frames[1]["data"]["value"]["spend_usd"] == "0.123456"
+        assert frames[2]["type"] == "REPLAY_COMPLETE"
+
+    def test_the_snapshot_comes_after_the_replayed_events_so_it_wins(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """The row says ``delivering``. The last persisted event says ``checking``: its successor was lost."""
+        from tests.personal_agent.transport.ws_harness import FakeJobCardStore
+
+        client, _ = harness
+        session_id = str(uuid4())
+        client.post("/__test/open_turn", params={"session_id": session_id})
+        client.post("/__test/dev_job", params={"session_id": session_id}, json=_job_card("checking"))
+        FakeJobCardStore.stored[session_id] = _job_card("delivering")
+
+        with ws_connect(client, session_id, attach=True) as ws:
+            frames = []
+            while True:
+                frame = ws.receive_json()
+                frames.append(frame)
+                if frame["type"] == "REPLAY_COMPLETE":
+                    break
+
+        states = [
+            f["data"]["value"]["state"]
+            for f in frames
+            if f["type"] == "STATE_DELTA" and f["data"]["key"] == "dev_job"
+        ]
+        assert states == ["checking", "delivering"]
+
+    def test_a_session_with_no_job_gets_no_job_frame(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        client, _ = harness
+        with ws_connect(client, str(uuid4()), attach=True) as ws:
+            assert ws.receive_json()["data"]["key"] == "session_effort"
+            assert ws.receive_json()["type"] == "REPLAY_COMPLETE"

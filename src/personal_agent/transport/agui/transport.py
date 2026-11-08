@@ -821,6 +821,27 @@ async def emit_session_effort(*, session_id: str, seshat_effort: str) -> None:
     )
 
 
+async def emit_dev_job(*, session_id: str, payload: dict[str, object]) -> bool:
+    """Persist + enqueue a ``dev_job`` STATE_DELTA event (ADR-0159 D10.6).
+
+    The supervisor sends it from the gateway process, outside any turn. The payload is the
+    complete job card, so the newest one wins. A connected client gets it live. A client that
+    reconnects with a ``last_seq`` replays it. A page that attaches after the job ended gets the
+    snapshot of the ``dev_jobs`` row instead (``ws_endpoint._send_attach_replay``).
+
+    Args:
+        session_id: Target session identifier.
+        payload: The card, from :func:`personal_agent.dev_agent.job_card.card_payload`.
+
+    Returns:
+        ``True`` when the event was persisted (see :func:`_persist_and_enqueue`).
+    """
+    return await _push_event(
+        StateUpdateEvent(key="dev_job", value=payload, session_id=session_id),
+        session_id,
+    )
+
+
 class AGUITransport:
     """AG-UI streaming transport via WebSocket.
 

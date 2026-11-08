@@ -169,6 +169,57 @@ export interface PhaseEndData {
   ended_at?: string;
 }
 
+/** Job states of the development agent (ADR-0159 D9.2). */
+export type DevJobState =
+  | 'queued'
+  | 'running'
+  | 'checking'
+  | 'delivering'
+  | 'succeeded'
+  | 'failed'
+  | 'failed_check'
+  | 'cap_reached'
+  | 'cost_unknown'
+  | 'timed_out'
+  | 'cancelled';
+
+/** One step of the publish check (ADR-0159 D7), as stored in `dev_jobs.check_result`. */
+export interface DevJobCheckStep {
+  name: string;
+  passed: boolean;
+  messages?: string[];
+}
+
+/** `dev_jobs.check_result`: the publish check's result. */
+export interface DevJobCheckResult {
+  passed: boolean;
+  steps?: DevJobCheckStep[];
+}
+
+/**
+ * `dev_job` STATE_DELTA payload — the complete state of the job card (ADR-0159 D10.6, FRE-1688).
+ *
+ * Every payload is the full card, so the newest wins. Spend and cap are decimal strings of the
+ * `dev_jobs` row, in USD. Backend source: `dev_agent/job_card.py::card_payload`.
+ */
+export interface DevJobCardData {
+  event: 'state' | 'step' | 'end';
+  job_id: string;
+  mode: 'build' | 'fix';
+  state: DevJobState;
+  ended: boolean;
+  /** The latest step of the OpenCode event stream; null when none arrived. */
+  step: string | null;
+  spend_usd: string | null;
+  cap_usd: string | null;
+  failure_reason: string | null;
+  check_result: DevJobCheckResult | null;
+  repo_url: string | null;
+  result_artifact_id: string | null;
+  /** D8.9: true when main moved to the result, false when it did not, null when unknown. */
+  main_moved: boolean | null;
+}
+
 /**
  * STATE_DELTA payload — agent state change.
  *

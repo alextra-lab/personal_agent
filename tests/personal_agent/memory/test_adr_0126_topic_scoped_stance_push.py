@@ -355,7 +355,12 @@ class TestAC1TopicScopedStanceReachesModelOnlyWhenEntityRecalled:
             user_message="Tell me about Kelvorine please",
         )
         await owner_service.assert_stance(
-            Stance(target="Kelvorine", affect="prefers it over the alternative", observed_at=_T0)
+            Stance(
+                target="Kelvorine",
+                affect="prefers it over the alternative",
+                observed_at=_T0,
+                asserted_by="user",
+            )
         )
 
         wire, evidence = await _run_turn(owner_service, "Tell me about Kelvorine please")
@@ -388,7 +393,12 @@ class TestAC1TopicScopedStanceReachesModelOnlyWhenEntityRecalled:
             user_message="Tell me about Kelvorine please",
         )
         ok = await owner_service.assert_stance(
-            Stance(target="Kelvorine", affect="prefers it over the alternative", observed_at=_T0)
+            Stance(
+                target="Kelvorine",
+                affect="prefers it over the alternative",
+                observed_at=_T0,
+                asserted_by="user",
+            )
         )
         assert ok is True
 
@@ -429,13 +439,14 @@ class TestAC5PushHalfCurrentPresentSupersededAbsent:
             user_message="Tell me about Thennoray please",
         )
         ok1 = await owner_service.assert_stance(
-            Stance(target="Thennoray", affect="prefers it", observed_at=_T0)
+            Stance(target="Thennoray", affect="prefers it", observed_at=_T0, asserted_by="user")
         )
         ok2 = await owner_service.assert_stance(
             Stance(
                 target="Thennoray",
                 affect="prefers a distinctly softer texture",
                 observed_at=_T1,
+                asserted_by="user",
             )
         )
         assert ok1 is True
@@ -465,7 +476,9 @@ class TestAC6EmptyItemFilteredPopulatedControlArrives:
             turn_id="fre1015-seed-ac6-empty",
             user_message="Tell me about Wexbriar please",
         )
-        await owner_service.assert_stance(Stance(target="Wexbriar", affect="", observed_at=_T0))
+        await owner_service.assert_stance(
+            Stance(target="Wexbriar", affect="", observed_at=_T0, asserted_by="user")
+        )
 
         wire, evidence = await _run_turn(owner_service, "Tell me about Wexbriar please")
 
@@ -482,7 +495,9 @@ class TestAC6EmptyItemFilteredPopulatedControlArrives:
             turn_id="fre1015-seed-ac6-whitespace",
             user_message="Tell me about Wexbriar please",
         )
-        await owner_service.assert_stance(Stance(target="Wexbriar", affect="   ", observed_at=_T0))
+        await owner_service.assert_stance(
+            Stance(target="Wexbriar", affect="   ", observed_at=_T0, asserted_by="user")
+        )
 
         wire, evidence = await _run_turn(owner_service, "Tell me about Wexbriar please")
 
@@ -506,6 +521,7 @@ class TestAC6EmptyItemFilteredPopulatedControlArrives:
                 target="Delphruvia",
                 affect="prefers it as a daily staple",
                 observed_at=_T0,
+                asserted_by="user",
             )
         )
 

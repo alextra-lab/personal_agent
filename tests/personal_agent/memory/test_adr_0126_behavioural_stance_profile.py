@@ -243,6 +243,7 @@ class TestAC2AC3StandingBehaviouralAlwaysPresent:
                 target="FRE1017_StandingOne",
                 affect="prefers explicit request first",
                 observed_at=_T0,
+                asserted_by="user",
             )
         )
         ok2 = await owner_service.assert_stance(
@@ -250,6 +251,7 @@ class TestAC2AC3StandingBehaviouralAlwaysPresent:
                 target="FRE1017_StandingTwo",
                 affect="prefers plain text by default",
                 observed_at=_T0,
+                asserted_by="user",
             )
         )
         assert ok1 is True
@@ -262,6 +264,7 @@ class TestAC2AC3StandingBehaviouralAlwaysPresent:
                 target="FRE1017_TopicScoped",
                 affect="prefers it as a cheese to keep eating",
                 observed_at=_T0,
+                asserted_by="user",
             )
         )
         assert ok3 is True
@@ -301,7 +304,7 @@ class TestAC2RealProductionCuratedSet:
             await _seed_bare_entity(owner_service, target)
             affect = f"fre1017 real-set probe affect {i}"
             ok = await owner_service.assert_stance(
-                Stance(target=target, affect=affect, observed_at=_T0)
+                Stance(target=target, affect=affect, observed_at=_T0, asserted_by="user")
             )
             assert ok is True
             affects[target] = affect
@@ -339,6 +342,7 @@ class TestAC7ByteBoundAndResponsiveness:
                 target="FRE1017_ByteBoundOne",
                 affect="prefers explicit request first",
                 observed_at=_T0,
+                asserted_by="user",
             )
         )
         await _seed_bare_entity(owner_service, "FRE1017_ByteBoundTwo")
@@ -347,6 +351,7 @@ class TestAC7ByteBoundAndResponsiveness:
                 target="FRE1017_ByteBoundTwo",
                 affect="prefers plain text by default",
                 observed_at=_T0,
+                asserted_by="user",
             )
         )
         assert ok1 is True

@@ -325,12 +325,15 @@ class TestCurrentOnlyPredicatesAreIndependentlyEnforced:
 
 
 class TestAgentLabeledStancesAreNotReturned:
+    """FRE-1752: the live graph returns user and unlabeled stances, not agent ones."""
+
     pytestmark = pytest.mark.integration
 
     _OWNER_UID = UUID("00000000-0000-0000-0000-00000000ad26")
 
     @pytest_asyncio.fixture
     async def owner_service(self) -> AsyncIterator[MemoryService]:
+        """Connect to the test stack, ensure an owner exists, clean ``FRE1752_`` rows."""
         service = MemoryService()  # fre-375-allow: integration test, skips when Neo4j unavailable
         if not await service.connect():
             pytest.skip("Neo4j not available (make test-infra-up)")
@@ -374,6 +377,7 @@ class TestAgentLabeledStancesAreNotReturned:
     async def test_agent_labeled_stance_is_absent_user_and_unlabeled_are_returned(
         self, owner_service: MemoryService
     ) -> None:
+        """AC-1 and AC-2 on real rows: agent absent, user and unlabeled returned."""
         await self._seed(owner_service, "FRE1752_User", ", asserted_by: 'user'")
         await self._seed(owner_service, "FRE1752_Agent", ", asserted_by: 'agent'")
         await self._seed(owner_service, "FRE1752_Unlabeled", "")

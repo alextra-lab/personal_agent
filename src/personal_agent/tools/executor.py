@@ -71,6 +71,10 @@ _APPROVAL_PARAM = "approval"
 _RESERVED_PARAMS = frozenset({_APPROVE_PARAM, _READ_GRANT_PARAM, _APPROVAL_PARAM})
 
 
+#: The longest time that the permission layer waits for a decision's write (ADR-0159 D10.3).
+_RECORD_TIMEOUT_SECONDS = 5.0
+
+
 @dataclass(frozen=True)
 class ApprovalGrant:
     """The approved card that let this call run (ADR-0159 D10.3).
@@ -366,14 +370,18 @@ async def _record_decision(
         decision: The decision that took effect.
     """
     try:
-        await transport.record_approval_decision(
-            request_id=request_id,
-            tool_call_id=tool_call_id,
-            session_id=session_id,
-            trace_id=trace_ctx.trace_id,
-            tool=tool_name,
-            args_hash=args_hash,
-            decision=decision,
+        # Bounded: a slow database must not hold up the approved call of any other tool.
+        await asyncio.wait_for(
+            transport.record_approval_decision(
+                request_id=request_id,
+                tool_call_id=tool_call_id,
+                session_id=session_id,
+                trace_id=trace_ctx.trace_id,
+                tool=tool_name,
+                args_hash=args_hash,
+                decision=decision,
+            ),
+            timeout=_RECORD_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001 — a failed record never changes the call's outcome
         log.warning(

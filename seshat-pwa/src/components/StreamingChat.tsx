@@ -25,6 +25,7 @@ import { ClassifiedErrorCard } from './ClassifiedErrorCard';
 import { DecisionCard } from './DecisionCard';
 import { DevJobCard } from './DevJobCard';
 import { LocationConsent } from './LocationConsent';
+import { ObserveLink } from './ObserveLink';
 import { PhaseIndicator } from './PhaseIndicator';
 import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
@@ -341,6 +342,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
               <span aria-hidden="true">🔍</span>
               Observe
             </Link>
+
+            {/* Observe (Grafana) external link — FRE-1754; hidden when OBSERVE_URL is unset */}
+            <ObserveLink onClick={() => setIsDrawerOpen(false)} />
 
             {/* Settings nav link — FRE-1702: read-only menu of every parameter that changes a turn */}
             <Link

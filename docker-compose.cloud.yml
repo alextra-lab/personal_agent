@@ -449,6 +449,8 @@ services:
     environment:
       SESHAT_URL: ${SESHAT_URL:-https://agent.example.com}
       GATEWAY_TOKEN: ${GATEWAY_TOKEN_PWA}
+      # Observe (Grafana) address for the drawer link (FRE-1754). Empty hides the link.
+      OBSERVE_URL: ${OBSERVE_URL:-}
     container_name: cloud-sim-seshat-pwa
     ports:
       - "127.0.0.1:3000:3000"

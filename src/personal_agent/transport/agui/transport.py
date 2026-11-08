@@ -27,6 +27,8 @@ from uuid import UUID, uuid4
 if TYPE_CHECKING:
     from personal_agent.error_classification import ClassifiedError
 
+from sqlalchemy import text
+
 from personal_agent.config import settings
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.request_tasks import RequestTaskRegistry, get_request_task_registry
@@ -61,6 +63,11 @@ from personal_agent.transport.events import (
     ToolStartEvent,
 )
 from personal_agent.transport.turn_summary import record_turn_event
+
+#: The decision that took effect on a card, as ``tool_approval_decisions`` records it.
+#: ``approve`` means the call ran once. ``approve_session`` means it ran and a session allow rule
+#: was added (ADR-0156 D8.3).
+ApprovalOutcome = Literal["approve", "approve_session", "deny", "timeout", "connection_lost"]
 
 log = get_logger(__name__)
 
@@ -993,3 +1000,47 @@ class AGUITransport:
             decision=decision.decision,
         )
         return decision
+
+    async def record_approval_decision(
+        self,
+        *,
+        request_id: str,
+        tool_call_id: str | None,
+        session_id: str,
+        trace_id: str,
+        tool: str,
+        args_hash: str,
+        decision: ApprovalOutcome,
+    ) -> None:
+        """Persist one card's decision in ``tool_approval_decisions`` (ADR-0159 D10.3).
+
+        Args:
+            request_id: The card's request id. The table's key: one row per card.
+            tool_call_id: The model's tool call id, or ``None``.
+            session_id: The session of the card.
+            trace_id: The trace of the turn.
+            tool: The tool that asked.
+            args_hash: The hash of the arguments that the card showed.
+            decision: The decision that took effect.
+
+        Raises:
+            Exception: Whatever the database raised. The caller logs it.
+        """
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                text(
+                    "INSERT INTO tool_approval_decisions "
+                    "(request_id, session_id, tool_call_id, tool, args_hash, decision, trace_id) "
+                    "VALUES (:rid, :sid, :cid, :tool, :hash, :decision, :trace)"
+                ),
+                {
+                    "rid": request_id,
+                    "sid": UUID(session_id),
+                    "cid": tool_call_id,
+                    "tool": tool,
+                    "hash": args_hash,
+                    "decision": decision,
+                    "trace": trace_id,
+                },
+            )
+            await db.commit()

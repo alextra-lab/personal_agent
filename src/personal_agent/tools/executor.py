@@ -5,6 +5,7 @@ with permission checks, argument validation, execution, and telemetry.
 """
 
 import asyncio
+import hashlib
 import inspect
 import json
 import os
@@ -49,7 +50,7 @@ from personal_agent.tools.types import ToolDefinition, ToolErrorDetail, ToolResu
 
 if TYPE_CHECKING:
     from personal_agent.governance.worker_read_grant import ReadGrant
-    from personal_agent.transport.agui.transport import AGUITransport
+    from personal_agent.transport.agui.transport import AGUITransport, ApprovalOutcome
     from personal_agent.transport.agui.ws_endpoint import ApprovalDecision
 
 log = get_logger(__name__)
@@ -63,7 +64,44 @@ _APPROVE_PARAM = "approve"
 # D9.4). Reserved the same way: a model-supplied value is removed, and the layer sets
 # the grant that the worker loop passed.
 _READ_GRANT_PARAM = "read_grant"
-_RESERVED_PARAMS = frozenset({_APPROVE_PARAM, _READ_GRANT_PARAM})
+
+# Name of the executor parameter that receives the approved card's grant (ADR-0159 D10.3).
+# Reserved the same way. It is set only when the call ran because the user approved its card.
+_APPROVAL_PARAM = "approval"
+_RESERVED_PARAMS = frozenset({_APPROVE_PARAM, _READ_GRANT_PARAM, _APPROVAL_PARAM})
+
+
+@dataclass(frozen=True)
+class ApprovalGrant:
+    """The approved card that let this call run (ADR-0159 D10.3).
+
+    The permission layer persisted the decision in ``tool_approval_decisions`` before it built
+    the grant, when the write succeeded. A consumer that needs durable consent checks that row.
+
+    Attributes:
+        request_id: The card's request id.
+        tool_call_id: The model's tool call id, or ``None``.
+        args_hash: :func:`approval_args_hash` of ``args``.
+        args: The arguments that the card showed.
+    """
+
+    request_id: str
+    tool_call_id: str | None
+    args_hash: str
+    args: Mapping[str, Any]
+
+
+def approval_args_hash(args: Mapping[str, Any]) -> str:
+    """Return the SHA-256 of a card's arguments as canonical JSON.
+
+    Args:
+        args: The arguments that the card showed.
+
+    Returns:
+        64 lowercase hex characters.
+    """
+    canonical = json.dumps(dict(args), sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class ApproveFn(Protocol):
@@ -84,8 +122,13 @@ class ApproveFn(Protocol):
 
 @dataclass(frozen=True)
 class PermissionGranted:
-    """A permission check that lets the call run."""
+    """A permission check that lets the call run.
 
+    Attributes:
+        approval: The approved card, when the call ran because the user approved it.
+    """
+
+    approval: ApprovalGrant | None = None
     allowed: Literal[True] = True
 
 
@@ -296,9 +339,85 @@ def _validate_tool_arguments(
     return PermissionGranted()
 
 
+async def _record_decision(
+    *,
+    transport: "AGUITransport",
+    request_id: str,
+    tool_call_id: str | None,
+    session_id: str,
+    trace_ctx: TraceContext,
+    tool_name: str,
+    args_hash: str,
+    decision: "ApprovalOutcome",
+) -> None:
+    """Persist a card's decision (ADR-0159 D10.3). A failure is logged and changes nothing.
+
+    The outcome of the call does not depend on this write, so no tool's approval changes. A tool
+    that requires durable consent checks the row itself and refuses when it is missing.
+
+    Args:
+        transport: The transport that showed the card.
+        request_id: The card's request id.
+        tool_call_id: The model's tool call id, or ``None``.
+        session_id: The session of the card.
+        trace_ctx: Trace context of this invocation.
+        tool_name: The tool that asked.
+        args_hash: :func:`approval_args_hash` of the card's arguments.
+        decision: The decision that took effect.
+    """
+    try:
+        await transport.record_approval_decision(
+            request_id=request_id,
+            tool_call_id=tool_call_id,
+            session_id=session_id,
+            trace_id=trace_ctx.trace_id,
+            tool=tool_name,
+            args_hash=args_hash,
+            decision=decision,
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed record never changes the call's outcome
+        log.warning(
+            "approval_decision_persist_failed",
+            tool_name=tool_name,
+            request_id=request_id,
+            decision=decision,
+            error=type(exc).__name__,
+            trace_id=trace_ctx.trace_id,
+            session_id=session_id,
+        )
+        return
+    log.info(
+        "approval_decision_persisted",
+        tool_name=tool_name,
+        request_id=request_id,
+        tool_call_id=tool_call_id,
+        decision=decision,
+        trace_id=trace_ctx.trace_id,
+        session_id=session_id,
+    )
+
+
+def _outcome(answer: "ApprovalDecision", *, explicit: bool) -> "ApprovalOutcome":
+    """Return the decision that took effect for an answer.
+
+    Args:
+        answer: The card's answer.
+        explicit: Whether an explicit ask rule matched. A session answer to it runs once.
+
+    Returns:
+        The decision to record.
+    """
+    if answer.decision == "approve_session":
+        return "approve" if explicit else "approve_session"
+    if answer.decision in ("approve", "deny", "timeout", "connection_lost"):
+        return answer.decision
+    return "deny"
+
+
 async def _request_approval(
     *,
     transport: "AGUITransport",
+    request_id: str,
     tool_name: str,
     args: Mapping[str, Any],
     reason: str,
@@ -314,6 +433,7 @@ async def _request_approval(
 
     Args:
         transport: AG-UI transport for the round trip.
+        request_id: The card's request id.
         tool_name: Tool awaiting approval.
         args: Values shown on the approval card.
         reason: Human-readable reason shown on the card.
@@ -338,7 +458,7 @@ async def _request_approval(
         phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name),
     ):
         return await transport.request_tool_approval(
-            request_id=str(uuid4()),
+            request_id=request_id,
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
             tool=tool_name,
@@ -407,6 +527,7 @@ async def _check_permissions(
     *,
     trace_ctx: TraceContext,
     worker: str | None = None,
+    tool_call_id: str | None = None,
 ) -> PermissionResult:
     """Check whether a call may run: mode, arguments, then the permission rules.
 
@@ -428,9 +549,12 @@ async def _check_permissions(
         trace_ctx: Trace context for telemetry correlation in approval events.
         worker: The worker type that makes the call, or ``None`` for the primary. Shown on
             the card (D8.3).
+        tool_call_id: The model's tool call id, recorded with the card's decision.
 
     Returns:
-        PermissionResult indicating if execution is allowed.
+        PermissionResult indicating if execution is allowed. A call that ran because the user
+        approved its card carries the :class:`ApprovalGrant`. Every card's decision is persisted
+        (ADR-0159 D10.3).
     """
     # Imported here: the rules import the bash matcher, which imports a tools module, and
     # this module is imported while ``personal_agent.tools`` initialises.
@@ -535,8 +659,10 @@ async def _check_permissions(
             "approval_no_transport",
         )
 
+    request_id = str(uuid4())
     answer = await _request_approval(
         transport=transport,
+        request_id=request_id,
         tool_name=tool_name,
         args=arguments,
         reason=decision.reason if decision.explicit else f"{decision.reason}: {decision.refused}",
@@ -544,6 +670,23 @@ async def _check_permissions(
         trace_ctx=trace_ctx,
         worker=worker,
         session_option=not decision.explicit,
+    )
+    args_hash = approval_args_hash(arguments)
+    await _record_decision(
+        transport=transport,
+        request_id=request_id,
+        tool_call_id=tool_call_id,
+        session_id=session_id,
+        trace_ctx=trace_ctx,
+        tool_name=tool_name,
+        args_hash=args_hash,
+        decision=_outcome(answer, explicit=decision.explicit),
+    )
+    grant = ApprovalGrant(
+        request_id=request_id,
+        tool_call_id=tool_call_id,
+        args_hash=args_hash,
+        args=dict(arguments),
     )
     if answer.decision == "approve":
         log.info(
@@ -554,7 +697,7 @@ async def _check_permissions(
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
         )
-        return PermissionGranted()
+        return PermissionGranted(approval=grant)
     if answer.decision == "approve_session":
         # Only an unmatched call may add a session rule; an explicit ask is never
         # overridden (D8.3). A session answer to an explicit ask runs this call once.
@@ -578,7 +721,7 @@ async def _check_permissions(
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
         )
-        return PermissionGranted()
+        return PermissionGranted(approval=grant)
 
     outcomes: dict[str, tuple[str, str, DispatchCode]] = {
         "deny": ("the user denied it", "approval_denied_by_user", "denied_by_user"),
@@ -665,7 +808,11 @@ class ToolExecutionLayer:
         self._governance_config = config
 
     def _build_approve(
-        self, tool_name: str, session_id: str | None, trace_ctx: TraceContext
+        self,
+        tool_name: str,
+        session_id: str | None,
+        trace_ctx: TraceContext,
+        tool_call_id: str | None = None,
     ) -> ApproveFn:
         """Build the approval callable for one invocation (ADR-0153 D7).
 
@@ -677,9 +824,11 @@ class ToolExecutionLayer:
             tool_name: Tool the request is made for.
             session_id: Session of this invocation.
             trace_ctx: Trace context of this invocation.
+            tool_call_id: The model's tool call id, recorded with each decision.
 
         Returns:
-            The callable bound to this invocation.
+            The callable bound to this invocation. Each decision it receives is persisted
+            (ADR-0159 D10.3).
         """
         transport = self.transport
 
@@ -695,14 +844,27 @@ class ToolExecutionLayer:
             elif transport is None:
                 cause = "no_transport"
             else:
-                return await _request_approval(
+                request_id = str(uuid4())
+                answer = await _request_approval(
                     transport=transport,
+                    request_id=request_id,
                     tool_name=tool_name,
                     args=args,
                     reason=reason,
                     session_id=session_id,
                     trace_ctx=trace_ctx,
                 )
+                await _record_decision(
+                    transport=transport,
+                    request_id=request_id,
+                    tool_call_id=tool_call_id,
+                    session_id=session_id,
+                    trace_ctx=trace_ctx,
+                    tool_name=tool_name,
+                    args_hash=approval_args_hash(args),
+                    decision=_outcome(answer, explicit=True),
+                )
+                return answer
             log.warning(
                 "approval_callable_denied",
                 tool_name=tool_name,
@@ -721,6 +883,7 @@ class ToolExecutionLayer:
         session_id: str | None = None,
         worker: str | None = None,
         read_grant: "ReadGrant | None" = None,
+        tool_call_id: str | None = None,
     ) -> ToolResult:
         """Execute a tool with full governance and observability.
 
@@ -734,6 +897,11 @@ class ToolExecutionLayer:
         A worker call to such an executor without a grant is refused before it
         runs, so a worker path that forgets the grant cannot read without limit.
 
+        An executor that declares an ``approval`` parameter receives the
+        :class:`ApprovalGrant` of the card that the user approved for this call,
+        or ``None`` when no card was approved (ADR-0159 D10.3).  A model-supplied
+        value is dropped.
+
         Args:
             tool_name: Name of the tool to execute.
             arguments: Tool arguments (keyword arguments for executor).
@@ -746,6 +914,8 @@ class ToolExecutionLayer:
                 with the worker named (ADR-0156 D8.3, D9.3).
             read_grant: A worker task's file grant, injected into an executor
                 that declares ``read_grant``.
+            tool_call_id: The model's tool call id, recorded with a card's
+                decision (ADR-0159 D10.3).
 
         Returns:
             ToolResult with execution outcome.
@@ -809,6 +979,7 @@ class ToolExecutionLayer:
             session_id=session_id,
             trace_ctx=trace_ctx,
             worker=worker,
+            tool_call_id=tool_call_id,
         )
 
         if isinstance(permission, PermissionRefused):
@@ -906,6 +1077,12 @@ class ToolExecutionLayer:
                 pass_ctx = "ctx" in sig.parameters
                 if _READ_GRANT_PARAM in sig.parameters:
                     filtered_arguments = {**filtered_arguments, _READ_GRANT_PARAM: read_grant}
+                if _APPROVAL_PARAM in sig.parameters:
+                    # ADR-0159 D10.3: the approved card, or None when no card was approved.
+                    filtered_arguments = {
+                        **filtered_arguments,
+                        _APPROVAL_PARAM: permission.approval,
+                    }
                 if pass_ctx:
                     filtered_arguments = {**filtered_arguments, "ctx": trace_ctx}
                 if _APPROVE_PARAM in sig.parameters:
@@ -916,7 +1093,9 @@ class ToolExecutionLayer:
                         )
                     filtered_arguments = {
                         **filtered_arguments,
-                        _APPROVE_PARAM: self._build_approve(tool_name, session_id, trace_ctx),
+                        _APPROVE_PARAM: self._build_approve(
+                            tool_name, session_id, trace_ctx, tool_call_id
+                        ),
                     }
 
                 if inspect.iscoroutinefunction(executor):

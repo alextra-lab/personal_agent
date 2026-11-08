@@ -321,6 +321,7 @@ async def dispatch_tool_call(
             session_id=session_id,
             worker=worker,
             read_grant=read_grant,
+            tool_call_id=tool_call_id,
         )
 
         tool_info = tool_layer.registry.get_tool(tool_name)

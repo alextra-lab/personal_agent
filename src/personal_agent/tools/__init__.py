@@ -154,6 +154,17 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     else:
         log.warning("notes_tools_skipped_unconfigured")
 
+    # ADR-0159 D10.1 (FRE-1687) — the dev-agent job tool, only where the job supervisor is on.
+    # Its executor also refuses while no supervisor task runs.
+    if settings.dev_agent_supervisor_enabled:
+        from personal_agent.tools.dev_job import (  # noqa: PLC0415
+            start_dev_job_executor,
+            start_dev_job_tool,
+        )
+
+        registry.register(start_dev_job_tool, start_dev_job_executor)
+        log.info("start_dev_job_registered")
+
     # FRE-230 — location tool, register only after explicit opt-in.
     if settings.location_enabled:
         from personal_agent.tools.location import (  # noqa: PLC0415

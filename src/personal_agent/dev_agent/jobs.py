@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, TypeVar
 from uuid import UUID
@@ -58,10 +59,44 @@ ACTIVE_STATES: frozenset[JobState] = frozenset(
 END_STATES: frozenset[JobState] = frozenset(set(JobState) - ACTIVE_STATES)
 
 _END_STATE_VALUES: list[str] = sorted(s.value for s in END_STATES)
+_ACTIVE_STATE_VALUES: list[str] = sorted(s.value for s in ACTIVE_STATES)
+#: The SQL predicate "the job holds the one-job slot". Mirrors ``dev_jobs_one_active``.
+_ACTIVE = f"state = ANY('{{{','.join(_ACTIVE_STATE_VALUES)}}}'::text[])"
 #: The SQL predicate "the job is not at an end state". One copy, used by every query.
 _NOT_ENDED = f"state <> ALL('{{{','.join(_END_STATE_VALUES)}}}'::text[])"
 
 JobMode = Literal["build", "fix"]
+
+#: Why :meth:`JobStore.create_approved_job` wrote no row.
+RefusalReason = Literal["job_active", "month_cap_reached", "approval_missing", "approval_used"]
+
+
+@dataclass(frozen=True)
+class ApprovalEvidence:
+    """The approved card that a new job must match in ``tool_approval_decisions`` (D10.3).
+
+    Attributes:
+        request_id: The card's request id.
+        tool_call_id: The model's tool call id, or ``None``.
+        tool: The tool that asked.
+        args_hash: The hash of the arguments that the card showed.
+    """
+
+    request_id: str
+    tool_call_id: str | None
+    tool: str
+    args_hash: str
+
+
+@dataclass(frozen=True)
+class JobRefused:
+    """No job was created.
+
+    Attributes:
+        reason: Why.
+    """
+
+    reason: RefusalReason
 
 
 @dataclass(frozen=True)
@@ -103,6 +138,17 @@ class DevJob:
     result_artifact_id: UUID | None
     repo: str | None = None
     base_commit: str | None = None
+
+
+@dataclass(frozen=True)
+class JobCreated:
+    """A job was created.
+
+    Attributes:
+        job: The new ``queued`` job.
+    """
+
+    job: DevJob
 
 
 @dataclass(frozen=True)
@@ -198,7 +244,10 @@ class JobStore:
         model_id: str,
         source_artifact_id: UUID | None = None,
     ) -> DevJob:
-        """Insert a ``queued`` job.
+        """Insert a ``queued`` job with no approval check. Tests and recovery fixtures only.
+
+        Production creates a job through :meth:`create_approved_job`, which requires the
+        persisted approval (ADR-0159 D10.3).
 
         Args:
             job_id: The new job's id.
@@ -245,6 +294,111 @@ class JobStore:
             model_id=model_id,
         )
         return job
+
+    async def create_approved_job(
+        self,
+        *,
+        job_id: UUID,
+        user_id: UUID,
+        session_id: UUID,
+        trace_id: UUID,
+        approval: ApprovalEvidence,
+        mode: JobMode,
+        task_text: str,
+        model_id: str,
+        month_cap_usd: Decimal,
+        source_artifact_id: UUID | None = None,
+    ) -> JobCreated | JobRefused:
+        """Insert a ``queued`` job only for an approved card that no job used (ADR-0159 D10.3, D10.5).
+
+        This is the production path. One transaction:
+
+        1. refuse ``job_active`` if a job holds the one-job slot (D9.3);
+        2. lock the current UTC month's spend row, as the broker does, and refuse
+           ``month_cap_reached`` if committed plus reserved spend is at the cap (D5.5);
+        3. insert the job only if ``tool_approval_decisions`` holds an ``approve`` row with the same
+           request id, session, tool call id, tool and argument hash. Else refuse
+           ``approval_missing``;
+        4. a second use of the request id refuses ``approval_used``.
+
+        Args:
+            job_id: The new job's id.
+            user_id: The requesting user.
+            session_id: The session of the card.
+            trace_id: The job's own trace (D5.9).
+            approval: The approved card that the permission layer passed.
+            mode: ``build`` or ``fix``.
+            task_text: The task.
+            model_id: The catalog key of the model.
+            month_cap_usd: The broker's per-month cap in USD.
+            source_artifact_id: The artifact to fix, required for ``fix``.
+
+        Returns:
+            The new job, or the refusal and its reason. A refusal writes no row.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_ACTIVE} LIMIT 1"):
+                        return JobRefused("job_active")
+                    spent = await conn.fetchval(
+                        """
+                        SELECT committed_usd + reserved_usd FROM dev_month_spend
+                         WHERE month_start = (date_trunc('month', clock_timestamp() AT TIME ZONE 'UTC'))::date
+                           FOR UPDATE
+                        """
+                    )
+                    # No row yet: the broker made no call this month, so the spend is zero.
+                    if Decimal(spent or 0) >= month_cap_usd:
+                        return JobRefused("month_cap_reached")
+                    row = await conn.fetchrow(
+                        f"""
+                        INSERT INTO dev_jobs (id, user_id, session_id, trace_id, approval_request_id,
+                                              mode, task_text, source_artifact_id, model_id, state,
+                                              created_at)
+                        SELECT $1, $2, $3, $4, d.request_id, $5, $6, $7, $8, 'queued',
+                               clock_timestamp()
+                          FROM tool_approval_decisions d
+                         WHERE d.request_id = $9
+                           AND d.session_id = $3
+                           AND d.tool_call_id IS NOT DISTINCT FROM $10
+                           AND d.tool = $11
+                           AND d.args_hash = $12
+                           AND d.decision = 'approve'
+                        RETURNING {_JOB_COLUMNS}
+                        """,
+                        job_id,
+                        user_id,
+                        session_id,
+                        trace_id,
+                        mode,
+                        task_text,
+                        source_artifact_id,
+                        model_id,
+                        approval.request_id,
+                        approval.tool_call_id,
+                        approval.tool,
+                        approval.args_hash,
+                    )
+        except asyncpg.UniqueViolationError as exc:
+            if exc.constraint_name == "dev_jobs_one_active":
+                return JobRefused("job_active")
+            if exc.constraint_name == "dev_jobs_approval_request_id_key":
+                return JobRefused("approval_used")
+            raise
+        if row is None:
+            return JobRefused("approval_missing")
+        job = _job(row)
+        log.info(
+            "dev_job_created",
+            job_id=str(job.id),
+            session_id=str(session_id),
+            approval_request_id=approval.request_id,
+            trace_id=trace_id.hex,
+            mode=mode,
+            model_id=model_id,
+        )
+        return JobCreated(job)
 
     async def _take(
         self, where: str, owner: str, lease_seconds: float

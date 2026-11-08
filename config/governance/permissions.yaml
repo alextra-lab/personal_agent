@@ -66,6 +66,10 @@ ask:
     reason: "Creates a Linear issue (an external write)."
   - rule: "create_linear_project"
     reason: "Creates a Linear project (an external write)."
+  # ADR-0159 D10.2 (FRE-1687): every dev-agent job asks, in every mode, including when the user
+  # asked directly. An explicit ask offers "allow once" only. No allow rule may name this tool.
+  - rule: "start_dev_job"
+    reason: "Starts a development agent job: a container, model spend and a GitHub repo (ADR-0159 D10.2)."
 
 allow:
   # Read-only and native tools that ran without approval before FRE-1574.

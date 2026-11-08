@@ -1202,6 +1202,15 @@ tools:
     loop_max_per_signature: 3
     loop_max_consecutive: 3
 
+  # ADR-0159 D10.1 (FRE-1687): start a dev-agent job. The executor only writes the job row and
+  # returns. The ask rule in permissions.yaml shows a card on every call. No sub-agent grant.
+  start_dev_job:
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "high"
+    timeout_seconds: 30
+    loop_max_per_signature: 2
+    loop_max_consecutive: 2
+
   # FRE-368: read-only listing of the calling user's artifacts. No approval.
   artifact_list:
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]

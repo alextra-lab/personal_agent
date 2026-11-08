@@ -75,6 +75,8 @@ interface RootLayoutProps {
 export default function RootLayout({ children }: RootLayoutProps) {
   const seshatUrl = process.env.SESHAT_URL ?? 'http://localhost:9000';
   const gatewayToken = process.env.GATEWAY_TOKEN ?? '';
+  // Address of Observe (Grafana). Unset means the drawer shows no link (FRE-1754).
+  const observeUrl = process.env.OBSERVE_URL ?? '';
 
   if (process.env.NODE_ENV === 'production' && !process.env.SESHAT_URL) {
     console.error('[seshat-pwa] SESHAT_URL not set — requests will route to localhost:9000');
@@ -93,7 +95,11 @@ export default function RootLayout({ children }: RootLayoutProps) {
       <body className="h-full bg-bg text-ink antialiased">
         <RegisterSW />
         <SafeAreaDebugOverlay />
-        <RuntimeConfigProvider seshatUrl={seshatUrl} gatewayToken={gatewayToken}>
+        <RuntimeConfigProvider
+          seshatUrl={seshatUrl}
+          gatewayToken={gatewayToken}
+          observeUrl={observeUrl}
+        >
           {children}
         </RuntimeConfigProvider>
       </body>

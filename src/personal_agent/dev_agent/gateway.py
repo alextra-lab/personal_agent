@@ -48,6 +48,17 @@ def supervisor_running() -> bool:
     return _running is not None and not _running.task.done()
 
 
+def running_job_store() -> JobStore | None:
+    """Return a job store on the running supervisor's pool, or ``None`` when none runs.
+
+    Returns:
+        The store, or ``None`` when :func:`supervisor_running` is false.
+    """
+    if _running is None or _running.task.done():
+        return None
+    return JobStore(_running.pool)
+
+
 @dataclass(frozen=True)
 class RunningSupervisor:
     """The supervisor task and what it owns.

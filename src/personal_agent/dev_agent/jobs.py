@@ -59,9 +59,6 @@ ACTIVE_STATES: frozenset[JobState] = frozenset(
 END_STATES: frozenset[JobState] = frozenset(set(JobState) - ACTIVE_STATES)
 
 _END_STATE_VALUES: list[str] = sorted(s.value for s in END_STATES)
-_ACTIVE_STATE_VALUES: list[str] = sorted(s.value for s in ACTIVE_STATES)
-#: The SQL predicate "the job holds the one-job slot". Mirrors ``dev_jobs_one_active``.
-_ACTIVE = f"state = ANY('{{{','.join(_ACTIVE_STATE_VALUES)}}}'::text[])"
 #: The SQL predicate "the job is not at an end state". One copy, used by every query.
 _NOT_ENDED = f"state <> ALL('{{{','.join(_END_STATE_VALUES)}}}'::text[])"
 
@@ -197,6 +194,30 @@ _HELD = f"""
     AND lease_expires_at > clock_timestamp()
     AND {_NOT_ENDED}
 """
+
+
+async def _month_cap_reached(
+    conn: asyncpg.Connection, month_cap_usd: Decimal, *, lock: bool
+) -> bool:
+    """Return whether the current UTC month's spend is at the cap (D5.5).
+
+    Args:
+        conn: A connection. With ``lock``, it must be in a transaction.
+        month_cap_usd: The cap.
+        lock: Take the month row ``FOR UPDATE``, as the broker does before a reservation.
+
+    Returns:
+        ``True`` when committed plus reserved spend is at least the cap. No row is zero spend.
+    """
+    spent = await conn.fetchval(
+        f"""
+        SELECT committed_usd + reserved_usd FROM dev_month_spend
+         WHERE month_start = (date_trunc('month', clock_timestamp() AT TIME ZONE 'UTC'))::date
+         {"FOR UPDATE" if lock else ""}
+        """
+    )
+    # No row yet: the broker made no call this month, so the spend is zero.
+    return Decimal(spent or 0) >= month_cap_usd
 
 
 def _job(row: asyncpg.Record) -> DevJob:
@@ -339,17 +360,9 @@ class JobStore:
         try:
             async with self._pool.acquire() as conn:
                 async with conn.transaction():
-                    if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_ACTIVE} LIMIT 1"):
+                    if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_NOT_ENDED} LIMIT 1"):
                         return JobRefused("job_active")
-                    spent = await conn.fetchval(
-                        """
-                        SELECT committed_usd + reserved_usd FROM dev_month_spend
-                         WHERE month_start = (date_trunc('month', clock_timestamp() AT TIME ZONE 'UTC'))::date
-                           FOR UPDATE
-                        """
-                    )
-                    # No row yet: the broker made no call this month, so the spend is zero.
-                    if Decimal(spent or 0) >= month_cap_usd:
+                    if await _month_cap_reached(conn, month_cap_usd, lock=True):
                         return JobRefused("month_cap_reached")
                     row = await conn.fetchrow(
                         f"""
@@ -399,6 +412,25 @@ class JobStore:
             model_id=model_id,
         )
         return JobCreated(job)
+
+    async def refusal_before_card(self, month_cap_usd: Decimal) -> RefusalReason | None:
+        """Read whether a new job would be refused now, without a write (FRE-1687).
+
+        ``start_dev_job`` calls it before the approval card, so the user is not asked to approve a
+        job that is certain to be refused. :meth:`create_approved_job` checks again.
+
+        Args:
+            month_cap_usd: The broker's per-month cap in USD.
+
+        Returns:
+            ``job_active``, ``month_cap_reached``, or ``None``.
+        """
+        async with self._pool.acquire() as conn:
+            if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_NOT_ENDED} LIMIT 1"):
+                return "job_active"
+            if await _month_cap_reached(conn, month_cap_usd, lock=False):
+                return "month_cap_reached"
+        return None
 
     async def _take(
         self, where: str, owner: str, lease_seconds: float

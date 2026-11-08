@@ -13,7 +13,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatch
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, assert_never
 from uuid import uuid4
 
 import httpx
@@ -70,9 +70,33 @@ _READ_GRANT_PARAM = "read_grant"
 _APPROVAL_PARAM = "approval"
 _RESERVED_PARAMS = frozenset({_APPROVE_PARAM, _READ_GRANT_PARAM, _APPROVAL_PARAM})
 
+# Name of the optional attribute of an executor that holds its pre-card check (FRE-1687). See
+# :class:`PreCardCheck`.
+_PRE_CARD_CHECK_ATTR = "pre_card_check"
 
-#: The longest time that the permission layer waits for a decision's write (ADR-0159 D10.3).
-_RECORD_TIMEOUT_SECONDS = 5.0
+
+class PreCardCheck(Protocol):
+    """A check that an executor runs before the approval card (FRE-1687).
+
+    Set it as the executor's ``pre_card_check`` attribute. The layer calls it before the
+    permission check. A :class:`ToolError` refuses the call with no card. It must not write.
+    """
+
+    async def __call__(self, arguments: Mapping[str, object], ctx: TraceContext) -> None:
+        """Refuse a call that is certain to fail.
+
+        Args:
+            arguments: The call's arguments, as the model sent them.
+            ctx: The call's trace context, with the user and the session.
+
+        Raises:
+            ToolError: The call cannot succeed.
+        """
+        ...
+
+
+#: Decision writes that run in the background, held so the event loop does not drop them.
+_BACKGROUND_RECORDS: set[asyncio.Task[None]] = set()
 
 
 @dataclass(frozen=True)
@@ -92,10 +116,10 @@ class ApprovalGrant:
     request_id: str
     tool_call_id: str | None
     args_hash: str
-    args: Mapping[str, Any]
+    args: Mapping[str, object]
 
 
-def approval_args_hash(args: Mapping[str, Any]) -> str:
+def approval_args_hash(args: Mapping[str, object]) -> str:
     """Return the SHA-256 of a card's arguments as canonical JSON.
 
     Args:
@@ -353,11 +377,14 @@ async def _record_decision(
     tool_name: str,
     args_hash: str,
     decision: "ApprovalOutcome",
+    durable: bool,
 ) -> None:
     """Persist a card's decision (ADR-0159 D10.3). A failure is logged and changes nothing.
 
     The outcome of the call does not depend on this write, so no tool's approval changes. A tool
-    that requires durable consent checks the row itself and refuses when it is missing.
+    that requires durable consent declares ``approval``. For it the write completes before the
+    call runs, and the tool checks the row itself. For every other tool the write runs in the
+    background, so a slow database does not delay the approved call.
 
     Args:
         transport: The transport that showed the card.
@@ -368,11 +395,12 @@ async def _record_decision(
         tool_name: The tool that asked.
         args_hash: :func:`approval_args_hash` of the card's arguments.
         decision: The decision that took effect.
+        durable: Wait for the write. Set for an executor that declares ``approval``.
     """
-    try:
-        # Bounded: a slow database must not hold up the approved call of any other tool.
-        await asyncio.wait_for(
-            transport.record_approval_decision(
+
+    async def write() -> None:
+        try:
+            await transport.record_approval_decision(
                 request_id=request_id,
                 tool_call_id=tool_call_id,
                 session_id=session_id,
@@ -380,29 +408,34 @@ async def _record_decision(
                 tool=tool_name,
                 args_hash=args_hash,
                 decision=decision,
-            ),
-            timeout=_RECORD_TIMEOUT_SECONDS,
-        )
-    except Exception as exc:  # noqa: BLE001 — a failed record never changes the call's outcome
-        log.warning(
-            "approval_decision_persist_failed",
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed record never changes the call's outcome
+            log.warning(
+                "approval_decision_persist_failed",
+                tool_name=tool_name,
+                request_id=request_id,
+                decision=decision,
+                error=type(exc).__name__,
+                trace_id=trace_ctx.trace_id,
+                session_id=session_id,
+            )
+            return
+        log.info(
+            "approval_decision_persisted",
             tool_name=tool_name,
             request_id=request_id,
+            tool_call_id=tool_call_id,
             decision=decision,
-            error=type(exc).__name__,
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
         )
+
+    if durable:
+        await write()
         return
-    log.info(
-        "approval_decision_persisted",
-        tool_name=tool_name,
-        request_id=request_id,
-        tool_call_id=tool_call_id,
-        decision=decision,
-        trace_id=trace_ctx.trace_id,
-        session_id=session_id,
-    )
+    task = asyncio.create_task(write())
+    _BACKGROUND_RECORDS.add(task)
+    task.add_done_callback(_BACKGROUND_RECORDS.discard)
 
 
 def _outcome(answer: "ApprovalDecision", *, explicit: bool) -> "ApprovalOutcome":
@@ -415,11 +448,13 @@ def _outcome(answer: "ApprovalDecision", *, explicit: bool) -> "ApprovalOutcome"
     Returns:
         The decision to record.
     """
-    if answer.decision == "approve_session":
-        return "approve" if explicit else "approve_session"
-    if answer.decision in ("approve", "deny", "timeout", "connection_lost"):
-        return answer.decision
-    return "deny"
+    match answer.decision:
+        case "approve_session":
+            return "approve" if explicit else "approve_session"
+        case "approve" | "deny" | "timeout" | "connection_lost":
+            return answer.decision
+        case _:
+            assert_never(answer.decision)
 
 
 async def _request_approval(
@@ -536,6 +571,7 @@ async def _check_permissions(
     trace_ctx: TraceContext,
     worker: str | None = None,
     tool_call_id: str | None = None,
+    durable: bool = False,
 ) -> PermissionResult:
     """Check whether a call may run: mode, arguments, then the permission rules.
 
@@ -558,6 +594,8 @@ async def _check_permissions(
         worker: The worker type that makes the call, or ``None`` for the primary. Shown on
             the card (D8.3).
         tool_call_id: The model's tool call id, recorded with the card's decision.
+        durable: Write the decision before the call runs (an executor that declares
+            ``approval``). Otherwise the write runs in the background.
 
     Returns:
         PermissionResult indicating if execution is allowed. A call that ran because the user
@@ -689,6 +727,7 @@ async def _check_permissions(
         tool_name=tool_name,
         args_hash=args_hash,
         decision=_outcome(answer, explicit=decision.explicit),
+        durable=durable,
     )
     grant = ApprovalGrant(
         request_id=request_id,
@@ -871,6 +910,7 @@ class ToolExecutionLayer:
                     tool_name=tool_name,
                     args_hash=approval_args_hash(args),
                     decision=_outcome(answer, explicit=True),
+                    durable=False,
                 )
                 return answer
             log.warning(
@@ -909,6 +949,9 @@ class ToolExecutionLayer:
         :class:`ApprovalGrant` of the card that the user approved for this call,
         or ``None`` when no card was approved (ADR-0159 D10.3).  A model-supplied
         value is dropped.
+
+        An executor with a ``pre_card_check`` attribute (:class:`PreCardCheck`)
+        can refuse the call before the card.
 
         Args:
             tool_name: Name of the tool to execute.
@@ -975,6 +1018,30 @@ class ToolExecutionLayer:
                 trace_ctx=trace_ctx,
             )
 
+        # 1c. FRE-1687: an executor may refuse a call before the card, so the user is never asked
+        # to approve a call that is certain to fail. Only executors that declare the check run it.
+        pre_card_check = getattr(executor, _PRE_CARD_CHECK_ATTR, None)
+        if pre_card_check is not None:
+            try:
+                await pre_card_check(arguments, trace_ctx)
+            except ToolError as refused:
+                log.info(
+                    "tool_refused_before_card",
+                    tool_name=tool_name,
+                    error_code=refused.code,
+                    trace_id=trace_ctx.trace_id,
+                    session_id=session_id,
+                )
+                return _failed(tool_name, refused.detail, trace_ctx=trace_ctx)
+            except Exception as exc:  # noqa: BLE001 — the executor repeats its checks after the card
+                log.warning(
+                    "tool_pre_card_check_failed",
+                    tool_name=tool_name,
+                    error=type(exc).__name__,
+                    trace_id=trace_ctx.trace_id,
+                    session_id=session_id,
+                )
+
         # 2. Check permissions (async — may perform interactive approval round-trip)
         current_mode = self.mode_manager.get_current_mode()
         permission = await _check_permissions(
@@ -988,6 +1055,7 @@ class ToolExecutionLayer:
             trace_ctx=trace_ctx,
             worker=worker,
             tool_call_id=tool_call_id,
+            durable=_APPROVAL_PARAM in sig.parameters,
         )
 
         if isinstance(permission, PermissionRefused):

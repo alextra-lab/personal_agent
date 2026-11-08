@@ -13,15 +13,15 @@ row, and so no container.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID, uuid4
 
-import asyncpg  # type: ignore[import-untyped]
-
 from personal_agent.config import settings
 from personal_agent.dev_agent.jobs import ApprovalEvidence, JobCreated, JobStore, RefusalReason
-from personal_agent.dev_broker.config import load_broker_config
-from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
+from personal_agent.dev_broker.config import BrokerConfig, load_broker_config
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.executor import ApprovalGrant
@@ -165,6 +165,98 @@ def _grant_matches(grant: ApprovalGrant, task: str, mode: str, artifact_id: str 
     )
 
 
+@dataclass(frozen=True)
+class _Checked:
+    """A call that passed the checks that need no approval."""
+
+    store: JobStore
+    broker: BrokerConfig
+    user_id: UUID
+    session_id: UUID
+    task: str
+    source: UUID | None
+
+
+async def _check(
+    task: object, mode: object, artifact_id: object, ctx: TraceContext | None
+) -> _Checked:
+    """Run every check that needs no approval. Used before the card and again after it.
+
+    Args:
+        task: The task argument.
+        mode: The mode argument.
+        artifact_id: The artifact id argument, or ``None``.
+        ctx: The call's trace context.
+
+    Returns:
+        The validated call, with the running supervisor's job store and the broker config.
+
+    Raises:
+        DevJobError: ``not_available`` or ``invalid_arguments``.
+    """
+    store = _running_job_store() if settings.dev_agent_supervisor_enabled else None
+    if store is None:
+        raise _refuse(
+            "not_available",
+            "the development agent is not running on this deployment.",
+            "Tell the user that the development agent is not available.",
+        )
+    try:
+        user_id = UUID(str(ctx.user_id)) if ctx is not None and ctx.user_id else None
+        session_id = UUID(str(ctx.session_id)) if ctx is not None and ctx.session_id else None
+    except ValueError:
+        user_id = session_id = None
+    if user_id is None or session_id is None:
+        raise _refuse(
+            "not_available",
+            "this call has no user or no session, and a job belongs to both.",
+            "Tell the user that a job can start only from a signed-in chat session.",
+        )
+    if not isinstance(task, str) or not task.strip() or len(task.strip()) > MAX_TASK_CHARS:
+        raise _refuse(
+            "invalid_arguments",
+            f"task must hold 1 to {MAX_TASK_CHARS} characters.",
+            "Call again with the task in full, inside the limit.",
+        )
+    if not isinstance(mode, str) or not (artifact_id is None or isinstance(artifact_id, str)):
+        raise _refuse("invalid_arguments", "mode and artifact_id must be strings.", "Call again.")
+    source = _artifact_uuid(mode, artifact_id)
+    try:
+        broker = await asyncio.to_thread(load_broker_config)
+    except Exception as exc:  # noqa: BLE001 — a broken broker config means no job can run
+        log.error(
+            "dev_job_broker_config_unavailable",
+            error=type(exc).__name__,
+            trace_id=ctx.trace_id if ctx is not None else None,
+        )
+        raise _refuse(
+            "not_available",
+            "the development agent's configuration did not load.",
+            "Tell the user that the development agent is not available.",
+        ) from None
+    return _Checked(store, broker, user_id, session_id, task.strip(), source)
+
+
+async def start_dev_job_pre_card_check(arguments: Mapping[str, object], ctx: TraceContext) -> None:
+    """Refuse before the card a call that is certain to fail (FRE-1687). Writes nothing.
+
+    Args:
+        arguments: The call's arguments.
+        ctx: The call's trace context.
+
+    Raises:
+        DevJobError: ``not_available``, ``invalid_arguments``, ``job_active`` or
+            ``month_cap_reached``.
+    """
+    checked = await _check(
+        arguments.get("task"), arguments.get("mode"), arguments.get("artifact_id"), ctx
+    )
+    reason = await checked.store.refusal_before_card(checked.broker.month_cap_usd)
+    if reason is not None:
+        message, next_action = _REFUSALS[reason]
+        raise _refuse(reason, message, next_action)
+
+
 async def start_dev_job_executor(
     task: str,
     mode: str,
@@ -198,71 +290,37 @@ async def start_dev_job_executor(
             "Do not retry. Tell the user that the job needs their approval on the card.",
         )
     if not _grant_matches(approval, task, mode, artifact_id):
-        log.warning(
-            "dev_job_approval_mismatch",
-            request_id=approval.request_id,
-            trace_id=trace_id,
-        )
+        log.warning("dev_job_approval_mismatch", request_id=approval.request_id, trace_id=trace_id)
         raise _refuse(
             "approval_mismatch",
             "the approved card showed other arguments than this call.",
             "Do not retry. Tell the user that the approval did not match the request.",
         )
-    if not settings.dev_agent_supervisor_enabled or not _supervisor_running():
-        raise _refuse(
-            "not_available",
-            "the development agent is not running on this deployment.",
-            "Tell the user that the development agent is not available.",
-        )
-    user_id = ctx.user_id if ctx is not None else None
-    session_id = ctx.session_id if ctx is not None else None
-    if user_id is None or not session_id:
-        raise _refuse(
-            "not_available",
-            "this call has no user or no session, and a job belongs to both.",
-            "Tell the user that a job can start only from a signed-in chat session.",
-        )
-    task = task.strip()
-    if not task or len(task) > MAX_TASK_CHARS:
-        raise _refuse(
-            "invalid_arguments",
-            f"task must hold 1 to {MAX_TASK_CHARS} characters.",
-            "Call again with the task in full, inside the limit.",
-        )
-    source = _artifact_uuid(mode, artifact_id)
-
-    broker = load_broker_config()
-    pool = await asyncpg.create_pool(
-        _normalize_asyncpg_dsn(settings.database_url), min_size=1, max_size=1, command_timeout=15
+    checked = await _check(task, mode, artifact_id, ctx)
+    result = await checked.store.create_approved_job(
+        job_id=uuid4(),
+        user_id=checked.user_id,
+        session_id=checked.session_id,
+        trace_id=uuid4(),
+        approval=ApprovalEvidence(
+            request_id=approval.request_id,
+            tool_call_id=approval.tool_call_id,
+            tool=TOOL_NAME,
+            args_hash=approval.args_hash,
+        ),
+        mode="fix" if checked.source is not None else "build",
+        task_text=checked.task,
+        model_id=checked.broker.default_model,
+        month_cap_usd=checked.broker.month_cap_usd,
+        source_artifact_id=checked.source,
     )
-    try:
-        result = await JobStore(pool).create_approved_job(
-            job_id=uuid4(),
-            user_id=user_id if isinstance(user_id, UUID) else UUID(str(user_id)),
-            session_id=UUID(str(session_id)),
-            trace_id=uuid4(),
-            approval=ApprovalEvidence(
-                request_id=approval.request_id,
-                tool_call_id=approval.tool_call_id,
-                tool=TOOL_NAME,
-                args_hash=approval.args_hash,
-            ),
-            mode="fix" if source is not None else "build",
-            task_text=task,
-            model_id=broker.default_model,
-            month_cap_usd=broker.month_cap_usd,
-            source_artifact_id=source,
-        )
-    finally:
-        await pool.close()
-
     if not isinstance(result, JobCreated):
         log.warning(
             "dev_job_refused",
             reason=result.reason,
             request_id=approval.request_id,
             trace_id=trace_id,
-            session_id=str(session_id),
+            session_id=str(checked.session_id),
         )
         message, next_action = _REFUSALS[result.reason]
         raise _refuse(result.reason, message, next_action)
@@ -277,9 +335,13 @@ async def start_dev_job_executor(
     }
 
 
-def _supervisor_running() -> bool:
+# The execution layer runs it before the card (tools/executor.py, PreCardCheck).
+start_dev_job_executor.pre_card_check = start_dev_job_pre_card_check  # type: ignore[attr-defined]
+
+
+def _running_job_store() -> JobStore | None:
     # Imported here: the gateway wiring imports the launcher and the GitHub client, which a
     # process that registers this tool does not need at import time.
-    from personal_agent.dev_agent.gateway import supervisor_running  # noqa: PLC0415
+    from personal_agent.dev_agent.gateway import running_job_store  # noqa: PLC0415
 
-    return supervisor_running()
+    return running_job_store()

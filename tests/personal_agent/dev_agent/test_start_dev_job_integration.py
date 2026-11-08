@@ -85,7 +85,10 @@ class _Turn:
             patch.object(transport, "request_tool_approval", card),
             patch("personal_agent.tools.executor.settings.approval_ui_enabled", True),
             patch.object(settings, "dev_agent_supervisor_enabled", True),
-            patch("personal_agent.tools.dev_job._supervisor_running", return_value=True),
+            patch(
+                "personal_agent.tools.dev_job._running_job_store",
+                return_value=JobStore(self.pool),
+            ),
         ):
             result = await layer.execute_tool(
                 "start_dev_job",
@@ -283,7 +286,10 @@ class TestRefusedCardsCreateNothing:
         """An allow rule, or any path that skips the card, gets no grant and no job."""
         with (
             patch.object(settings, "dev_agent_supervisor_enabled", True),
-            patch("personal_agent.tools.dev_job._supervisor_running", return_value=True),
+            patch(
+                "personal_agent.tools.dev_job._running_job_store",
+                return_value=JobStore(turn.pool),
+            ),
         ):
             with pytest.raises(Exception) as refused:
                 await start_dev_job_executor(task=_TASK, mode="build", ctx=turn.ctx())
@@ -320,10 +326,12 @@ class TestRefusalsWithAReason:
         first, _ = await turn.call("approve", call_id="call-1")
         assert first.success is True, first.error
 
-        second, _ = await turn.call("approve", call_id="call-2")
+        second, card = await turn.call("approve", call_id="call-2")
 
         error = _error(second)
         assert error["code"] == "job_active"
+        # Refused before the card: the user is not asked to approve a job that cannot start.
+        card.assert_not_awaited()
         assert "one job" in error["message"].lower()
         assert len(await turn.jobs()) == 1
 
@@ -332,12 +340,49 @@ class TestRefusalsWithAReason:
         with patch(
             "personal_agent.tools.dev_job.load_broker_config", return_value=_broker_with_zero_cap()
         ):
-            result, _ = await turn.call("approve")
+            result, card = await turn.call("approve")
 
         error = _error(result)
         assert error["code"] == "month_cap_reached"
+        card.assert_not_awaited()
         assert "cap" in error["message"]
         assert await turn.jobs() == []
+
+
+class TestRefusalsAfterTheCard:
+    """The executor checks again after the card: the slot can fill while the card is open."""
+
+    async def test_a_job_that_starts_while_the_card_is_open_refuses(
+        self, turn: _Turn, store: JobStore
+    ) -> None:
+        other = _Turn(turn.pool)
+        try:
+            first, _ = await other.call("approve")
+            assert first.success is True, first.error
+            (decision,) = await other.decisions()
+            await turn.pool.execute(
+                "INSERT INTO tool_approval_decisions "
+                "(request_id, session_id, tool_call_id, tool, args_hash, decision, trace_id) "
+                "VALUES ($1, $2, 'call-1', 'start_dev_job', 'h', 'approve', 't')",
+                f"fre1687-test-{uuid4()}",
+                turn.session_id,
+            )
+            (mine,) = await turn.decisions()
+            refused = await _create(
+                store,
+                turn,
+                ApprovalEvidence(
+                    request_id=mine["request_id"],
+                    tool_call_id="call-1",
+                    tool="start_dev_job",
+                    args_hash="h",
+                ),
+            )
+            assert refused == JobRefused("job_active")
+            assert await turn.jobs() == []
+            assert decision["decision"] == "approve"
+        finally:
+            await other.cleanup()
 
 
 class TestTheRefusalTextReachesTheModel:

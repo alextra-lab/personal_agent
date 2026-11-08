@@ -263,6 +263,63 @@ class TestOtherToolsKeepTheirApproval:
         assert "approval" not in runs[0]
 
 
+class TestTheWriteAndTheCheck:
+    @pytest.mark.asyncio
+    async def test_a_tool_without_approval_gets_a_background_write(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from personal_agent.tools import executor
+
+        use_rules(monkeypatch, ask=["probe"])
+        release = asyncio.Event()
+
+        async def slow_record(**_kw: Any) -> None:
+            await release.wait()
+
+        ran: list[str] = []
+
+        async def plain(x: str = "") -> dict[str, Any]:
+            ran.append(x)
+            return {}
+
+        transport = _transport("approve", record=AsyncMock(side_effect=slow_record))
+        result = await _dispatch(_layer(plain, transport), {"x": "1"})
+
+        # The call ran while its decision write was still open.
+        assert result["success"] is True and ran == ["1"]
+        assert len(executor._BACKGROUND_RECORDS) == 1
+        release.set()
+        await asyncio.gather(*executor._BACKGROUND_RECORDS)
+        transport.record_approval_decision.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_pre_card_refusal_shows_no_card(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.tools.contract import ToolError
+
+        use_rules(monkeypatch, ask=["probe"])
+
+        class _Refused(ToolError[str]):
+            pass
+
+        async def check(arguments: Any, ctx: Any) -> None:
+            raise _Refused("job_active", "busy", retryable=False, next_action="wait")
+
+        probe = _Probe()
+        probe.run.__func__.pre_card_check = check  # type: ignore[attr-defined]
+        try:
+            transport = _transport("approve")
+            result = await _dispatch(_layer(probe.run, transport), {"x": "1"})
+        finally:
+            del probe.run.__func__.pre_card_check  # type: ignore[attr-defined]
+
+        assert result["success"] is False
+        assert "busy" in result["content"]
+        transport.request_tool_approval.assert_not_awaited()
+        assert probe.grants == []
+
+
 class TestTheConfig:
     @pytest.mark.parametrize("mode", ["NORMAL", "ALERT", "DEGRADED", "RECOVERY", "LOCKDOWN"])
     def test_start_dev_job_asks_in_every_mode_on_an_explicit_rule(self, mode: str) -> None:

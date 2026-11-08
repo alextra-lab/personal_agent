@@ -104,6 +104,18 @@ class TestPayload:
             == result
         )
 
+    async def test_the_card_gets_the_check_steps_and_not_the_digests(self) -> None:
+        stored = {
+            "passed": False,
+            "steps": [{"name": "load", "passed": False, "messages": ["x"]}],
+            "image_digest": "sha256:aaa",
+            "toolkit_digest": "sha256:bbb",
+            "csp_manifest_digest": "sha256:ccc",
+        }
+        row = _row(state="failed_check", check_result=json.dumps(stored))
+        payload = card_payload(row, event="end", step=None, context=CONTEXT)
+        assert payload["check_result"] == {"passed": False, "steps": stored["steps"]}
+
     @pytest.mark.parametrize(
         ("state", "ended"),
         [
@@ -221,6 +233,38 @@ class TestSink:
         )
         await asyncio.wait_for(sink.notify(row["id"], "step", "tool shell"), timeout=2)  # type: ignore[arg-type]
 
+    async def test_a_failed_send_does_not_hide_the_step_for_good(self) -> None:
+        row = _row()
+        emit = Emitted(fail=True)
+        sink, _ = self._sink(row, emit)
+        job_id: UUID = row["id"]  # type: ignore[assignment]
+        await sink.notify(job_id, "step", "tool shell")
+        assert emit.calls == []
+        emit.fail = False
+        await sink.notify(job_id, "step", "tool shell")  # the same step: it was never shown
+        assert [p["step"] for _, p in emit.calls] == ["tool shell"]
+
+    async def test_a_send_that_was_not_persisted_does_not_mark_the_step_shown(self) -> None:
+        row = _row()
+        emit = Emitted(ok=False)
+        sink, _ = self._sink(row, emit)
+        job_id: UUID = row["id"]  # type: ignore[assignment]
+        await sink.notify(job_id, "step", "tool shell")
+        emit.ok = True
+        await sink.notify(job_id, "step", "tool shell")
+        assert len(emit.calls) == 2
+
+    async def test_a_step_after_the_end_is_ignored(self) -> None:
+        row = _row(state="succeeded")
+        emit = Emitted()
+        sink, pool = self._sink(row, emit)
+        job_id: UUID = row["id"]  # type: ignore[assignment]
+        await sink.notify(job_id, "end")
+        reads = pool.reads
+        await sink.notify(job_id, "step", "late step")
+        assert pool.reads == reads
+        assert [p["event"] for _, p in emit.calls] == ["end"]
+
     async def test_a_failing_emit_never_raises(self) -> None:
         row = _row()
         sink, _ = self._sink(row, Emitted(fail=True))
@@ -254,3 +298,19 @@ class TestCardContext:
 
         monkeypatch.setattr(broker_config, "load_broker_config", real)
         assert job_card.card_context().cap_usd == real().job_cap_usd
+
+    async def test_a_malformed_broker_file_gives_a_card_with_no_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import yaml
+
+        from personal_agent.dev_agent import job_card
+        from personal_agent.dev_broker import config as broker_config
+
+        monkeypatch.setattr(job_card, "_context", None)
+        monkeypatch.setattr(
+            broker_config,
+            "load_broker_config",
+            lambda: (_ for _ in ()).throw(yaml.YAMLError("seeded: bad syntax")),
+        )
+        assert job_card.card_context().cap_usd is None

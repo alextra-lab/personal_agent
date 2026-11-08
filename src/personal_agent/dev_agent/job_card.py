@@ -24,6 +24,7 @@ from uuid import UUID
 
 import asyncpg  # type: ignore[import-untyped]
 import structlog
+import yaml  # type: ignore[import-untyped]
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,8 +63,8 @@ JOB_CARD_SQL = """
 
 _ENDED = frozenset(state.value for state in END_STATES)
 
-#: The least time between two step events of one job.
-STEP_INTERVAL_SECONDS = 2.0
+#: The least time between two step events of one job. Each event is stored in ``session_events``.
+STEP_INTERVAL_SECONDS = 10.0
 
 #: The longest time that one card event can take, from the read to the send.
 NOTIFY_TIMEOUT_SECONDS = 10.0
@@ -102,21 +103,26 @@ def card_context() -> CardContext:
     base_url = f"https://github.com/{org}" if org else None
     try:
         cap = load_broker_config().job_cap_usd
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, yaml.YAMLError) as exc:
         log.warning("dev_job_card_cap_unknown", error_type=type(exc).__name__, trace_id=None)
         return CardContext(cap_usd=None, repo_base_url=base_url)
     _context = CardContext(cap_usd=cap, repo_base_url=base_url)
     return _context
 
 
-def _check_result(value: object) -> object:
-    """Return the check result as a JSON object. The asyncpg pool returns JSONB as text."""
+def _check_result(value: object) -> dict[str, object] | None:
+    """Return what the card shows of the check result: ``passed`` and the steps.
+
+    The asyncpg pool returns JSONB as text. The digests of D7.5 stay in the row.
+    """
     if isinstance(value, str):
         try:
-            return json.loads(value)
+            value = json.loads(value)
         except ValueError:
             return None
-    return value
+    if not isinstance(value, dict):
+        return None
+    return {"passed": value.get("passed"), "steps": value.get("steps", [])}
 
 
 def card_payload(
@@ -215,8 +221,10 @@ class PoolJobEventSink:
         self._clock = clock
         self._interval = step_interval_seconds
         self._timeout = timeout_seconds
-        self._steps: dict[UUID, str] = {}
+        self._latest: dict[UUID, str] = {}
+        self._shown: dict[UUID, str] = {}
         self._last_step_at: dict[UUID, float] = {}
+        self._ended: set[UUID] = set()
 
     async def notify(self, job_id: UUID, event: JobEventKind, step: str | None = None) -> None:
         """Send the job's current card. A failure is logged and dropped.
@@ -227,14 +235,14 @@ class PoolJobEventSink:
             step: The latest step, for a ``step`` event.
         """
         if event == "step":
-            now = self._clock()
+            if step is None or job_id in self._ended:
+                return
+            self._latest[job_id] = step
             last = self._last_step_at.get(job_id)
-            if step is None or step == self._steps.get(job_id):
+            if step == self._shown.get(job_id):
                 return
-            if last is not None and now - last < self._interval:
+            if last is not None and self._clock() - last < self._interval:
                 return
-            self._steps[job_id] = step
-            self._last_step_at[job_id] = now
         try:
             async with asyncio.timeout(self._timeout):
                 row = await self._pool.fetchrow(JOB_CARD_SQL + " WHERE j.id = $1", job_id)
@@ -244,10 +252,21 @@ class PoolJobEventSink:
                 payload = card_payload(
                     row,
                     event=event,
-                    step=self._steps.get(job_id) if row["state"] == JobState.RUNNING else None,
+                    step=self._latest.get(job_id) if row["state"] == JobState.RUNNING else None,
                     context=self._context or card_context(),
                 )
-                await self._emit(session_id=str(row["session_id"]), payload=payload)
+                persisted = await self._emit(session_id=str(row["session_id"]), payload=payload)
+            if not persisted:
+                log.warning(
+                    "dev_job_card_not_persisted",
+                    job_id=str(job_id),
+                    card_event=event,
+                    trace_id=None,
+                )
+            elif payload["step"] is not None:
+                # Marked only after the send: a failed send must not hide the step for good.
+                self._shown[job_id] = str(payload["step"])
+                self._last_step_at[job_id] = self._clock()
         except Exception as exc:  # noqa: BLE001 — a lost card never changes a job
             log.warning(
                 "dev_job_card_notify_failed",
@@ -258,7 +277,9 @@ class PoolJobEventSink:
             )
         finally:
             if event == "end":
-                self._steps.pop(job_id, None)
+                self._ended.add(job_id)
+                self._latest.pop(job_id, None)
+                self._shown.pop(job_id, None)
                 self._last_step_at.pop(job_id, None)
 
 

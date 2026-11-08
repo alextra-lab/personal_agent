@@ -680,6 +680,7 @@ class JobSupervisor:
 
     async def _resume_delivery(self, job: DevJob, fence: Fence, keeper: LeaseKeeper) -> None:
         del keeper
+        await self._notify(job, "state")
         await self._deliver(job, fence)
 
     async def _deliver(self, job: DevJob, fence: Fence) -> None:

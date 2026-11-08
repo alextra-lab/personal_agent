@@ -42,6 +42,30 @@ describe('parseDevJobCard', () => {
   });
 });
 
+describe('parseDevJobCard — check_result', () => {
+  it('keeps a well-formed result', () => {
+    const result = { passed: false, steps: [{ name: 'load', passed: false, messages: ['x'] }] };
+    expect(parseDevJobCard(payload({ check_result: result }))?.check_result).toEqual(result);
+  });
+
+  it('reads steps that is null as no steps', () => {
+    const card = parseDevJobCard(payload({ check_result: { passed: false, steps: null } }));
+    expect(card?.check_result).toEqual({ passed: false, steps: [] });
+  });
+
+  it.each([
+    ['steps that is a string', { passed: false, steps: 'x' }],
+    ['a step that is a string', { passed: false, steps: ['x'] }],
+    ['a step with no name', { passed: false, steps: [{ passed: false }] }],
+    ['messages that is not a list', { passed: false, steps: [{ name: 'a', passed: false, messages: 'x' }] }],
+    ['messages with a number', { passed: false, steps: [{ name: 'a', passed: false, messages: [1] }] }],
+  ])('drops a result with %s and keeps the card', (_name, result) => {
+    const card = parseDevJobCard(payload({ check_result: result }));
+    expect(card).not.toBeNull();
+    expect(card?.check_result).toBeNull();
+  });
+});
+
 describe('mergeDevJob', () => {
   const running = parseDevJobCard(payload({ step: 'tool shell' })) as DevJobCardData;
   const ended = parseDevJobCard(

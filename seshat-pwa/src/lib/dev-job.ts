@@ -3,7 +3,12 @@
  * of a new card onto the shown one, and the money format.
  */
 
-import type { DevJobCardData, DevJobCheckResult, DevJobState } from '@/lib/types';
+import type {
+  DevJobCardData,
+  DevJobCheckResult,
+  DevJobCheckStep,
+  DevJobState,
+} from '@/lib/types';
 
 const STATES: readonly DevJobState[] = [
   'queued',
@@ -24,6 +29,27 @@ function isStringOrNull(value: unknown): value is string | null {
 }
 
 /**
+ * Keep the check result only when every field that the card reads has its shape. A bad result
+ * is dropped and the card still shows, so a malformed field cannot throw in the render.
+ */
+function parseCheckResult(value: unknown): DevJobCheckResult | null {
+  if (value === null || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const rawSteps = v.steps ?? [];
+  if (!Array.isArray(rawSteps)) return null;
+  const steps: DevJobCheckStep[] = [];
+  for (const raw of rawSteps) {
+    if (raw === null || typeof raw !== 'object') return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.name !== 'string' || typeof r.passed !== 'boolean') return null;
+    const messages = r.messages ?? [];
+    if (!Array.isArray(messages) || !messages.every((m) => typeof m === 'string')) return null;
+    steps.push({ name: r.name, passed: r.passed, messages: messages as string[] });
+  }
+  return { passed: v.passed === true, steps };
+}
+
+/**
  * Check the shape of a `dev_job` payload. A malformed payload is ignored, never thrown on.
  *
  * @param value - The STATE_DELTA value.
@@ -40,7 +66,6 @@ export function parseDevJobCard(value: unknown): DevJobCardData | null {
     if (!isStringOrNull(v[key])) return null;
   }
   if (v.main_moved !== null && typeof v.main_moved !== 'boolean') return null;
-  if (v.check_result !== null && typeof v.check_result !== 'object') return null;
   return {
     event: v.event,
     job_id: v.job_id,
@@ -51,7 +76,7 @@ export function parseDevJobCard(value: unknown): DevJobCardData | null {
     spend_usd: v.spend_usd as string | null,
     cap_usd: v.cap_usd as string | null,
     failure_reason: v.failure_reason as string | null,
-    check_result: v.check_result as DevJobCheckResult | null,
+    check_result: parseCheckResult(v.check_result),
     repo_url: v.repo_url as string | null,
     result_artifact_id: v.result_artifact_id as string | null,
     main_moved: v.main_moved as boolean | null,

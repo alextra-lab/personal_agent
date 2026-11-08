@@ -719,3 +719,22 @@ class TestEvents:
             await work
         release.set()
         await until(lambda: sent == ["end"])
+
+    async def test_a_resumed_delivery_sends_the_delivering_state(
+        self, h: Harness, make_job: MakeJob, pushed: list[tuple[dict[str, object], str]]
+    ) -> None:
+        job = await make_job()
+        first = RecordingPipeline(result="abc123", deliver_gate=asyncio.Event())
+        a = h.supervisor("sup-a", behaviour=succeed, pipeline=first)
+        await a.scan_once()
+        await first.in_delivery.wait()
+        await a.stop()
+
+        await expire_lease(h.pool, job.id)
+        b = h.supervisor("sup-b", pipeline=RecordingPipeline(result="abc123"), events=self._sink(h))
+        await b.scan_once()
+        await _wait_end(b)
+        assert [(c["event"], c["state"]) for c in self._cards(pushed)] == [
+            ("state", "delivering"),
+            ("end", "succeeded"),
+        ]

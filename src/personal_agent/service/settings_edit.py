@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
@@ -533,6 +534,35 @@ async def load_overrides_at_startup() -> None:
     apply_setting_overrides(at_start=True)
     log.info("setting_overrides_loaded", parameters=sorted(overrides), trace_id=trace_id)
     _warn_if_a_preset_exceeds_a_stored_ceiling(trace_id)
+    await _warn_about_unaudited_overrides(sorted(overrides), trace_id)
+
+
+async def _warn_about_unaudited_overrides(parameters: Sequence[str], trace_id: str) -> None:
+    """Log each stored override whose latest audit row is not a ``set`` (FRE-1753).
+
+    A PWA edit writes an audit row. A row that a shell command inserted directly has none, and a
+    ``tool.*`` row changes a permission at the next tool call. The warning names the parameter only.
+    A failure of any step logs the error type and does not stop the start, because the loader runs
+    inside the gateway startup. The error text is not logged, so no value can reach the log.
+
+    Args:
+        parameters: The stored override names that the load returned.
+        trace_id: Trace identifier for the log.
+    """
+    if not parameters:
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            unaudited = await SettingsOverridesRepository(db).unaudited_parameters(parameters)
+    except Exception as exc:
+        log.warning(
+            "setting_override_audit_check_failed",
+            error_type=type(exc).__name__,
+            trace_id=trace_id,
+        )
+        return
+    for parameter in unaudited:
+        log.warning("setting_override_without_audit", parameter=parameter, trace_id=trace_id)
 
 
 def _warn_if_a_preset_exceeds_a_stored_ceiling(trace_id: str) -> None:

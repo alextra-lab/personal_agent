@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
 from pydantic import JsonValue
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,6 +79,34 @@ class SettingsOverridesRepository:
         )
         row = result.first()
         return (row[0],) if row is not None else None
+
+    async def unaudited_parameters(self, parameters: Collection[str]) -> list[str]:
+        """Return the parameters whose latest audit row is not a ``set``, sorted (FRE-1753).
+
+        A PWA edit writes the override and a ``set`` audit row together. A row inserted by other
+        means has no audit row, or its latest audit row is a ``clear``. "Latest" is the highest
+        ``audit_id``, so the order does not depend on a clock.
+
+        Args:
+            parameters: The stored override names to check.
+
+        Returns:
+            The names with no audit row, or with a latest audit row that is not a ``set``. The query
+            reads audit metadata only, so no stored value passes through this method.
+        """
+        names = sorted(set(parameters))
+        latest = (
+            select(func.max(SettingsEditAuditModel.audit_id))
+            .where(SettingsEditAuditModel.parameter.in_(names))
+            .group_by(SettingsEditAuditModel.parameter)
+        )
+        result = await self.db.execute(
+            select(SettingsEditAuditModel.parameter, SettingsEditAuditModel.action).where(
+                SettingsEditAuditModel.audit_id.in_(latest)
+            )
+        )
+        audited = {str(parameter) for parameter, action in result.all() if action == "set"}
+        return [name for name in names if name not in audited]
 
     async def set(
         self,

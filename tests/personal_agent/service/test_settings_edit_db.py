@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 import pytest_asyncio
+import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -46,6 +47,9 @@ from personal_agent.service import settings_edit
 from personal_agent.service.app import app
 from personal_agent.service.auth import RequestUser, get_or_create_user_by_email, get_request_user
 from personal_agent.service.database import get_db_session
+from personal_agent.service.repositories.settings_overrides_repository import (
+    SettingsOverridesRepository,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -580,3 +584,85 @@ async def test_fre1724_ac4_a_secret_writes_no_row_on_real_rows(
         )
         assert stored.scalar_one_or_none() is None
     assert _SENTINEL not in str(await _audit(maker, user_id))
+
+
+# ---------------------------------------------------------------------------
+# FRE-1753: a stored override with no audit row warns at startup
+# ---------------------------------------------------------------------------
+
+_FRE1753_AUDITED = "setting.fre1753_audited"
+_FRE1753_UNAUDITED = "setting.fre1753_unaudited"
+_FRE1753_CLEARED = "setting.fre1753_cleared"
+_FRE1753_RESET = "setting.fre1753_reset"
+_FRE1753_SENTINEL = "sk-sentinel-secret-value-1753"
+
+
+async def _delete_fre1753_rows(maker: async_sessionmaker[AsyncSession]) -> None:
+    """Delete the audit rows too: they outlive their users, so a rerun would see old rows."""
+    async with maker() as db:
+        await db.execute(text("DELETE FROM settings_overrides WHERE parameter LIKE 'setting.fre1753_%'"))
+        await db.execute(text("DELETE FROM settings_edit_audit WHERE parameter LIKE 'setting.fre1753_%'"))
+        await db.commit()
+
+
+@pytest_asyncio.fixture
+async def fre1753_rows(
+    sessions: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    await _delete_fre1753_rows(sessions)
+    yield sessions
+    await _delete_fre1753_rows(sessions)
+
+
+async def _insert_without_audit(maker: async_sessionmaker[AsyncSession], parameter: str) -> None:
+    """Insert as a shell command would: a row in ``settings_overrides`` and no audit row."""
+    async with maker() as db:
+        await db.execute(
+            text(
+                "INSERT INTO settings_overrides (parameter, value, updated_by) "
+                "VALUES (:p, CAST(:v AS JSONB), :u)"
+            ),
+            {"p": parameter, "v": f'"{_FRE1753_SENTINEL}"', "u": uuid4()},
+        )
+        await db.commit()
+
+
+async def test_fre1753_ac1_ac2_a_row_with_no_latest_set_audit_warns_and_the_value_stays_out(
+    fre1753_rows: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_id = uuid4()
+    async with fre1753_rows() as db:
+        repo = SettingsOverridesRepository(db)
+        await repo.set(
+            parameter=_FRE1753_AUDITED, value=_FRE1753_SENTINEL, changed_by=user_id, old_value=None
+        )
+        await repo.set(
+            parameter=_FRE1753_CLEARED, value=_FRE1753_SENTINEL, changed_by=user_id, old_value=None
+        )
+        await repo.clear(parameter=_FRE1753_CLEARED, changed_by=user_id, new_value=None)
+        # An older clear does not count: the latest audit row of this parameter is a set.
+        await repo.set(
+            parameter=_FRE1753_RESET, value=_FRE1753_SENTINEL, changed_by=user_id, old_value=None
+        )
+        await repo.clear(parameter=_FRE1753_RESET, changed_by=user_id, new_value=None)
+        await repo.set(
+            parameter=_FRE1753_RESET, value=_FRE1753_SENTINEL, changed_by=user_id, old_value=None
+        )
+    await _insert_without_audit(fre1753_rows, _FRE1753_CLEARED)
+    await _insert_without_audit(fre1753_rows, _FRE1753_UNAUDITED)
+
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", fre1753_rows)
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    warned = [
+        str(entry["parameter"])
+        for entry in entries
+        if entry["event"] == "setting_override_without_audit"
+    ]
+    ours = sorted(name for name in warned if name.startswith("setting.fre1753_"))
+    assert ours == [_FRE1753_CLEARED, _FRE1753_UNAUDITED]
+    assert warned.count(_FRE1753_UNAUDITED) == 1
+    assert _FRE1753_AUDITED not in warned
+    assert _FRE1753_RESET not in warned
+    assert _FRE1753_SENTINEL not in str(entries)

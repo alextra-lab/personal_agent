@@ -168,6 +168,21 @@ async def test_query_requires_both_current_predicates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_drops_agent_labeled_stances_but_keeps_unlabeled() -> None:
+    """FRE-1752 (CI guard): the Cypher itself must keep only user-labeled and unlabeled edges.
+
+    A fake driver returns canned rows, so it cannot prove filtering. The live class below
+    proves the behaviour. This test pins the predicate so CI, which skips live Neo4j tests,
+    fails if the filter is removed. ``IS NULL`` must be explicit because ``NULL = 'user'``
+    is null in Cypher, which would drop the unlabeled rows.
+    """
+    service, recorder = _fake_service(rows=[])
+    await service.query_current_stances(["Python"], authenticated=True)
+    query, _ = recorder[0]
+    assert "s.asserted_by IS NULL OR s.asserted_by = 'user'" in query
+
+
+@pytest.mark.asyncio
 async def test_empty_affect_row_is_still_returned() -> None:
     """D6: filtering happens at render, not fetch -- an empty-affect row (e.g. the ADR's
     Barrage républicain case) must reach the caller so the renderer's filter is provably
@@ -298,3 +313,114 @@ class TestCurrentOnlyPredicatesAreIndependentlyEnforced:
         result = await owner_service.query_current_stances(["FRE1015_BothNull"], authenticated=True)
         assert len(result) == 1
         assert result[0]["affect"] == "current"
+
+
+# ---------------------------------------------------------------------------
+# Live -- FRE-1752: a stance that only the assistant asserted is not returned.
+# ---------------------------------------------------------------------------
+#
+# Rows are written by direct Cypher so that the three label states exist side by side:
+# "user", "agent", and no property at all (the 52 edges older than FRE-1299). assert_stance
+# always writes the property, so the write path cannot build the unlabeled case.
+
+
+class TestAgentLabeledStancesAreNotReturned:
+    """FRE-1752: the live graph returns user and unlabeled stances, not agent ones."""
+
+    pytestmark = pytest.mark.integration
+
+    _OWNER_UID = UUID("00000000-0000-0000-0000-00000000ad26")
+
+    @pytest_asyncio.fixture
+    async def owner_service(self) -> AsyncIterator[MemoryService]:
+        """Connect to the test stack, ensure an owner exists, clean ``FRE1752_`` rows."""
+        service = MemoryService()  # fre-375-allow: integration test, skips when Neo4j unavailable
+        if not await service.connect():
+            pytest.skip("Neo4j not available (make test-infra-up)")
+
+        assert service.driver is not None
+        async with service.driver.session() as s:
+            await s.run("MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE1752_' DETACH DELETE e")
+            result = await s.run("MATCH (p:Person {is_owner: true}) RETURN count(p) AS n")
+            record = await result.single()
+            if record is None or record["n"] == 0:
+                await s.run(
+                    "CREATE (:Person {user_id: $user_id, is_owner: true,"
+                    " name: 'FRE1752 Test Owner'})",
+                    user_id=str(self._OWNER_UID),
+                )
+
+        yield service
+
+        async with service.driver.session() as s:
+            await s.run(
+                "MATCH (:Person {is_owner: true})-[r:HAS_STANCE]->"
+                "(e:Entity) WHERE e.name STARTS WITH 'FRE1752_' DELETE r"
+            )
+            await s.run("MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE1752_' DETACH DELETE e")
+        await service.disconnect()
+
+    @staticmethod
+    async def _seed(service: MemoryService, name: str, label_clause: str) -> None:
+        """Create one entity and one current owner stance edge, with the given label clause."""
+        assert service.driver is not None
+        async with service.driver.session() as s:
+            await s.run("CREATE (:Entity {name: $name, class: 'World'})", name=name)
+            await s.run(
+                "MATCH (o:Person {is_owner: true}), (e:Entity {name: $name})\n"
+                "CREATE (o)-[:HAS_STANCE {affect: 'wary', valid_from: '2026-01-01T00:00:00Z',"
+                f" valid_to: null, invalid_at: null{label_clause}}}]->(e)",
+                name=name,
+            )
+
+    @pytest.mark.asyncio
+    async def test_agent_labeled_stance_is_absent_user_and_unlabeled_are_returned(
+        self, owner_service: MemoryService
+    ) -> None:
+        """AC-1 and AC-2 on real rows: agent absent, user and unlabeled returned."""
+        await self._seed(owner_service, "FRE1752_User", ", asserted_by: 'user'")
+        await self._seed(owner_service, "FRE1752_Agent", ", asserted_by: 'agent'")
+        await self._seed(owner_service, "FRE1752_Unlabeled", "")
+        targets = ["FRE1752_User", "FRE1752_Agent", "FRE1752_Unlabeled"]
+
+        result = await owner_service.query_current_stances(targets, authenticated=True)
+
+        by_target = {r["target"]: r for r in result}
+        # AC-1: the stance that only the assistant asserted does not reach memory.
+        assert "FRE1752_Agent" not in by_target
+        assert by_target["FRE1752_User"]["asserted_by"] == "user"
+        # AC-2: the store cannot show who said an unlabeled stance, so it is kept and
+        # still reads back as "agent" for the renderer.
+        assert by_target["FRE1752_Unlabeled"]["asserted_by"] == "agent"
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_off_vocabulary_label_is_not_returned(self, owner_service: MemoryService) -> None:
+        """Deliberate: only "user" and no label pass. assert_stance stores the value verbatim,
+        so a direct caller could write another string. Returning it would show it as "agent".
+        """
+        await self._seed(owner_service, "FRE1752_Other", ", asserted_by: 'assistant'")
+
+        result = await owner_service.query_current_stances(["FRE1752_Other"], authenticated=True)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_agent_labeled_edge_stays_in_the_graph(
+        self, owner_service: MemoryService
+    ) -> None:
+        """The read filter must not delete or change the row."""
+        await self._seed(owner_service, "FRE1752_Kept", ", asserted_by: 'agent'")
+
+        await owner_service.query_current_stances(["FRE1752_Kept"], authenticated=True)
+
+        assert owner_service.driver is not None
+        async with owner_service.driver.session() as s:
+            result = await s.run(
+                "MATCH (:Person {is_owner: true})-[r:HAS_STANCE]->(:Entity {name: 'FRE1752_Kept'})"
+                " RETURN count(r) AS n, collect(r.asserted_by) AS labels"
+            )
+            record = await result.single()
+        assert record is not None
+        assert record["n"] == 1
+        assert record["labels"] == ["agent"]

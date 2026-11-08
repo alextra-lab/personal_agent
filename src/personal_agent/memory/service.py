@@ -3197,6 +3197,11 @@ class MemoryService:
         sentinel edge, not per-user (mirrors :meth:`query_stance_history`; no ``user_id``
         parameter, unlike Claim's ``HAS_FACT`` scoping).
 
+        Authorship filter (FRE-1752): a stance labeled ``asserted_by = 'agent'`` is not
+        returned, because only the assistant said it. The edge stays in the graph. A stance
+        with no label is returned and reads back as ``"agent"``, because the store cannot show
+        who said it.
+
         Args:
             targets: Entity names to look up -- either entity names already selected by
                 the recall path this turn (T1), or the fixed curated set (T2). Empty
@@ -3207,8 +3212,9 @@ class MemoryService:
         Returns:
             One dict per target with a current stance, each with ``target``, ``affect``,
             ``mastery``, ``asserted_by`` (FRE-1299 -- "user" or "agent", canonicalized by
-            exact match so a legacy edge with no property, or any off-vocabulary value,
-            reads back "agent" rather than passing through unclassified). Targets with no
+            exact match so a legacy edge with no property reads back "agent" rather than
+            passing through unclassified; after FRE-1752 it is the only way "agent"
+            appears). Targets with no
             current stance are simply absent -- never a placeholder row. Order is not
             guaranteed to match ``targets``' order (callers that need order-preservation
             must re-key by ``target`` themselves).
@@ -3226,6 +3232,13 @@ class MemoryService:
                     "UNWIND $targets AS target\n"
                     "MATCH (:Person {is_owner: true})-[s:HAS_STANCE]->(:Entity {name: target})\n"
                     "WHERE s.valid_to IS NULL AND s.invalid_at IS NULL\n"
+                    # FRE-1752: a stance that only the assistant asserted must not reach
+                    # memory as a stance of the owner. Keep "user" edges. Also keep edges with
+                    # no label: they predate FRE-1299 and the store cannot show who said them,
+                    # so dropping them would silently remove the owner's older stances. Cypher
+                    # needs the explicit IS NULL, because NULL = 'user' is null, not false.
+                    # Any other value is dropped, like the off-vocabulary rule of FRE-1299.
+                    "  AND (s.asserted_by IS NULL OR s.asserted_by = 'user')\n"
                     "RETURN target, s.affect AS affect, s.mastery AS mastery,\n"
                     "       s.asserted_by AS asserted_by",
                     targets=targets,

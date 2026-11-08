@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -69,6 +69,7 @@ class _Store:
 
     overrides: dict[str, JsonValue] = field(default_factory=dict)
     audit: list[dict[str, object]] = field(default_factory=list)
+    audit_reads: int = 0
 
 
 class _FakeRepository:
@@ -86,6 +87,11 @@ class _FakeRepository:
         if parameter not in self.store.overrides:
             return None
         return (self.store.overrides[parameter],)
+
+    async def unaudited_parameters(self, parameters: Collection[str]) -> list[str]:
+        self.store.audit_reads += 1
+        latest = {str(row["parameter"]): row["action"] for row in self.store.audit}
+        return sorted(name for name in parameters if latest.get(name) != "set")
 
     async def set(
         self,
@@ -1092,3 +1098,144 @@ def test_fre1724_the_audit_tells_a_stored_null_from_no_row(
     assert _client().put(_URL, json={"parameter": parameter, "value": "x"}).status_code == 200
 
     assert store.audit[1]["old_value"] == "not set"
+
+
+# ---------------------------------------------------------------------------
+# FRE-1753: a stored override with no audit row warns at startup
+# ---------------------------------------------------------------------------
+
+_AUDITED = "setting.fre1753_audited"
+_UNAUDITED = "setting.fre1753_unaudited"
+_CLEARED = "setting.fre1753_cleared"
+_NO_AUDIT_EVENT = "setting_override_without_audit"
+_AUDIT_FAILED_EVENT = "setting_override_audit_check_failed"
+
+
+def _audit_row(parameter: str, action: str) -> dict[str, object]:
+    return {
+        "parameter": parameter,
+        "action": action,
+        "changed_by": uuid4(),
+        "old_value": None,
+        "new_value": None,
+    }
+
+
+def _warnings_named(entries: list[dict[str, object]], event: str) -> list[dict[str, object]]:
+    return [entry for entry in entries if entry["event"] == event]
+
+
+def _seed_three_overrides(store: _Store) -> None:
+    """One audited row, one with no audit row, one whose latest audit row is a ``clear``."""
+    store.overrides.update({_AUDITED: _SENTINEL, _UNAUDITED: _SENTINEL, _CLEARED: _SENTINEL})
+    store.audit.extend(
+        [
+            _audit_row(_AUDITED, "set"),
+            _audit_row(_CLEARED, "set"),
+            _audit_row(_CLEARED, "clear"),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_fre1753_ac1_each_unaudited_override_warns_once_and_an_audited_one_does_not(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    warned = _warnings_named(entries, _NO_AUDIT_EVENT)
+    assert sorted(str(entry["parameter"]) for entry in warned) == [_CLEARED, _UNAUDITED]
+    assert all(entry["log_level"] == "warning" for entry in warned)
+    assert all(entry["trace_id"] for entry in warned)
+
+
+@pytest.mark.asyncio
+async def test_fre1753_an_empty_override_set_reads_no_audit_row(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the empty-set shortcut (no session, no query): it does not prove the warning."""
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    assert store.audit_reads == 0
+    assert _warnings_named(entries, _NO_AUDIT_EVENT) == []
+
+
+@pytest.mark.asyncio
+async def test_fre1753_ac2_the_warning_names_the_parameter_and_not_the_value(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    assert _warnings_named(entries, _NO_AUDIT_EVENT), "the capture holds the warnings first"
+    assert _SENTINEL not in str(entries)
+
+
+@pytest.mark.asyncio
+async def test_fre1753_ac3_a_failed_audit_read_logs_and_the_start_continues(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    async def _fail(_self: object, _parameters: Collection[str]) -> list[str]:
+        raise RuntimeError(f"audit table unreadable near {_SENTINEL}")
+
+    monkeypatch.setattr(_FakeRepository, "unaudited_parameters", _fail)
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    failed = _warnings_named(entries, _AUDIT_FAILED_EVENT)
+    assert len(failed) == 1
+    assert failed[0]["error_type"] == "RuntimeError"
+    assert _SENTINEL not in str(entries)
+    assert _warnings_named(entries, _NO_AUDIT_EVENT) == []
+    assert set(current_overrides()) == {_AUDITED, _UNAUDITED, _CLEARED}
+
+
+class _SecondUseFails:
+    """A session factory: the first use (the load) works, and the second (the audit read) fails."""
+
+    def __init__(self, where: str) -> None:
+        self.where = where
+        self.uses = 0
+
+    def __call__(self) -> _SecondUseFails:
+        self.uses += 1
+        return self
+
+    async def __aenter__(self) -> object:
+        if self.where == "enter" and self.uses == 2:
+            raise ConnectionError("cannot open a session")
+        return object()
+
+    async def __aexit__(self, *_args: object) -> None:
+        if self.where == "exit" and self.uses == 2:
+            raise ConnectionError("cannot close a session")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("where", ["enter", "exit"])
+async def test_fre1753_ac3_a_session_that_fails_to_open_or_close_does_not_stop_the_start(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    _seed_three_overrides(store)
+    factory: Callable[[], object] = _SecondUseFails(where)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", factory)
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    assert len(_warnings_named(entries, _AUDIT_FAILED_EVENT)) == 1
+    assert set(current_overrides()) == {_AUDITED, _UNAUDITED, _CLEARED}

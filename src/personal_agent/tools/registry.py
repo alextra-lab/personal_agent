@@ -5,14 +5,35 @@ and their executor functions, allowing tools to be registered, discovered,
 and filtered by operational mode.
 """
 
-from collections.abc import Collection
-from typing import Any, Callable
+from collections.abc import Collection, Mapping
+from typing import Any, Callable, Protocol
 
 from personal_agent.governance.models import Mode
-from personal_agent.telemetry import get_logger
+from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.types import ToolDefinition
 
 log = get_logger(__name__)
+
+
+class PreCardCheck(Protocol):
+    """A check that a tool runs before its approval card (FRE-1687).
+
+    The execution layer calls it when the call is about to show a card, after the mode check,
+    the argument rules and the deny rules. A ``ToolError`` refuses the call with no card. It must
+    not write.
+    """
+
+    async def __call__(self, arguments: Mapping[str, object], ctx: TraceContext) -> None:
+        """Refuse a call that is certain to fail.
+
+        Args:
+            arguments: The call's arguments, as the model sent them.
+            ctx: The call's trace context, with the user and the session.
+
+        Raises:
+            ToolError: The call cannot succeed.
+        """
+        ...
 
 
 class ToolRegistry:
@@ -25,9 +46,16 @@ class ToolRegistry:
     def __init__(self) -> None:
         """Initialize empty tool registry."""
         self._tools: dict[str, tuple[ToolDefinition, Callable[..., Any]]] = {}
+        self._pre_card_checks: dict[str, PreCardCheck] = {}
         log.debug("tool_registry_initialized")
 
-    def register(self, tool_def: ToolDefinition, executor: Callable[..., Any]) -> None:
+    def register(
+        self,
+        tool_def: ToolDefinition,
+        executor: Callable[..., Any],
+        *,
+        pre_card_check: PreCardCheck | None = None,
+    ) -> None:
         """Register a tool with its definition and executor function.
 
         Args:
@@ -35,6 +63,8 @@ class ToolRegistry:
             executor: Callable that executes the tool. Should accept tool
                 parameters as keyword arguments and return a dict with
                 tool-specific results.
+            pre_card_check: A check that refuses the call before its approval
+                card (FRE-1687), or ``None``.
 
         Raises:
             ValueError: If tool name already registered.
@@ -43,6 +73,8 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool_def.name}' is already registered")
 
         self._tools[tool_def.name] = (tool_def, executor)
+        if pre_card_check is not None:
+            self._pre_card_checks[tool_def.name] = pre_card_check
         log.debug(
             "tool_registered",
             tool_name=tool_def.name,
@@ -60,6 +92,17 @@ class ToolRegistry:
             Tuple of (ToolDefinition, executor) if found, None otherwise.
         """
         return self._tools.get(name)
+
+    def get_pre_card_check(self, name: str) -> PreCardCheck | None:
+        """Return the tool's pre-card check (FRE-1687).
+
+        Args:
+            name: Tool name.
+
+        Returns:
+            The check, or ``None`` when the tool registered none.
+        """
+        return self._pre_card_checks.get(name)
 
     def list_tools(
         self,

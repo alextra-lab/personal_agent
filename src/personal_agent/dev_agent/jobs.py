@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, TypeVar
@@ -28,6 +28,7 @@ from uuid import UUID
 import asyncpg  # type: ignore[import-untyped]
 import structlog
 
+from personal_agent.dev_agent.git_mirror import MAX_PAGE_BYTES
 from personal_agent.exceptions import LeaseLostError
 
 log = structlog.get_logger(__name__)
@@ -196,13 +197,33 @@ _HELD = f"""
 """
 
 
+#: The fix source of D8.6: the latest succeeded job of the user that built the page. $1 artifact
+#: id, $2 user id. ``repo_pipeline`` and the pre-card check of ``start_dev_job`` share it.
+SOURCE_BUILT_SQL = """
+    SELECT id, repo, result_commit FROM dev_jobs
+     WHERE result_artifact_id = $1 AND user_id = $2 AND state = 'succeeded'
+       AND repo IS NOT NULL AND result_commit IS NOT NULL
+     ORDER BY ended_at DESC LIMIT 1
+"""
+
+#: The fix source of D8.7: an HTML artifact of the user, uploaded, at most the page cap. $1
+#: artifact id, $2 user id, $3 the byte cap.
+SOURCE_PAGE_SQL = """
+    SELECT slug, r2_key FROM artifacts
+     WHERE id = $1 AND user_id = $2 AND type = 'artifact' AND upload_pending = FALSE
+       AND (content_type = 'text/html' OR content_type LIKE 'text/html;%')
+       AND size_bytes <= $3
+"""
+
+
 async def _month_cap_reached(
-    conn: asyncpg.Connection, month_cap_usd: Decimal, *, lock: bool
+    conn: asyncpg.Connection, month: date, month_cap_usd: Decimal, *, lock: bool
 ) -> bool:
-    """Return whether the current UTC month's spend is at the cap (D5.5).
+    """Return whether the month's spend is at the cap (D5.5).
 
     Args:
         conn: A connection. With ``lock``, it must be in a transaction.
+        month: The first day of the UTC month, from the broker's ``month_start``.
         month_cap_usd: The cap.
         lock: Take the month row ``FOR UPDATE``, as the broker does before a reservation.
 
@@ -212,9 +233,9 @@ async def _month_cap_reached(
     spent = await conn.fetchval(
         f"""
         SELECT committed_usd + reserved_usd FROM dev_month_spend
-         WHERE month_start = (date_trunc('month', clock_timestamp() AT TIME ZONE 'UTC'))::date
-         {"FOR UPDATE" if lock else ""}
-        """
+         WHERE month_start = $1 {"FOR UPDATE" if lock else ""}
+        """,
+        month,
     )
     # No row yet: the broker made no call this month, so the spend is zero.
     return Decimal(spent or 0) >= month_cap_usd
@@ -327,6 +348,7 @@ class JobStore:
         mode: JobMode,
         task_text: str,
         model_id: str,
+        month: date,
         month_cap_usd: Decimal,
         source_artifact_id: UUID | None = None,
     ) -> JobCreated | JobRefused:
@@ -335,7 +357,7 @@ class JobStore:
         This is the production path. One transaction:
 
         1. refuse ``job_active`` if a job holds the one-job slot (D9.3);
-        2. lock the current UTC month's spend row, as the broker does, and refuse
+        2. lock the month's spend row, as the broker does, and refuse
            ``month_cap_reached`` if committed plus reserved spend is at the cap (D5.5);
         3. insert the job only if ``tool_approval_decisions`` holds an ``approve`` row with the same
            request id, session, tool call id, tool and argument hash. Else refuse
@@ -351,6 +373,7 @@ class JobStore:
             mode: ``build`` or ``fix``.
             task_text: The task.
             model_id: The catalog key of the model.
+            month: The first day of the current UTC month, from the broker's ``month_start``.
             month_cap_usd: The broker's per-month cap in USD.
             source_artifact_id: The artifact to fix, required for ``fix``.
 
@@ -362,7 +385,7 @@ class JobStore:
                 async with conn.transaction():
                     if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_NOT_ENDED} LIMIT 1"):
                         return JobRefused("job_active")
-                    if await _month_cap_reached(conn, month_cap_usd, lock=True):
+                    if await _month_cap_reached(conn, month, month_cap_usd, lock=True):
                         return JobRefused("month_cap_reached")
                     row = await conn.fetchrow(
                         f"""
@@ -413,13 +436,34 @@ class JobStore:
         )
         return JobCreated(job)
 
-    async def refusal_before_card(self, month_cap_usd: Decimal) -> RefusalReason | None:
+    async def fix_source_exists(self, artifact_id: UUID, user_id: UUID) -> bool:
+        """Return whether a fix job of this artifact would find its source (D8.6, D8.7).
+
+        ``start_dev_job`` calls it before the card. The pipeline's own lookup decides later.
+
+        Args:
+            artifact_id: The artifact to fix.
+            user_id: The requesting user.
+
+        Returns:
+            ``True`` when the user's agent-built page or uploaded HTML artifact exists.
+        """
+        async with self._pool.acquire() as conn:
+            if await conn.fetchrow(SOURCE_BUILT_SQL, artifact_id, user_id) is not None:
+                return True
+            row = await conn.fetchrow(SOURCE_PAGE_SQL, artifact_id, user_id, MAX_PAGE_BYTES)
+        return row is not None
+
+    async def refusal_before_card(
+        self, month: date, month_cap_usd: Decimal
+    ) -> RefusalReason | None:
         """Read whether a new job would be refused now, without a write (FRE-1687).
 
         ``start_dev_job`` calls it before the approval card, so the user is not asked to approve a
         job that is certain to be refused. :meth:`create_approved_job` checks again.
 
         Args:
+            month: The first day of the current UTC month, from the broker's ``month_start``.
             month_cap_usd: The broker's per-month cap in USD.
 
         Returns:
@@ -428,7 +472,7 @@ class JobStore:
         async with self._pool.acquire() as conn:
             if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_NOT_ENDED} LIMIT 1"):
                 return "job_active"
-            if await _month_cap_reached(conn, month_cap_usd, lock=False):
+            if await _month_cap_reached(conn, month, month_cap_usd, lock=False):
                 return "month_cap_reached"
         return None
 

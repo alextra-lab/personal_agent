@@ -23,6 +23,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -40,10 +41,15 @@ from personal_agent.dev_agent.jobs import (
     JobState,
     JobStore,
 )
+from personal_agent.dev_broker.clock import month_start
 from personal_agent.governance.models import Mode
 from personal_agent.service.database import engine
 from personal_agent.telemetry import TraceContext
-from personal_agent.tools.dev_job import start_dev_job_executor, start_dev_job_tool
+from personal_agent.tools.dev_job import (
+    start_dev_job_executor,
+    start_dev_job_pre_card_check,
+    start_dev_job_tool,
+)
 from personal_agent.tools.executor import ToolExecutionLayer, approval_args_hash
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.transport.agui.transport import AGUITransport
@@ -70,7 +76,9 @@ class _Turn:
     ) -> tuple[Any, AsyncMock]:
         """Call ``start_dev_job`` through the execution layer, with the card answered ``answer``."""
         registry = ToolRegistry()
-        registry.register(start_dev_job_tool, start_dev_job_executor)
+        registry.register(
+            start_dev_job_tool, start_dev_job_executor, pre_card_check=start_dev_job_pre_card_check
+        )
         mode_manager = AsyncMock()
         mode_manager.get_current_mode = lambda: Mode.NORMAL
         transport = AGUITransport()
@@ -203,14 +211,57 @@ class TestApprovedCallCreatesOneJob:
         )
         assert unmatched == 0
 
-    async def test_a_fix_job_stores_its_source_artifact(self, turn: _Turn) -> None:
-        artifact = str(uuid4())
-        result, _ = await turn.call(
-            "approve", {"task": "Fix the chart.", "mode": "fix", "artifact_id": artifact}
+    async def test_a_fix_job_stores_its_source_artifact(self, turn: _Turn, store: JobStore) -> None:
+        """The source is a page that an earlier job of the same user built (D8.6)."""
+        artifact = uuid4()
+        built, _ = await turn.call("approve", call_id="call-build")
+        (earlier,) = await turn.jobs()
+        await _end(store, earlier["id"])
+        await turn.pool.execute(
+            "UPDATE dev_jobs SET state = 'succeeded', repo = 'r', result_commit = 'c', "
+            "result_artifact_id = $2 WHERE id = $1",
+            earlier["id"],
+            artifact,
         )
+
+        result, _ = await turn.call(
+            "approve", {"task": "Fix the chart.", "mode": "fix", "artifact_id": str(artifact)}
+        )
+
         assert result.success is True, result.error
-        (job,) = await turn.jobs()
-        assert (job["mode"], str(job["source_artifact_id"])) == ("fix", artifact)
+        fix = [j for j in await turn.jobs() if j["mode"] == "fix"]
+        assert [str(j["source_artifact_id"]) for j in fix] == [str(artifact)]
+
+    @pytest.mark.parametrize("owner", ["nobody", "another_user"])
+    async def test_a_fix_without_the_users_source_gets_no_card(
+        self, turn: _Turn, store: JobStore, owner: str
+    ) -> None:
+        artifact = uuid4()
+        if owner == "another_user":
+            other = _Turn(turn.pool)
+            try:
+                await other.call("approve")
+                (job,) = await other.jobs()
+                await _end(store, job["id"])
+                await turn.pool.execute(
+                    "UPDATE dev_jobs SET state = 'succeeded', repo = 'r', result_commit = 'c', "
+                    "result_artifact_id = $2 WHERE id = $1",
+                    job["id"],
+                    artifact,
+                )
+                result, card = await turn.call(
+                    "approve", {"task": "Fix it.", "mode": "fix", "artifact_id": str(artifact)}
+                )
+            finally:
+                await other.cleanup()
+        else:
+            result, card = await turn.call(
+                "approve", {"task": "Fix it.", "mode": "fix", "artifact_id": str(artifact)}
+            )
+
+        assert _error(result)["code"] == "source_not_found"
+        card.assert_not_awaited()
+        assert await turn.jobs() == []
 
 
 class TestRefusedCardsCreateNothing:
@@ -338,7 +389,8 @@ class TestRefusalsWithAReason:
     async def test_a_reached_month_cap_refuses(self, turn: _Turn) -> None:
         """A cap of zero is reached by any spend, also by none."""
         with patch(
-            "personal_agent.tools.dev_job.load_broker_config", return_value=_broker_with_zero_cap()
+            "personal_agent.tools.dev_job._broker_config",
+            AsyncMock(return_value=_broker_with_zero_cap()),
         ):
             result, card = await turn.call("approve")
 
@@ -409,6 +461,7 @@ async def _create(
         mode="build",
         task_text=_TASK,
         model_id="deepseek-v4.1-flash-scaleway",
+        month=month_start(datetime.now(UTC)),
         month_cap_usd=Decimal("1000000"),
     )
 

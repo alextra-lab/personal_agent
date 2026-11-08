@@ -16,11 +16,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
 from personal_agent.config import settings
 from personal_agent.dev_agent.jobs import ApprovalEvidence, JobCreated, JobStore, RefusalReason
+from personal_agent.dev_broker.clock import month_start
 from personal_agent.dev_broker.config import BrokerConfig, load_broker_config
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.contract import ToolError, error_codes
@@ -36,7 +38,7 @@ MAX_TASK_CHARS = 8000
 
 DevJobCode = Literal[
     "approval_required",
-    "approval_mismatch",
+    "source_not_found",
     "not_available",
     "invalid_arguments",
     "job_active",
@@ -155,16 +157,6 @@ def _artifact_uuid(mode: str, artifact_id: str | None) -> UUID | None:
         ) from None
 
 
-def _grant_matches(grant: ApprovalGrant, task: str, mode: str, artifact_id: str | None) -> bool:
-    """Return whether the card showed exactly the arguments that this call runs with."""
-    shown = grant.args
-    return (
-        shown.get("task") == task
-        and shown.get("mode") == mode
-        and (shown.get("artifact_id") or None) == (artifact_id or None)
-    )
-
-
 @dataclass(frozen=True)
 class _Checked:
     """A call that passed the checks that need no approval."""
@@ -222,7 +214,7 @@ async def _check(
         raise _refuse("invalid_arguments", "mode and artifact_id must be strings.", "Call again.")
     source = _artifact_uuid(mode, artifact_id)
     try:
-        broker = await asyncio.to_thread(load_broker_config)
+        broker = await _broker_config()
     except Exception as exc:  # noqa: BLE001 — a broken broker config means no job can run
         log.error(
             "dev_job_broker_config_unavailable",
@@ -251,7 +243,17 @@ async def start_dev_job_pre_card_check(arguments: Mapping[str, object], ctx: Tra
     checked = await _check(
         arguments.get("task"), arguments.get("mode"), arguments.get("artifact_id"), ctx
     )
-    reason = await checked.store.refusal_before_card(checked.broker.month_cap_usd)
+    if checked.source is not None and not await checked.store.fix_source_exists(
+        checked.source, checked.user_id
+    ):
+        raise _refuse(
+            "source_not_found",
+            "no HTML artifact of this user has that artifact_id.",
+            "Find the id of the user's page with artifact_list, then call again.",
+        )
+    reason = await checked.store.refusal_before_card(
+        month_start(datetime.now(UTC)), checked.broker.month_cap_usd
+    )
     if reason is not None:
         message, next_action = _REFUSALS[reason]
         raise _refuse(reason, message, next_action)
@@ -289,13 +291,6 @@ async def start_dev_job_executor(
             "a job starts only after the user approves its card, and this call had no approval.",
             "Do not retry. Tell the user that the job needs their approval on the card.",
         )
-    if not _grant_matches(approval, task, mode, artifact_id):
-        log.warning("dev_job_approval_mismatch", request_id=approval.request_id, trace_id=trace_id)
-        raise _refuse(
-            "approval_mismatch",
-            "the approved card showed other arguments than this call.",
-            "Do not retry. Tell the user that the approval did not match the request.",
-        )
     checked = await _check(task, mode, artifact_id, ctx)
     result = await checked.store.create_approved_job(
         job_id=uuid4(),
@@ -311,6 +306,7 @@ async def start_dev_job_executor(
         mode="fix" if checked.source is not None else "build",
         task_text=checked.task,
         model_id=checked.broker.default_model,
+        month=month_start(datetime.now(UTC)),
         month_cap_usd=checked.broker.month_cap_usd,
         source_artifact_id=checked.source,
     )
@@ -335,8 +331,19 @@ async def start_dev_job_executor(
     }
 
 
-# The execution layer runs it before the card (tools/executor.py, PreCardCheck).
-start_dev_job_executor.pre_card_check = start_dev_job_pre_card_check  # type: ignore[attr-defined]
+_BROKER_CONFIG: BrokerConfig | None = None
+
+
+async def _broker_config() -> BrokerConfig:
+    """Load the broker config once per process, in a thread (it reads a file).
+
+    Returns:
+        The config that the broker enforces.
+    """
+    global _BROKER_CONFIG
+    if _BROKER_CONFIG is None:
+        _BROKER_CONFIG = await asyncio.to_thread(load_broker_config)
+    return _BROKER_CONFIG
 
 
 def _running_job_store() -> JobStore | None:

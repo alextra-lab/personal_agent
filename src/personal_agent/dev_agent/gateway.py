@@ -39,20 +39,11 @@ log = structlog.get_logger(__name__)
 _running: RunningSupervisor | None = None
 
 
-def supervisor_running() -> bool:
-    """Return whether this process runs a job supervisor whose task is alive.
-
-    Returns:
-        ``True`` when :func:`start_supervisor` started one and its task has not ended.
-    """
-    return _running is not None and not _running.task.done()
-
-
 def running_job_store() -> JobStore | None:
     """Return a job store on the running supervisor's pool, or ``None`` when none runs.
 
     Returns:
-        The store, or ``None`` when :func:`supervisor_running` is false.
+        The store, or ``None`` when :func:`start_supervisor` started none or its task ended.
     """
     if _running is None or _running.task.done():
         return None

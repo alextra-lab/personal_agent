@@ -72,7 +72,14 @@ class _Probe:
         return {"ran": True}
 
 
-def _layer(executor: Any, transport: MagicMock, *, name: str = "probe") -> ToolExecutionLayer:
+def _layer(
+    executor: Any,
+    transport: MagicMock,
+    *,
+    name: str = "probe",
+    pre_card_check: Any = None,
+    mode: Mode = Mode.NORMAL,
+) -> ToolExecutionLayer:
     registry = ToolRegistry()
     registry.register(
         ToolDefinition(
@@ -84,11 +91,12 @@ def _layer(executor: Any, transport: MagicMock, *, name: str = "probe") -> ToolE
             allowed_modes=_ALL_MODES,
         ),
         executor,
+        pre_card_check=pre_card_check,
     )
     config = copy.deepcopy(load_governance_config())
     config.tools[name] = ToolPolicy(allowed_in_modes=_ALL_MODES)
     mode_manager = MagicMock()
-    mode_manager.get_current_mode.return_value = Mode.NORMAL
+    mode_manager.get_current_mode.return_value = mode
     return ToolExecutionLayer(
         registry=registry,
         governance_config=config,
@@ -306,18 +314,35 @@ class TestTheWriteAndTheCheck:
         async def check(arguments: Any, ctx: Any) -> None:
             raise _Refused("job_active", "busy", retryable=False, next_action="wait")
 
-        probe = _Probe()
-        probe.run.__func__.pre_card_check = check  # type: ignore[attr-defined]
-        try:
-            transport = _transport("approve")
-            result = await _dispatch(_layer(probe.run, transport), {"x": "1"})
-        finally:
-            del probe.run.__func__.pre_card_check  # type: ignore[attr-defined]
+        probe, transport = _Probe(), _transport("approve")
+        result = await _dispatch(_layer(probe.run, transport, pre_card_check=check), {"x": "1"})
 
         assert result["success"] is False
         assert "busy" in result["content"]
         transport.request_tool_approval.assert_not_awaited()
+        transport.record_approval_decision.assert_not_awaited()
         assert probe.grants == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("case", ["mode", "deny_rule", "allow_rule"])
+    async def test_the_pre_card_check_runs_only_where_a_card_would_show(
+        self, monkeypatch: pytest.MonkeyPatch, case: str
+    ) -> None:
+        """A mode refusal and a deny rule win over the check, and an allowed call skips it."""
+        check = AsyncMock(return_value=None)
+        if case == "deny_rule":
+            use_rules(monkeypatch, deny=["probe"])
+        elif case == "allow_rule":
+            use_rules(monkeypatch, allow=["probe"])
+        else:
+            use_rules(monkeypatch, ask=["probe"])
+        mode = Mode.LOCKDOWN if case == "mode" else Mode.NORMAL
+        layer = _layer(_Probe().run, _transport("approve"), pre_card_check=check, mode=mode)
+
+        result = await _dispatch(layer, {"x": "1"})
+
+        check.assert_not_awaited()
+        assert result["success"] is (case == "allow_rule")
 
 
 class TestTheConfig:

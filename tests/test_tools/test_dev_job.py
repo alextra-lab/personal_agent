@@ -43,6 +43,7 @@ def available() -> Iterator[MagicMock]:
     store = MagicMock()
     store.create_approved_job = AsyncMock()
     store.refusal_before_card = AsyncMock(return_value=None)
+    store.fix_source_exists = AsyncMock(return_value=True)
     with (
         patch.object(settings, "dev_agent_supervisor_enabled", True),
         patch("personal_agent.tools.dev_job._running_job_store", return_value=store),
@@ -60,19 +61,6 @@ async def _code(**kwargs: Any) -> str:
 class TestRefusedBeforeTheDatabase:
     async def test_no_grant(self, available: MagicMock) -> None:
         assert await _code(**_ARGS, ctx=_ctx()) == "approval_required"
-        available.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "shown",
-        [
-            {"task": "Build another page.", "mode": "build"},
-            {"task": "Build a counter page.", "mode": "fix", "artifact_id": str(uuid4())},
-        ],
-    )
-    async def test_a_grant_for_other_arguments(
-        self, available: MagicMock, shown: dict[str, Any]
-    ) -> None:
-        assert await _code(**_ARGS, ctx=_ctx(), approval=_grant(shown)) == "approval_mismatch"
         available.assert_not_called()
 
     async def test_no_supervisor(self) -> None:
@@ -112,6 +100,7 @@ class TestPreCardCheck:
     async def test_it_refuses_what_the_store_would_refuse(self, reason: str) -> None:
         store = MagicMock()
         store.refusal_before_card = AsyncMock(return_value=reason)
+        store.fix_source_exists = AsyncMock(return_value=True)
         with (
             patch.object(settings, "dev_agent_supervisor_enabled", True),
             patch("personal_agent.tools.dev_job._running_job_store", return_value=store),
@@ -131,27 +120,44 @@ class TestPreCardCheck:
             await start_dev_job_pre_card_check(_ARGS, ctx)
         assert refused.value.code == "not_available"
 
+    async def test_a_fix_of_a_missing_artifact_is_refused(self, available: MagicMock) -> None:
+        store = MagicMock()
+        store.fix_source_exists = AsyncMock(return_value=False)
+        store.refusal_before_card = AsyncMock(return_value=None)
+        args = {"task": "Fix it.", "mode": "fix", "artifact_id": str(uuid4())}
+        with (
+            patch("personal_agent.tools.dev_job._running_job_store", return_value=store),
+            pytest.raises(DevJobError) as refused,
+        ):
+            await start_dev_job_pre_card_check(args, _ctx())
+        assert refused.value.code == "source_not_found"
+
     async def test_a_broker_config_that_fails_to_load_is_not_available(
         self, available: MagicMock
     ) -> None:
         with (
             patch(
-                "personal_agent.tools.dev_job.load_broker_config",
-                side_effect=FileNotFoundError("broker.yaml"),
+                "personal_agent.tools.dev_job._broker_config",
+                AsyncMock(side_effect=FileNotFoundError("broker.yaml")),
             ),
             pytest.raises(DevJobError) as refused,
         ):
             await start_dev_job_pre_card_check(_ARGS, _ctx())
         assert refused.value.code == "not_available"
 
-    def test_the_executor_declares_it(self) -> None:
-        assert start_dev_job_executor.pre_card_check is start_dev_job_pre_card_check  # type: ignore[attr-defined]
+    def test_the_registry_holds_it(self) -> None:
+        import personal_agent.tools as tools
+        from personal_agent.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        with patch.object(settings, "dev_agent_supervisor_enabled", True):
+            tools.register_mvp_tools(registry)
+        assert registry.get_pre_card_check("start_dev_job") is start_dev_job_pre_card_check
 
 
 class TestSupervisorRunning:
     def test_false_before_a_start(self) -> None:
         with patch.object(gateway, "_running", None):
-            assert gateway.supervisor_running() is False
             assert gateway.running_job_store() is None
 
     @pytest.mark.asyncio
@@ -159,10 +165,8 @@ class TestSupervisorRunning:
         task = asyncio.create_task(asyncio.sleep(10))
         running = MagicMock(task=task)
         with patch.object(gateway, "_running", running):
-            assert gateway.supervisor_running() is True
             assert gateway.running_job_store() is not None
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-            assert gateway.supervisor_running() is False
             assert gateway.running_job_store() is None

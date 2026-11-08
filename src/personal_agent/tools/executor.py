@@ -45,7 +45,7 @@ from personal_agent.tools.contract import (
 from personal_agent.tools.contract import (
     ToolExecutionError as ToolExecutionError,
 )
-from personal_agent.tools.registry import ToolRegistry
+from personal_agent.tools.registry import PreCardCheck, ToolRegistry
 from personal_agent.tools.types import ToolDefinition, ToolErrorDetail, ToolResult
 
 if TYPE_CHECKING:
@@ -70,30 +70,8 @@ _READ_GRANT_PARAM = "read_grant"
 _APPROVAL_PARAM = "approval"
 _RESERVED_PARAMS = frozenset({_APPROVE_PARAM, _READ_GRANT_PARAM, _APPROVAL_PARAM})
 
-# Name of the optional attribute of an executor that holds its pre-card check (FRE-1687). See
-# :class:`PreCardCheck`.
-_PRE_CARD_CHECK_ATTR = "pre_card_check"
-
-
-class PreCardCheck(Protocol):
-    """A check that an executor runs before the approval card (FRE-1687).
-
-    Set it as the executor's ``pre_card_check`` attribute. The layer calls it before the
-    permission check. A :class:`ToolError` refuses the call with no card. It must not write.
-    """
-
-    async def __call__(self, arguments: Mapping[str, object], ctx: TraceContext) -> None:
-        """Refuse a call that is certain to fail.
-
-        Args:
-            arguments: The call's arguments, as the model sent them.
-            ctx: The call's trace context, with the user and the session.
-
-        Raises:
-            ToolError: The call cannot succeed.
-        """
-        ...
-
+#: The longest wait for a durable decision write (ADR-0159 D10.3).
+_DURABLE_RECORD_TIMEOUT_SECONDS = 10.0
 
 #: Decision writes that run in the background, held so the event loop does not drop them.
 _BACKGROUND_RECORDS: set[asyncio.Task[None]] = set()
@@ -431,7 +409,18 @@ async def _record_decision(
         )
 
     if durable:
-        await write()
+        try:
+            # Bounded, so a stalled database does not hold the turn after the user answered. If
+            # the cancel lands after the commit, the row exists, and the tool's insert reads it.
+            await asyncio.wait_for(write(), timeout=_DURABLE_RECORD_TIMEOUT_SECONDS)
+        except TimeoutError:
+            log.warning(
+                "approval_decision_persist_timed_out",
+                tool_name=tool_name,
+                request_id=request_id,
+                trace_id=trace_ctx.trace_id,
+                session_id=session_id,
+            )
         return
     task = asyncio.create_task(write())
     _BACKGROUND_RECORDS.add(task)
@@ -572,6 +561,7 @@ async def _check_permissions(
     worker: str | None = None,
     tool_call_id: str | None = None,
     durable: bool = False,
+    pre_card_check: PreCardCheck | None = None,
 ) -> PermissionResult:
     """Check whether a call may run: mode, arguments, then the permission rules.
 
@@ -596,6 +586,8 @@ async def _check_permissions(
         tool_call_id: The model's tool call id, recorded with the card's decision.
         durable: Write the decision before the call runs (an executor that declares
             ``approval``). Otherwise the write runs in the background.
+        pre_card_check: The tool's check that runs just before the card, or ``None``. A
+            ``ToolError`` from it refuses the call with no card (FRE-1687).
 
     Returns:
         PermissionResult indicating if execution is allowed. A call that ran because the user
@@ -704,6 +696,27 @@ async def _check_permissions(
             "approval_denied_no_transport",
             "approval_no_transport",
         )
+
+    if pre_card_check is not None:
+        try:
+            await pre_card_check(arguments, trace_ctx)
+        except ToolError as refused:
+            log.info(
+                "tool_refused_before_card",
+                tool_name=tool_name,
+                error_code=refused.code,
+                trace_id=trace_ctx.trace_id,
+                session_id=session_id,
+            )
+            return PermissionRefused(reason=f"pre_card_{refused.code}", error=refused.detail)
+        except Exception as exc:  # noqa: BLE001 — the executor repeats its checks after the card
+            log.warning(
+                "tool_pre_card_check_failed",
+                tool_name=tool_name,
+                error=type(exc).__name__,
+                trace_id=trace_ctx.trace_id,
+                session_id=session_id,
+            )
 
     request_id = str(uuid4())
     answer = await _request_approval(
@@ -950,8 +963,8 @@ class ToolExecutionLayer:
         or ``None`` when no card was approved (ADR-0159 D10.3).  A model-supplied
         value is dropped.
 
-        An executor with a ``pre_card_check`` attribute (:class:`PreCardCheck`)
-        can refuse the call before the card.
+        A tool registered with a ``pre_card_check`` can refuse the call just
+        before its card (FRE-1687).
 
         Args:
             tool_name: Name of the tool to execute.
@@ -1018,30 +1031,6 @@ class ToolExecutionLayer:
                 trace_ctx=trace_ctx,
             )
 
-        # 1c. FRE-1687: an executor may refuse a call before the card, so the user is never asked
-        # to approve a call that is certain to fail. Only executors that declare the check run it.
-        pre_card_check = getattr(executor, _PRE_CARD_CHECK_ATTR, None)
-        if pre_card_check is not None:
-            try:
-                await pre_card_check(arguments, trace_ctx)
-            except ToolError as refused:
-                log.info(
-                    "tool_refused_before_card",
-                    tool_name=tool_name,
-                    error_code=refused.code,
-                    trace_id=trace_ctx.trace_id,
-                    session_id=session_id,
-                )
-                return _failed(tool_name, refused.detail, trace_ctx=trace_ctx)
-            except Exception as exc:  # noqa: BLE001 — the executor repeats its checks after the card
-                log.warning(
-                    "tool_pre_card_check_failed",
-                    tool_name=tool_name,
-                    error=type(exc).__name__,
-                    trace_id=trace_ctx.trace_id,
-                    session_id=session_id,
-                )
-
         # 2. Check permissions (async — may perform interactive approval round-trip)
         current_mode = self.mode_manager.get_current_mode()
         permission = await _check_permissions(
@@ -1056,6 +1045,7 @@ class ToolExecutionLayer:
             worker=worker,
             tool_call_id=tool_call_id,
             durable=_APPROVAL_PARAM in sig.parameters,
+            pre_card_check=self.registry.get_pre_card_check(tool_name),
         )
 
         if isinstance(permission, PermissionRefused):

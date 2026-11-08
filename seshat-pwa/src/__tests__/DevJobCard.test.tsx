@@ -41,6 +41,12 @@ describe('DevJobCard — a running job', () => {
     expect(screen.getByText('tool shell')).toBeDefined();
   });
 
+  it('shows no agent step once the job is checking or publishing', () => {
+    render(<DevJobCard card={card({ state: 'checking', step: 'tool shell' })} />);
+    expect(screen.getByText('Checking the page')).toBeDefined();
+    expect(screen.queryByText('tool shell')).toBeNull();
+  });
+
   it('is a status region that does not interrupt the reader', () => {
     render(<DevJobCard card={card()} />);
     expect(screen.getByRole('status').getAttribute('aria-live')).toBe('polite');

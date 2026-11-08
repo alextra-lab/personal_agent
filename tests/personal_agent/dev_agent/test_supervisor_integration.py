@@ -674,3 +674,48 @@ class TestEvents:
         await a.scan_once()
         await _wait_end(a)
         assert (await h.row(job.id))["state"] == "succeeded"
+
+    async def test_a_cancel_of_the_job_task_does_not_drop_the_end_card(self) -> None:
+        """After the end commits, the lease keeper cancels the work task. The end card must survive."""
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        from personal_agent.dev_agent.jobs import DevJob, JobState
+
+        release = asyncio.Event()
+        sent: list[str] = []
+
+        class SlowSink:
+            async def notify(self, job_id: UUID, event: str, step: str | None = None) -> None:
+                await release.wait()
+                sent.append(event)
+
+        job = DevJob(
+            id=uuid4(),
+            user_id=uuid4(),
+            session_id=uuid4(),
+            trace_id=uuid4(),
+            approval_request_id="a",
+            mode="build",
+            task_text="t",
+            source_artifact_id=None,
+            model_id="m",
+            state=JobState.SUCCEEDED,
+            lease_epoch=1,
+            started_at=datetime.now(timezone.utc),
+            result_commit=None,
+            result_artifact_id=None,
+        )
+        sup = JobSupervisor(
+            store=None,  # type: ignore[arg-type]
+            launcher=None,  # type: ignore[arg-type]
+            adapter_factory=None,  # type: ignore[arg-type]
+            events=SlowSink(),  # type: ignore[arg-type]
+        )
+        work = asyncio.create_task(sup._notify(job, "end"))
+        await asyncio.sleep(0.05)  # the send is in progress
+        work.cancel()  # the keeper's cancel of the job task
+        with pytest.raises(asyncio.CancelledError):
+            await work
+        release.set()
+        await until(lambda: sent == ["end"])

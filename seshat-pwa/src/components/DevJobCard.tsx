@@ -59,7 +59,7 @@ export function DevJobCard({ card }: DevJobCardProps) {
         </span>
       </div>
 
-      {!card.ended && card.step !== null && (
+      {card.state === 'running' && card.step !== null && (
         <p className="mt-1 truncate text-xs text-ink-muted">{card.step}</p>
       )}
 

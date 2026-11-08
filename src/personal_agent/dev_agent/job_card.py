@@ -13,12 +13,12 @@ Delivery is best effort and never changes a job: a failed read or emit is logged
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
-from functools import lru_cache
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -65,6 +65,9 @@ _ENDED = frozenset(state.value for state in END_STATES)
 #: The least time between two step events of one job.
 STEP_INTERVAL_SECONDS = 2.0
 
+#: The longest time that one card event can take, from the read to the send.
+NOTIFY_TIMEOUT_SECONDS = 10.0
+
 
 @dataclass(frozen=True)
 class CardContext:
@@ -79,22 +82,31 @@ class CardContext:
     repo_base_url: str | None
 
 
-@lru_cache(maxsize=1)
+_context: CardContext | None = None
+
+
 def card_context() -> CardContext:
     """Return the card context from the broker config and the settings.
+
+    A successful read is kept. A failed read is not, so a later card can still get the cap.
 
     Returns:
         The context. A missing broker config gives no cap, and the card then shows no cap.
     """
+    global _context
+    if _context is not None:
+        return _context
     from personal_agent.dev_broker.config import load_broker_config
 
+    org = settings.dev_agent_github_org
+    base_url = f"https://github.com/{org}" if org else None
     try:
-        cap: Decimal | None = load_broker_config().job_cap_usd
+        cap = load_broker_config().job_cap_usd
     except (OSError, ValueError) as exc:
         log.warning("dev_job_card_cap_unknown", error_type=type(exc).__name__, trace_id=None)
-        cap = None
-    org = settings.dev_agent_github_org
-    return CardContext(cap_usd=cap, repo_base_url=f"https://github.com/{org}" if org else None)
+        return CardContext(cap_usd=None, repo_base_url=base_url)
+    _context = CardContext(cap_usd=cap, repo_base_url=base_url)
+    return _context
 
 
 def _check_result(value: object) -> object:
@@ -164,7 +176,13 @@ class NullJobEventSink:
     """The sink that does nothing."""
 
     async def notify(self, job_id: UUID, event: JobEventKind, step: str | None = None) -> None:
-        """Do nothing."""
+        """Do nothing.
+
+        Args:
+            job_id: The job.
+            event: The kind of event.
+            step: The latest step.
+        """
 
 
 class PoolJobEventSink:
@@ -178,6 +196,7 @@ class PoolJobEventSink:
         context: CardContext | None = None,
         clock: Callable[[], float] = time.monotonic,
         step_interval_seconds: float = STEP_INTERVAL_SECONDS,
+        timeout_seconds: float = NOTIFY_TIMEOUT_SECONDS,
     ) -> None:
         """Create the sink.
 
@@ -187,12 +206,15 @@ class PoolJobEventSink:
             context: The cap and the repo base URL. Defaults to :func:`card_context`.
             clock: A monotonic clock, for the step throttle.
             step_interval_seconds: The least time between two step events of one job.
+            timeout_seconds: The longest time that one event can take. The caller waits for it,
+                so a stuck read or send must not stall a job or the adapter's event stream.
         """
         self._pool = pool
         self._emit = emit
         self._context = context
         self._clock = clock
         self._interval = step_interval_seconds
+        self._timeout = timeout_seconds
         self._steps: dict[UUID, str] = {}
         self._last_step_at: dict[UUID, float] = {}
 
@@ -214,16 +236,18 @@ class PoolJobEventSink:
             self._steps[job_id] = step
             self._last_step_at[job_id] = now
         try:
-            row = await self._pool.fetchrow(JOB_CARD_SQL + " WHERE j.id = $1", job_id)
-            if row is None:
-                return
-            payload = card_payload(
-                row,
-                event=event,
-                step=self._steps.get(job_id),
-                context=self._context or card_context(),
-            )
-            await self._emit(session_id=str(row["session_id"]), payload=payload)
+            async with asyncio.timeout(self._timeout):
+                row = await self._pool.fetchrow(JOB_CARD_SQL + " WHERE j.id = $1", job_id)
+                if row is None:
+                    return
+                # The step belongs to the agent run: the later states carry none.
+                payload = card_payload(
+                    row,
+                    event=event,
+                    step=self._steps.get(job_id) if row["state"] == JobState.RUNNING else None,
+                    context=self._context or card_context(),
+                )
+                await self._emit(session_id=str(row["session_id"]), payload=payload)
         except Exception as exc:  # noqa: BLE001 — a lost card never changes a job
             log.warning(
                 "dev_job_card_notify_failed",

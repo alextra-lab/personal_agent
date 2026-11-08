@@ -389,6 +389,7 @@ class JobSupervisor:
         self._clock = clock or SystemMonotonicClock()
         self.owner = owner or supervisor_owner_id()
         self._events = events or NullJobEventSink()
+        self._notifying: set[asyncio.Task[None]] = set()
         self._current: asyncio.Task[None] | None = None
         self._current_job: DevJob | None = None
         self._current_fence: Fence | None = None
@@ -813,15 +814,27 @@ class JobSupervisor:
         await self._notify(job, "end")
 
     async def _notify(self, job: DevJob, event: JobEventKind) -> None:
-        """Send the job's card. The job never depends on it: a failure is logged and dropped."""
-        try:
-            async with asyncio.timeout(self.policy.notify_timeout_seconds):
-                await self._events.notify(job.id, event)
-        except Exception as exc:  # noqa: BLE001 — the card is best effort
-            log.warning(
-                "dev_job_event_failed",
-                job_id=str(job.id),
-                card_event=event,
-                error_type=type(exc).__name__,
-                trace_id=job.trace_id.hex,
-            )
+        """Send the job's card. The job never depends on it: a failure is logged and dropped.
+
+        The send runs as its own task behind a shield. After the end state commits, the lease
+        keeper finds the job ended and cancels the work task, and that cancel must not drop the
+        end card.
+        """
+
+        async def send() -> None:
+            try:
+                async with asyncio.timeout(self.policy.notify_timeout_seconds):
+                    await self._events.notify(job.id, event)
+            except Exception as exc:  # noqa: BLE001 — the card is best effort
+                log.warning(
+                    "dev_job_event_failed",
+                    job_id=str(job.id),
+                    card_event=event,
+                    error_type=type(exc).__name__,
+                    trace_id=job.trace_id.hex,
+                )
+
+        task = asyncio.create_task(send())
+        self._notifying.add(task)
+        task.add_done_callback(self._notifying.discard)
+        await asyncio.shield(task)

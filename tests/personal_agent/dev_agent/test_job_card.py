@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from decimal import Decimal
@@ -192,6 +193,34 @@ class TestSink:
             ("state", "tool shell"),
         ]
 
+    async def test_only_a_running_job_carries_the_agents_step(self) -> None:
+        job_id = uuid4()
+        emit = Emitted()
+        running = _row(id=job_id, state="running")
+        sink, pool = self._sink(running, emit)
+        await sink.notify(job_id, "step", "tool shell")
+        pool.row = _row(id=job_id, state="checking")
+        await sink.notify(job_id, "state")
+        assert [(p["state"], p["step"]) for _, p in emit.calls] == [
+            ("running", "tool shell"),
+            ("checking", None),
+        ]
+
+    async def test_a_send_that_hangs_ends_at_the_timeout(self) -> None:
+        class Hangs:
+            async def __call__(self, *, session_id: str, payload: dict[str, object]) -> bool:
+                await asyncio.Event().wait()
+                return True
+
+        row = _row()
+        sink = PoolJobEventSink(
+            FakePool(row),  # type: ignore[arg-type]
+            Hangs(),
+            context=CONTEXT,
+            timeout_seconds=0.1,
+        )
+        await asyncio.wait_for(sink.notify(row["id"], "step", "tool shell"), timeout=2)  # type: ignore[arg-type]
+
     async def test_a_failing_emit_never_raises(self) -> None:
         row = _row()
         sink, _ = self._sink(row, Emitted(fail=True))
@@ -209,3 +238,19 @@ class TestSink:
 
     async def test_the_null_sink_does_nothing(self) -> None:
         await NullJobEventSink().notify(uuid4(), "end")
+
+
+class TestCardContext:
+    async def test_a_failed_cap_read_is_not_kept(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.dev_agent import job_card
+        from personal_agent.dev_broker import config as broker_config
+
+        monkeypatch.setattr(job_card, "_context", None)
+        real = broker_config.load_broker_config
+        monkeypatch.setattr(
+            broker_config, "load_broker_config", lambda: (_ for _ in ()).throw(OSError("seeded"))
+        )
+        assert job_card.card_context().cap_usd is None
+
+        monkeypatch.setattr(broker_config, "load_broker_config", real)
+        assert job_card.card_context().cap_usd == real().job_cap_usd

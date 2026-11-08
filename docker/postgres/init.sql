@@ -651,6 +651,22 @@ CREATE TABLE IF NOT EXISTS dev_job_actions (
 
 CREATE INDEX IF NOT EXISTS idx_dev_job_actions_job ON dev_job_actions (job_id, id);
 
+-- The durable record of each approval card's decision (ADR-0159 D10.3 / FRE-1687). Mirrors
+-- docker/postgres/migrations/0041_tool_approval_decisions.sql. A dev_jobs row joins to it on
+-- approval_request_id = request_id. No TTL. seshat_dev_broker gets no grant.
+CREATE TABLE IF NOT EXISTS tool_approval_decisions (
+    request_id   TEXT PRIMARY KEY,
+    session_id   UUID NOT NULL,
+    tool_call_id TEXT,
+    tool         TEXT NOT NULL,
+    args_hash    TEXT NOT NULL,
+    decision     TEXT NOT NULL CHECK (decision IN (
+        'approve', 'approve_session', 'deny', 'timeout', 'connection_lost'
+    )),
+    trace_id     TEXT NOT NULL,
+    decided_at   TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
 -- ===========================================================================
 -- sysgraph schema (ADR-0105 D2/D3 / FRE-714)
 --

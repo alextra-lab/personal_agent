@@ -45,7 +45,7 @@ import structlog
 
 from personal_agent.dev_agent.git_mirror import MAX_PAGE_BYTES, GitMirror
 from personal_agent.dev_agent.github_app import GitRemote, RepoHost, repo_name
-from personal_agent.dev_agent.jobs import DevJob, JobStore
+from personal_agent.dev_agent.jobs import SOURCE_BUILT_SQL, SOURCE_PAGE_SQL, DevJob, JobStore
 from personal_agent.dev_agent.launcher import AgentLauncher
 from personal_agent.dev_agent.publish_check import (
     MAX_TEST_BYTES,
@@ -229,31 +229,12 @@ class GitHubRepoPipeline:
         source_id = job.source_artifact_id
         if source_id is None:
             raise DevJobRefusedError("source_not_found")
-        built = await self._pool.fetchrow(
-            """
-            SELECT id, repo, result_commit FROM dev_jobs
-             WHERE result_artifact_id = $1 AND user_id = $2 AND state = 'succeeded'
-               AND repo IS NOT NULL AND result_commit IS NOT NULL
-             ORDER BY ended_at DESC LIMIT 1
-            """,
-            source_id,
-            job.user_id,
-        )
+        built = await self._pool.fetchrow(SOURCE_BUILT_SQL, source_id, job.user_id)
         if built is not None:
             return _AgentSource(
                 job_id=built["id"], repo=built["repo"], commit=built["result_commit"]
             )
-        row = await self._pool.fetchrow(
-            """
-            SELECT slug, r2_key FROM artifacts
-             WHERE id = $1 AND user_id = $2 AND type = 'artifact' AND upload_pending = FALSE
-               AND (content_type = 'text/html' OR content_type LIKE 'text/html;%')
-               AND size_bytes <= $3
-            """,
-            source_id,
-            job.user_id,
-            MAX_PAGE_BYTES,
-        )
+        row = await self._pool.fetchrow(SOURCE_PAGE_SQL, source_id, job.user_id, MAX_PAGE_BYTES)
         if row is None:
             raise DevJobRefusedError("source_not_found")
         if self._pages is None:

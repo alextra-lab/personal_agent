@@ -34,6 +34,21 @@ from personal_agent.storage.artifact_store import get_artifact_store
 
 log = structlog.get_logger(__name__)
 
+#: The supervisor that this process started, or ``None``. ``start_dev_job`` reads it, so the tool
+#: creates no job that nothing would run (FRE-1687).
+_running: RunningSupervisor | None = None
+
+
+def running_job_store() -> JobStore | None:
+    """Return a job store on the running supervisor's pool, or ``None`` when none runs.
+
+    Returns:
+        The store, or ``None`` when :func:`start_supervisor` started none or its task ended.
+    """
+    if _running is None or _running.task.done():
+        return None
+    return JobStore(_running.pool)
+
 
 @dataclass(frozen=True)
 class RunningSupervisor:
@@ -160,7 +175,9 @@ async def start_supervisor() -> RunningSupervisor | None:
     )
     # A fresh context: the task outlives the startup span (ADR-0129 D3, FRE-1069).
     task = asyncio.create_task(supervisor.run_forever(), context=contextvars.Context())
-    return RunningSupervisor(supervisor=supervisor, task=task, pool=pool, http=http)
+    global _running
+    _running = RunningSupervisor(supervisor=supervisor, task=task, pool=pool, http=http)
+    return _running
 
 
 async def stop_supervisor(running: RunningSupervisor) -> None:
@@ -169,6 +186,9 @@ async def stop_supervisor(running: RunningSupervisor) -> None:
     Args:
         running: What :func:`start_supervisor` returned.
     """
+    global _running
+    if _running is running:
+        _running = None
     running.task.cancel()
     try:
         await running.task

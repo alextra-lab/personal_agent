@@ -32,8 +32,9 @@ coverage:
   allowlist_skills: [artifact-design]
   # edit (ADR-0156 D7.1, FRE-1576) has no natural pedagogical case yet. search_logs and
   # measure_model_latency are skill-provided (FRE-1596, ADR-0156 A5): the primary sees them after
-  # it loads a providing skill. infra_triage_pedagogy claims them.
-  allowlist_tools: [get_location, get_library_docs, expand_tool_result, edit]
+  # it loads a providing skill. infra_triage_pedagogy claims them. start_dev_job (ADR-0159 D10,
+  # FRE-1687) starts a paid dev-agent job after an approval card; its evaluation is FRE-1689.
+  allowlist_tools: [get_location, get_library_docs, expand_tool_result, edit, start_dev_job]
   # MCP tools are enforced at family granularity (a real browser task exercises many
   # mcp_browser_* micro-tools in one turn; per-method cases are meaningless).
   tool_families:

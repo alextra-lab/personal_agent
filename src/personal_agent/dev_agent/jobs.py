@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, TypeVar
 from uuid import UUID
@@ -27,6 +28,7 @@ from uuid import UUID
 import asyncpg  # type: ignore[import-untyped]
 import structlog
 
+from personal_agent.dev_agent.git_mirror import MAX_PAGE_BYTES
 from personal_agent.exceptions import LeaseLostError
 
 log = structlog.get_logger(__name__)
@@ -62,6 +64,37 @@ _END_STATE_VALUES: list[str] = sorted(s.value for s in END_STATES)
 _NOT_ENDED = f"state <> ALL('{{{','.join(_END_STATE_VALUES)}}}'::text[])"
 
 JobMode = Literal["build", "fix"]
+
+#: Why :meth:`JobStore.create_approved_job` wrote no row.
+RefusalReason = Literal["job_active", "month_cap_reached", "approval_missing", "approval_used"]
+
+
+@dataclass(frozen=True)
+class ApprovalEvidence:
+    """The approved card that a new job must match in ``tool_approval_decisions`` (D10.3).
+
+    Attributes:
+        request_id: The card's request id.
+        tool_call_id: The model's tool call id, or ``None``.
+        tool: The tool that asked.
+        args_hash: The hash of the arguments that the card showed.
+    """
+
+    request_id: str
+    tool_call_id: str | None
+    tool: str
+    args_hash: str
+
+
+@dataclass(frozen=True)
+class JobRefused:
+    """No job was created.
+
+    Attributes:
+        reason: Why.
+    """
+
+    reason: RefusalReason
 
 
 @dataclass(frozen=True)
@@ -103,6 +136,17 @@ class DevJob:
     result_artifact_id: UUID | None
     repo: str | None = None
     base_commit: str | None = None
+
+
+@dataclass(frozen=True)
+class JobCreated:
+    """A job was created.
+
+    Attributes:
+        job: The new ``queued`` job.
+    """
+
+    job: DevJob
 
 
 @dataclass(frozen=True)
@@ -153,6 +197,50 @@ _HELD = f"""
 """
 
 
+#: The fix source of D8.6: the latest succeeded job of the user that built the page. $1 artifact
+#: id, $2 user id. ``repo_pipeline`` and the pre-card check of ``start_dev_job`` share it.
+SOURCE_BUILT_SQL = """
+    SELECT id, repo, result_commit FROM dev_jobs
+     WHERE result_artifact_id = $1 AND user_id = $2 AND state = 'succeeded'
+       AND repo IS NOT NULL AND result_commit IS NOT NULL
+     ORDER BY ended_at DESC LIMIT 1
+"""
+
+#: The fix source of D8.7: an HTML artifact of the user, uploaded, at most the page cap. $1
+#: artifact id, $2 user id, $3 the byte cap.
+SOURCE_PAGE_SQL = """
+    SELECT slug, r2_key FROM artifacts
+     WHERE id = $1 AND user_id = $2 AND type = 'artifact' AND upload_pending = FALSE
+       AND (content_type = 'text/html' OR content_type LIKE 'text/html;%')
+       AND size_bytes <= $3
+"""
+
+
+async def _month_cap_reached(
+    conn: asyncpg.Connection, month: date, month_cap_usd: Decimal, *, lock: bool
+) -> bool:
+    """Return whether the month's spend is at the cap (D5.5).
+
+    Args:
+        conn: A connection. With ``lock``, it must be in a transaction.
+        month: The first day of the UTC month, from the broker's ``month_start``.
+        month_cap_usd: The cap.
+        lock: Take the month row ``FOR UPDATE``, as the broker does before a reservation.
+
+    Returns:
+        ``True`` when committed plus reserved spend is at least the cap. No row is zero spend.
+    """
+    spent = await conn.fetchval(
+        f"""
+        SELECT committed_usd + reserved_usd FROM dev_month_spend
+         WHERE month_start = $1 {"FOR UPDATE" if lock else ""}
+        """,
+        month,
+    )
+    # No row yet: the broker made no call this month, so the spend is zero.
+    return Decimal(spent or 0) >= month_cap_usd
+
+
 def _job(row: asyncpg.Record) -> DevJob:
     return DevJob(
         id=row["id"],
@@ -198,7 +286,10 @@ class JobStore:
         model_id: str,
         source_artifact_id: UUID | None = None,
     ) -> DevJob:
-        """Insert a ``queued`` job.
+        """Insert a ``queued`` job with no approval check. Tests and recovery fixtures only.
+
+        Production creates a job through :meth:`create_approved_job`, which requires the
+        persisted approval (ADR-0159 D10.3).
 
         Args:
             job_id: The new job's id.
@@ -245,6 +336,145 @@ class JobStore:
             model_id=model_id,
         )
         return job
+
+    async def create_approved_job(
+        self,
+        *,
+        job_id: UUID,
+        user_id: UUID,
+        session_id: UUID,
+        trace_id: UUID,
+        approval: ApprovalEvidence,
+        mode: JobMode,
+        task_text: str,
+        model_id: str,
+        month: date,
+        month_cap_usd: Decimal,
+        source_artifact_id: UUID | None = None,
+    ) -> JobCreated | JobRefused:
+        """Insert a ``queued`` job only for an approved card that no job used (ADR-0159 D10.3, D10.5).
+
+        This is the production path. One transaction:
+
+        1. refuse ``job_active`` if a job holds the one-job slot (D9.3);
+        2. lock the month's spend row, as the broker does, and refuse
+           ``month_cap_reached`` if committed plus reserved spend is at the cap (D5.5);
+        3. insert the job only if ``tool_approval_decisions`` holds an ``approve`` row with the same
+           request id, session, tool call id, tool and argument hash. Else refuse
+           ``approval_missing``;
+        4. a second use of the request id refuses ``approval_used``.
+
+        Args:
+            job_id: The new job's id.
+            user_id: The requesting user.
+            session_id: The session of the card.
+            trace_id: The job's own trace (D5.9).
+            approval: The approved card that the permission layer passed.
+            mode: ``build`` or ``fix``.
+            task_text: The task.
+            model_id: The catalog key of the model.
+            month: The first day of the current UTC month, from the broker's ``month_start``.
+            month_cap_usd: The broker's per-month cap in USD.
+            source_artifact_id: The artifact to fix, required for ``fix``.
+
+        Returns:
+            The new job, or the refusal and its reason. A refusal writes no row.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_NOT_ENDED} LIMIT 1"):
+                        return JobRefused("job_active")
+                    if await _month_cap_reached(conn, month, month_cap_usd, lock=True):
+                        return JobRefused("month_cap_reached")
+                    row = await conn.fetchrow(
+                        f"""
+                        INSERT INTO dev_jobs (id, user_id, session_id, trace_id, approval_request_id,
+                                              mode, task_text, source_artifact_id, model_id, state,
+                                              created_at)
+                        SELECT $1, $2, $3, $4, d.request_id, $5, $6, $7, $8, 'queued',
+                               clock_timestamp()
+                          FROM tool_approval_decisions d
+                         WHERE d.request_id = $9
+                           AND d.session_id = $3
+                           AND d.tool_call_id IS NOT DISTINCT FROM $10
+                           AND d.tool = $11
+                           AND d.args_hash = $12
+                           AND d.decision = 'approve'
+                        RETURNING {_JOB_COLUMNS}
+                        """,
+                        job_id,
+                        user_id,
+                        session_id,
+                        trace_id,
+                        mode,
+                        task_text,
+                        source_artifact_id,
+                        model_id,
+                        approval.request_id,
+                        approval.tool_call_id,
+                        approval.tool,
+                        approval.args_hash,
+                    )
+        except asyncpg.UniqueViolationError as exc:
+            if exc.constraint_name == "dev_jobs_one_active":
+                return JobRefused("job_active")
+            if exc.constraint_name == "dev_jobs_approval_request_id_key":
+                return JobRefused("approval_used")
+            raise
+        if row is None:
+            return JobRefused("approval_missing")
+        job = _job(row)
+        log.info(
+            "dev_job_created",
+            job_id=str(job.id),
+            session_id=str(session_id),
+            approval_request_id=approval.request_id,
+            trace_id=trace_id.hex,
+            mode=mode,
+            model_id=model_id,
+        )
+        return JobCreated(job)
+
+    async def fix_source_exists(self, artifact_id: UUID, user_id: UUID) -> bool:
+        """Return whether a fix job of this artifact would find its source (D8.6, D8.7).
+
+        ``start_dev_job`` calls it before the card. The pipeline's own lookup decides later.
+
+        Args:
+            artifact_id: The artifact to fix.
+            user_id: The requesting user.
+
+        Returns:
+            ``True`` when the user's agent-built page or uploaded HTML artifact exists.
+        """
+        async with self._pool.acquire() as conn:
+            if await conn.fetchrow(SOURCE_BUILT_SQL, artifact_id, user_id) is not None:
+                return True
+            row = await conn.fetchrow(SOURCE_PAGE_SQL, artifact_id, user_id, MAX_PAGE_BYTES)
+        return row is not None
+
+    async def refusal_before_card(
+        self, month: date, month_cap_usd: Decimal
+    ) -> RefusalReason | None:
+        """Read whether a new job would be refused now, without a write (FRE-1687).
+
+        ``start_dev_job`` calls it before the approval card, so the user is not asked to approve a
+        job that is certain to be refused. :meth:`create_approved_job` checks again.
+
+        Args:
+            month: The first day of the current UTC month, from the broker's ``month_start``.
+            month_cap_usd: The broker's per-month cap in USD.
+
+        Returns:
+            ``job_active``, ``month_cap_reached``, or ``None``.
+        """
+        async with self._pool.acquire() as conn:
+            if await conn.fetchval(f"SELECT 1 FROM dev_jobs WHERE {_NOT_ENDED} LIMIT 1"):
+                return "job_active"
+            if await _month_cap_reached(conn, month, month_cap_usd, lock=False):
+                return "month_cap_reached"
+        return None
 
     async def _take(
         self, where: str, owner: str, lease_seconds: float

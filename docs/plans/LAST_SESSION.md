@@ -1,52 +1,60 @@
-# Last session — master, 2026-10-20 to 2026-10-21 19:40 UTC
+# Last session — master, to 2026-11-08
 
 ## Doing / discussing  (≤5 sentences)
-All of this session's deployed fixes are verified live and Done: FRE-1646, FRE-1638 and FRE-1648
-(owner test turns on 2026-10-22, traces `805c8877…` and `cf2bcc6c…`). FRE-1637 closed with them.
-FRE-1620 (ADR-0157 effort selector) still owes master's adjudication from its ticket comments.
-A 6-step Sonnet turn hit the `spend_threshold` pause (iteration 6 of 6) at $0.05. The pause counts
-iterations, not dollars. The owner found it interesting and chose `answer_now`, with no decision yet.
+Master delivered the ADR-0159 development agent, one ticket at a time. The last two build tickets
+are with the build seats. The gate on each one is the normal gate, with `/code-review high` on the
+ticket. The owner also asked about plugin and skill versions. Master answered, and the owner did
+not yet ask for an update.
 
 ## What was decided and why
-- **Owner: "I decide if we swap. Not you."** Master merged #1320 (Haiku 5.5 on `captains_log`)
-  because a bar passed. #1321 reverted it. Eval tickets report results and never swap. Memory:
-  `feedback_owner_decides_model_swaps.md`.
-- **`captains_log` → `gpt-6.1-sol`:** the owner said "Sol" after the FRE-1640 study (FRE-1646).
-- **Sonnet 5 stays on all six roles.** The owner skipped the FRE-1647 paid run ("Ok.  Skip.") and
-  said of Sonnet 5.5: "It is more expensive". The per-token price is the same, but FRE-1640 measured
-  $8.53 against $7.95 per 30 days on `captains_log`, and Sonnet 5.5 scored lowest (17/20).
-  `claude_sonnet_5_5` stays picker-only. The `auto` tool-choice code from #1333 stays.
-- **Sol as an LLM judge prefers OpenAI models** (120/120 in FRE-1640). Master applied a stricter
-  rule: a pair is worse if either judge prefers the control in both orders. Use two judges from
-  different vendors in every blind comparison.
-- **Paid search testing is over.** Owner: "Search testing has reached my decided budget". The
-  owner then said "cancel the rest of adr-0158" (T2 FRE-1642 and T3 FRE-1643 canceled).
-- **FRE-1641 spent about $50 and decided nothing.** The harness had no baseline arm and no noise
-  arm. Memory: `feedback_harness_must_answer_the_decision.md`. The paid-run rules that came from it
-  are in `.claude/skills/lifecycle-rules.md` § Paid runs (#1328).
-- **The $0 post-mortem on FRE-1641:** search drift is mostly real vendor variation plus the
-  FRE-1584 engine change. Today's 10k-character fetch cut keeps 97.5%, better than every focused
-  cell. Do not reopen the fetch-size question without a new reason.
-- **Turn performance is accepted.** Owner: "That performance is also acceptable to me" (3 min 53 s
-  and $0.87, against 10 min and $2.08 before FRE-1634, FRE-1635 and FRE-1639).
-- **Sol's slow planner (72 s against 30 s)** was provider-side output speed, not our code.
+- **The dev-agent supervisor stays off on purpose.** `AGENT_DEV_AGENT_SUPERVISOR_ENABLED` is unset.
+  Each deploy check expects 0 `dev_job_supervisor` log lines. Do not enable it as part of a ticket
+  deploy. The first real jobs come with the owner's approval card and the paid evaluation.
+- **The GitHub organization uses the Free plan.** ADR-0159 D8.2 uses no branch rules and no GitHub
+  Actions, so a paid plan adds nothing. The VPS token cannot read the plan, so master did not
+  confirm the plan from the API.
+- **The App has three permissions only:** Administration write, Contents write, Metadata read.
+  The FRE-1685 plan step and a live probe confirmed that these three cover every call.
+- **The embedder backup uses the same model on Scaleway.** Scaleway rejects the OVH casing of the
+  model id with a 422, so the config guard compares ids without case. Do not "fix" the lower-case
+  id in `.env`. The measured cross-provider agreement is on FRE-1750.
+- **Three small FRE-1750 items are known and not ticketed**, because the owner does not want
+  over-ticketing: the rate equals the OVH rate, the Scaleway URL is duplicated, and an http endpoint
+  is not refused.
+- **Calendar credential.** The private iCal address is read-only, so it serves only the read side
+  of FRE-1747. For writes, master recommended a Google service account that the owner shares only
+  the Seshat calendar with. The adrs seat and the owner decide at the design step.
+- **A diff that is escalated always needs `/code-review high` before the merge.** Two PRs arrived
+  at the gate before the result existed. Master held both and sent no bounce, because the seat had
+  already started the review. The next trigger, at the fix commit, carried the result.
+
+## Corrections from this session
+- Master stated the plan of the organization before it checked the plan. Master then corrected the
+  ticket comment.
+- Master loaded `.env` into a shell to run a script. The shell broke some values. The settings
+  loader reads `.env` itself, so no sourcing is needed.
+- Master ran `scripts/verify_dev_agent_github.py` a second time only to read the top of its output.
+  Each run creates one private probe repo, and v0 deletes none. Save the output of the first run.
 
 ## Worktrees — anything special
-- `explore` has `docker/searxng/settings.yml.example` modified. It is the known uid-977 SearXNG
-  file problem, not a study change. Check it with the explore seat before any cleanup.
-- `agent-ad5db2001c2a5c5f9` (`fre-1590-artifact-design-out-of-catalog`) is still not this session's.
+- `adrs`, `explore` and `agent-ad5db2001c2a5c5f9` are on old branches. Master did not touch them.
 
 ## Answers for the fresh start
-- **Exa and Brave credit:** FRE-1641 drained the shared credit mid-run on 2026-10-21, which also
-  degraded production search. Master saw no top-up recorded. Ask the owner before you assume
-  search works.
-- **Owner alerts:** `.env` holds `AGENT_OWNER_NTFY_URL` with a random topic, and the owner is
-  subscribed. The topic is a secret. Never write it into Linear or the repo. The sender forces
-  IPv4 (FRE-1632), because the VPS IPv6 /64 already used up the ntfy.sh quota.
-- **FRE-1637 is in Verify Failed** because the PWA shows `session_cost_usd`. FRE-1648 is the fix.
-  If the owner's turn verifies FRE-1648, close FRE-1637 with a pointer to it.
-- **Awaiting Deploy holds about 25 tickets.** Only FRE-1646, FRE-1648 and FRE-1638 are from this
-  session. The rest are older. The 2026-10-16 file listed timed reads for some of them. Master did
-  not check them in this session, so triage each one from its comments.
-- **Owner-pending:** the PWA turn only. The 2026-10-16 file also listed FRE-1607 approval and
-  Streams 2 and 4. This session did not raise them. Check FRE-1607 in Linear.
+- **`.env` backups.** `.env.bak-fre1685` and `.env.bak-fre1750` hold secrets and are ignored by git.
+  They are safe to delete once the owner agrees.
+- **Before the paid evaluation (FRE-1689):** add the Scaleway catalog entry for the chat model,
+  check the DeepSeek catalog id, and get the owner's decision on the weekly `_total` cap. A deploy
+  grant is never a budget grant. The run also needs a preflight, the owner's room confirmation and
+  a recorded go.
+- **Awaiting Deploy holds more than 10 old tickets.** Master offered to go through them, and the
+  owner did not answer. They block no stream. FRE-1724 waits for the owner's AC-5 check in the PWA.
+- **A startup warning for a settings override with no audit row** is an open owner decision. See
+  the master comment of 2026-11-02 on FRE-1724.
+- **Dependabot:** one medium alert is open, `minimatch` in `seshat-pwa/package-lock.json`. It
+  appeared on 2026-11-07. It is not triaged.
+- **Pending updates.** `security-guidance` has an update, 2.0.17 to 2.0.18. Master recommended that
+  update and a pick-up at each session's next normal restart. Claude Code also shows an installed
+  update that waits for a restart. Restart no seat in the middle of a ticket.
+- **Owner-pending:** FRE-1742 acceptance, FRE-1693, FRE-1725, FRE-1726, and the design steps of
+  FRE-1747 and FRE-1748. The FRE-1745 AC-5 reads go as comments on that Done ticket. The first
+  weekly check of FRE-1741 is on 2026-11-12.

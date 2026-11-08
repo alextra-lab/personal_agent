@@ -28,9 +28,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.seshat_effort import hydrate_effort
 from personal_agent.config.settings import get_settings
+from personal_agent.dev_agent.job_card import JobCardStore
 from personal_agent.service.auth import RequestUser
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import SessionModel
@@ -890,6 +892,25 @@ async def _receive_connect(ws: WebSocket, session_id: str) -> _ConnectRequest | 
     return _ConnectRequest(last_seq=last_seq, attach=attach)
 
 
+async def _load_job_card(db: AsyncSession, session_id: UUID) -> dict[str, object] | None:
+    """Read the card of the session's newest dev-agent job (ADR-0159 D10.6, FRE-1688).
+
+    The card is secondary: a failed read is logged and the page still attaches.
+
+    Args:
+        db: The attach replay's open session.
+        session_id: The session.
+
+    Returns:
+        The card payload, or ``None`` when the session has no job or the read failed.
+    """
+    try:
+        return await JobCardStore(db).latest(session_id)
+    except Exception:
+        log.exception("ws.attach_job_card_failed", session_id=str(session_id))
+        return None
+
+
 async def _send_attach_replay(conn: _ConnectionState) -> int | None:
     """Bring a page that holds nothing in memory up to date (FRE-1543).
 
@@ -904,7 +925,10 @@ async def _send_attach_replay(conn: _ConnectionState) -> int | None:
        the snapshot and a later one arrives live.
     4. Send the snapshot (only when one exists: absent is never sent as zero), then the
        session's stored Seshat effort level as a ``session_effort`` STATE_DELTA (ADR-0157 D2:
-       the reconnect carries the level), replay the in-flight turn, and close the replay with
+       the reconnect carries the level), replay the in-flight turn, send the card of the
+       session's newest dev-agent job as a ``dev_job`` STATE_DELTA (ADR-0159 D10.6: it is built
+       from the job row and goes last, so it wins over a replayed older event), and close the
+       replay with
        ``REPLAY_COMPLETE`` carrying the highest seq sent and whether a turn is still running.
 
     Args:
@@ -937,6 +961,7 @@ async def _send_attach_replay(conn: _ConnectionState) -> int | None:
             ).scalar_one_or_none()
             replay_after = latest if inflight_start is None else min(inflight_start, latest)
             events = await buf.replay(sid, after_seq=replay_after)
+            job_card = await _load_job_card(db, sid)
     except Exception:
         # The socket closes and the client attaches again with backoff; log why.
         log.exception("ws.attach_replay_failed", session_id=session_id)
@@ -973,6 +998,16 @@ async def _send_attach_replay(conn: _ConnectionState) -> int | None:
         saw_done = saw_done or payload.get("type") == "DONE"
         frames.append(payload)
         max_sent_seq = max(max_sent_seq, seq)
+    if job_card is not None:
+        # After the replayed events: the row is newer than any persisted event, so it wins.
+        frames.append(
+            {
+                "type": "STATE_DELTA",
+                "data": {"key": "dev_job", "value": job_card},
+                "session_id": session_id,
+                "seq": None,
+            }
+        )
     frames.append(
         {
             "type": "REPLAY_COMPLETE",

@@ -16,6 +16,7 @@ import type {
   AGUIEvent,
   ChatMessage,
   ClassifiedErrorData,
+  DevJobCardData,
   ConstraintPauseData,
   ConstraintResolvedData,
   PendingConstraint,
@@ -33,6 +34,7 @@ import type {
   TurnStatus,
   TurnSummary,
 } from '@/lib/types';
+import { mergeDevJob, parseDevJobCard } from '@/lib/dev-job';
 import { EFFORT_LEVELS } from '@/lib/effort';
 import { reconcilePhaseSnapshot } from '@/lib/phase-state';
 import { buildTurnSummary, parseTurnSummary } from '@/lib/phase-summary';
@@ -90,6 +92,11 @@ export interface UseAgentStreamReturn {
    * (ADR-0157 D2); null until one arrives. It also arrives as the replay on reconnect.
    */
   serverEffort: ServerEffort | null;
+  /**
+   * Card of the session's newest development-agent job, from `dev_job` STATE_DELTAs
+   * (ADR-0159 D10.6); null until one arrives. The attach replay carries it too.
+   */
+  devJob: DevJobCardData | null;
   /** Active constraint pause awaiting a decision (ADR-0076); null when none. */
   pendingConstraint: PendingConstraint | null;
   /** Constraints resolved this turn, rendered as collapsed pills. */
@@ -180,6 +187,7 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
   const [serverSelection, setServerSelection] = useState<ServerSelection | null>(null);
   const [serverEffort, setServerEffort] = useState<ServerEffort | null>(null);
+  const [devJob, setDevJob] = useState<DevJobCardData | null>(null);
   // FRE-928: a QUEUE, not a single slot. Nothing stops two turns running
   // concurrently on one session (/chat/stream is fire-and-forget), and a second
   // pause used to overwrite the first — leaving the first card unanswerable while
@@ -505,6 +513,12 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
           if (EFFORT_LEVELS.includes(level as SeshatEffort)) {
             setServerEffort({ sessionId: ownerSessionId, level: level as SeshatEffort });
           }
+        }
+        // ADR-0159 D10.6: the development-agent job card. Each payload is the full card;
+        // shape-guarded, and an ended card is not replaced by an older one of the same job.
+        if (key === 'dev_job') {
+          const card = parseDevJobCard(value);
+          if (card !== null) setDevJob((prev) => mergeDevJob(prev, card));
         }
         // ADR-0123 §6 / FRE-986: full-state phase snapshot → converge the active phase
         // set from this single message (self-correcting; newest wins). Shape-guarded —
@@ -929,6 +943,7 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
     setResolvedConstraints([]);
     setBudgetDenied(null);
     setClassifiedError(null);
+    setDevJob(null);
   }, [activeSessionId, updateTools, updatePhases]);
 
   const attach = useCallback(
@@ -1067,6 +1082,7 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
     turnStatus,
     serverSelection,
     serverEffort,
+    devJob,
     pendingConstraint,
     resolvedConstraints,
     cancelled,

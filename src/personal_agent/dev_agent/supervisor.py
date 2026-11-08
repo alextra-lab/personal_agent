@@ -50,6 +50,7 @@ from personal_agent.delegation.protocols import (
     DelegationOutcome,
     DelegationPackage,
 )
+from personal_agent.dev_agent.job_card import JobEventKind, JobEventSink, NullJobEventSink
 from personal_agent.dev_agent.jobs import DevJob, JobState, JobStore, Lease
 from personal_agent.dev_agent.launcher import AgentLauncher
 from personal_agent.dev_broker.tokens import issue_job_token, revoke_job_token
@@ -79,6 +80,8 @@ class SupervisorPolicy:
         time_limit_seconds: The job limit from the agent container start.
         token_grace_seconds: The job token outlives the limit by this much, as a backstop.
         action_timeout_seconds: The longest time one fenced action can hold the job row.
+        notify_timeout_seconds: The longest time one card event can take. The job waits for it, so
+            a stuck sink must not stall the job (D10.6).
     """
 
     lease_seconds: float = 120.0
@@ -88,6 +91,7 @@ class SupervisorPolicy:
     time_limit_seconds: float = 1800.0
     token_grace_seconds: float = 300.0
     action_timeout_seconds: float = 300.0
+    notify_timeout_seconds: float = 10.0
 
 
 class MonotonicClock(Protocol):
@@ -362,6 +366,7 @@ class JobSupervisor:
         policy: SupervisorPolicy | None = None,
         clock: MonotonicClock | None = None,
         owner: str | None = None,
+        events: JobEventSink | None = None,
     ) -> None:
         """Create the supervisor.
 
@@ -373,6 +378,8 @@ class JobSupervisor:
             policy: The times. Defaults to the ADR's numbers.
             clock: The local clock. Defaults to the system's monotonic clock.
             owner: The lease owner id. Defaults to :func:`supervisor_owner_id`.
+            events: Receives a card event after each state change and after the end state
+                commits (D10.6). Defaults to a sink that does nothing.
         """
         self._store = store
         self._launcher = launcher
@@ -381,6 +388,7 @@ class JobSupervisor:
         self.policy = policy or SupervisorPolicy()
         self._clock = clock or SystemMonotonicClock()
         self.owner = owner or supervisor_owner_id()
+        self._events = events or NullJobEventSink()
         self._current: asyncio.Task[None] | None = None
         self._current_job: DevJob | None = None
         self._current_fence: Fence | None = None
@@ -588,6 +596,7 @@ class JobSupervisor:
             )
 
         await self._store.transition(fence.lease, JobState.RUNNING)
+        await self._notify(job, "state")
         try:
             prepared = await self._pipeline.prepare(job, fence)
         except DevJobRefusedError as refused:
@@ -660,10 +669,12 @@ class JobSupervisor:
             return
         job = replace(job, result_commit=result)
         await self._store.transition(fence.lease, JobState.CHECKING)
+        await self._notify(job, "state")
         if not await self._pipeline.check(job, result, fence):
             await self._end(job, fence, JobState.FAILED_CHECK, "check_failed", revoked=True)
             return
         await self._store.transition(fence.lease, JobState.DELIVERING)
+        await self._notify(job, "state")
         await self._deliver(job, fence)
 
     async def _resume_delivery(self, job: DevJob, fence: Fence, keeper: LeaseKeeper) -> None:
@@ -799,3 +810,18 @@ class JobSupervisor:
             failure_reason=reason,
             trace_id=job.trace_id.hex,
         )
+        await self._notify(job, "end")
+
+    async def _notify(self, job: DevJob, event: JobEventKind) -> None:
+        """Send the job's card. The job never depends on it: a failure is logged and dropped."""
+        try:
+            async with asyncio.timeout(self.policy.notify_timeout_seconds):
+                await self._events.notify(job.id, event)
+        except Exception as exc:  # noqa: BLE001 — the card is best effort
+            log.warning(
+                "dev_job_event_failed",
+                job_id=str(job.id),
+                card_event=event,
+                error_type=type(exc).__name__,
+                trace_id=job.trace_id.hex,
+            )

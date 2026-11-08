@@ -269,6 +269,57 @@ describe('useAgentStream — STATE_DELTA (session_effort, ADR-0157 D2)', () => {
   });
 });
 
+describe('useAgentStream — STATE_DELTA (dev_job, ADR-0159 D10.6)', () => {
+  const card = {
+    event: 'end',
+    job_id: 'job-1',
+    mode: 'build',
+    state: 'failed',
+    ended: true,
+    step: null,
+    spend_usd: '0.250000',
+    cap_usd: '2.36',
+    failure_reason: 'supervisor_restart',
+    check_result: null,
+    repo_url: null,
+    result_artifact_id: null,
+    main_moved: null,
+  };
+
+  it('sets devJob from a well-formed dev_job STATE_DELTA', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent({ type: 'STATE_DELTA', data: { key: 'dev_job', value: card }, seq: 1 });
+
+    expect(hook.result.current.devJob?.state).toBe('failed');
+    expect(hook.result.current.devJob?.failure_reason).toBe('supervisor_restart');
+  });
+
+  it('ignores a malformed dev_job payload', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent({ type: 'STATE_DELTA', data: { key: 'dev_job', value: { state: 'nope' } }, seq: 1 });
+
+    expect(hook.result.current.devJob).toBeNull();
+  });
+
+  it('keeps the end state when an older event of the job arrives after it', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent({ type: 'STATE_DELTA', data: { key: 'dev_job', value: card }, seq: 1 });
+    pushEvent({
+      type: 'STATE_DELTA',
+      data: { key: 'dev_job', value: { ...card, event: 'state', state: 'checking', ended: false } },
+      seq: 2,
+    });
+
+    expect(hook.result.current.devJob?.state).toBe('failed');
+  });
+});
+
 describe('useAgentStream — CONSTRAINT_PAUSE / CONSTRAINT_RESOLVED', () => {
   it('sets pendingConstraint on CONSTRAINT_PAUSE', async () => {
     const hook = renderHook(() => useAgentStream());

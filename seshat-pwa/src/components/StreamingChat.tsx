@@ -23,6 +23,7 @@ import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
 import { ClassifiedErrorCard } from './ClassifiedErrorCard';
 import { DecisionCard } from './DecisionCard';
+import { DevJobCard } from './DevJobCard';
 import { LocationConsent } from './LocationConsent';
 import { PhaseIndicator } from './PhaseIndicator';
 import { SessionList } from './SessionList';
@@ -134,6 +135,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     turnStatus,
     serverSelection,
     serverEffort,
+    devJob,
     pendingConstraint,
     resolvedConstraints,
     cancelled,
@@ -259,7 +261,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     // list scrolls) within view, it computes zero movement — so in practice
     // the document itself never moves (FRE-1266 AC-1).
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [messages, activeTools, phases, pendingConstraint, classifiedError]);
+  }, [messages, activeTools, phases, pendingConstraint, classifiedError, devJob]);
 
   const handleSend = (text: string, attachments: UploadedAttachment[]) => {
     if (!sessionId) return;
@@ -464,6 +466,12 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             {budgetDenied !== null && (
               <div className="px-4 py-3">
                 <BudgetDeniedCard error={budgetDenied} />
+              </div>
+            )}
+
+            {devJob !== null && (
+              <div className="px-4 py-3">
+                <DevJobCard card={devJob} />
               </div>
             )}
 

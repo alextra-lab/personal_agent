@@ -227,6 +227,34 @@ class FakeTurnStatusStore:
             stored["tool_iteration_max"] = None
 
 
+class FakeJobCardStore:
+    """Stand-in for ``JobCardStore`` (the ``dev_jobs`` row of a session's newest job, FRE-1688).
+
+    Class-level storage stands for Postgres. A test sets the payload the row would give.
+    """
+
+    stored: dict[str, dict[str, object]] = {}
+
+    def __init__(self, db: Any) -> None:
+        """Accept and discard the db session parameter.
+
+        Args:
+            db: Unused database session.
+        """
+
+    async def latest(self, session_id: UUID) -> dict[str, object] | None:
+        """Return the stored card of the session, or None.
+
+        Args:
+            session_id: Target session.
+
+        Returns:
+            A copy of the stored payload, or None.
+        """
+        stored = type(self).stored.get(str(session_id))
+        return dict(stored) if stored is not None else None
+
+
 class _FakeSessionRepository:
     """Session repository stub that always reports a found session.
 
@@ -346,7 +374,9 @@ def build_ws_test_app(
 
     # ── Patch TurnStatusStore (FRE-1543 snapshot) ───────────────────────────
     FakeTurnStatusStore.stored = {}
+    FakeJobCardStore.stored = {}
     FakeEffortDb.stored = "standard"
+    mp.setattr(_wsep, "JobCardStore", FakeJobCardStore)
     mp.setattr(_transport, "TurnStatusStore", FakeTurnStatusStore)
     mp.setattr(_wsep, "TurnStatusStore", FakeTurnStatusStore)
 
@@ -412,6 +442,12 @@ def build_ws_test_app(
             },
         )
         return {"ok": "sent"}
+
+    @test_router.post("/__test/dev_job")
+    async def _inject_dev_job(session_id: str, payload: dict[str, Any]) -> dict[str, bool]:
+        from personal_agent.transport.agui.transport import emit_dev_job
+
+        return {"persisted": await emit_dev_job(session_id=session_id, payload=payload)}
 
     @test_router.post("/__test/open_turn")
     async def _inject_open_turn(session_id: str) -> dict[str, int | None]:

@@ -8,6 +8,9 @@ It used to go through a self-hosted metasearch proxy (ADR-0034), removed by FRE-
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,7 +25,7 @@ from personal_agent.llm_client.cost_tracker import record_vendor_cost
 from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools import web_search_alerts
-from personal_agent.tools.contract import ToolError, error_codes
+from personal_agent.tools.contract import ToolError, error_codes, result_tokens
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
@@ -47,7 +50,8 @@ web_search_tool = ToolDefinition(
         "knows) or recall_personal_history (the user's own past conversations). Naming a "
         "brand, product or shop without a result behind it is a guess, even when the question "
         "names it. Do not use it for arithmetic or reasoning that needs no outside fact. "
-        "To read a page whose URL you have, use fetch_url."
+        "To read a page whose URL you have, use fetch_url. For a weather forecast or "
+        "current conditions, use the weather tool, not this one."
         "\n\nCategories: general (default), news, it, science. 'news' searches recent news "
         "(past week). 'it' searches developer sites (GitHub, Stack Overflow, MDN, Hugging "
         "Face, Docker Hub). 'science' searches research sites (arXiv, PubMed, Semantic "
@@ -138,6 +142,8 @@ FailureKind = Literal["refusal", "bad_query"]
 connection failure, a missing key or an unreadable response. ``bad_query``: any other 4xx,
 so the provider rejected this query.
 """
+ProviderOutcome = Literal["ok", "refused", "bad_query"]
+"""``outcome`` of one ``provider_outcomes`` entry in ``web_search_completed`` (ADR-0160 D9.8)."""
 
 #: ``api_costs`` model id of each provider's endpoint.
 _COST_MODELS: Mapping[ProviderName, str] = {
@@ -177,6 +183,9 @@ _TIME_RANGES: Mapping[str, tuple[str, timedelta]] = {
 #: HTTP statuses that mean the provider refused to serve, not that the query was bad.
 _REFUSAL_STATUSES = frozenset({401, 402, 403, 429})
 
+#: An ISO 8601 date at the start of a string, as in one element of Brave's ``age`` list.
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
 
 @dataclass(frozen=True)
 class SearchHit:
@@ -188,12 +197,15 @@ class SearchHit:
         content: The provider's excerpts of the page, joined by a blank line. Line breaks
             and markdown tables are kept.
         provider: The provider that returned the page.
+        published_date: The page's date as the provider gave it (Exa ``publishedDate``,
+            Brave ``sources[url].age``), or ``None`` (ADR-0160 D9.1).
     """
 
     title: str
     url: str
     content: str
     provider: ProviderName
+    published_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -209,6 +221,29 @@ class ProviderFailure:
     provider: ProviderName
     kind: FailureKind
     reason: str
+
+
+@dataclass(frozen=True)
+class ProviderCall:
+    """What one provider call of a search did (FRE-1770, ADR-0160 D9.3 and D9.8).
+
+    Attributes:
+        provider: The provider.
+        hits: The hits read from the response; empty when the call failed.
+        failure: The failure, or ``None`` when the call returned a readable response.
+        http_status: The response status, or ``None`` when no response came (a timeout, a
+            connection error, a missing key).
+        latency_ms: Time from sending the request to the end of reading the response.
+        cost_usd: The ``api_costs`` value of the call, set for every HTTP 2xx (the vendor
+            bills it, results or not); ``None`` when there was no 2xx.
+    """
+
+    provider: ProviderName
+    hits: tuple[SearchHit, ...]
+    failure: ProviderFailure | None
+    http_status: int | None
+    latency_ms: int
+    cost_usd: float | None
 
 
 @dataclass(frozen=True)
@@ -369,9 +404,20 @@ def parse_exa_response(data: object) -> list[SearchHit]:
                     url=url,
                     content=_joined(item.get("highlights")),
                     provider="exa",
+                    published_date=_text(item.get("publishedDate")) or None,
                 )
             )
     return hits
+
+
+def _brave_age(value: object) -> str | None:
+    """Read a Brave ``sources[url].age``: a string, or a list whose ISO date is preferred."""
+    if isinstance(value, str):
+        return value or None
+    if not isinstance(value, list):
+        return None
+    texts = [item for item in value if isinstance(item, str) and item]
+    return next((t for t in texts if _ISO_DATE.match(t)), texts[0] if texts else None)
 
 
 def parse_brave_response(data: object) -> list[SearchHit]:
@@ -390,6 +436,8 @@ def parse_brave_response(data: object) -> list[SearchHit]:
     if not isinstance(grounding, dict):
         raise ValueError("Brave response has no grounding object")
     generic = grounding.get("generic")
+    sources = data.get("sources") if isinstance(data, dict) else None
+    sources = sources if isinstance(sources, dict) else {}
     hits: list[SearchHit] = []
     for item in generic if isinstance(generic, list) else []:
         if not isinstance(item, dict):
@@ -402,9 +450,31 @@ def parse_brave_response(data: object) -> list[SearchHit]:
                     url=url,
                     content=_joined(item.get("snippets")),
                     provider="brave",
+                    published_date=_brave_age(_source_field(sources.get(url), "age")),
                 )
             )
     return hits
+
+
+def _source_field(source: object, name: str) -> object:
+    """Return ``source[name]`` when ``source`` is an object, else ``None``."""
+    return source.get(name) if isinstance(source, dict) else None
+
+
+def exa_cost_usd(data: object) -> float:
+    """Return the cost of an Exa call: ``costDollars.total``, else the configured price.
+
+    Args:
+        data: The parsed JSON body, or ``None`` when it did not parse.
+
+    Returns:
+        The non-negative ``costDollars.total`` number, or ``exa_search_cost_per_call_usd``
+        when the body has none (ADR-0160 D9.3).
+    """
+    total = _source_field(_source_field(data, "costDollars"), "total")
+    if isinstance(total, int | float) and not isinstance(total, bool) and total >= 0:
+        return float(total)
+    return settings.exa_search_cost_per_call_usd
 
 
 def merge_hits(*ranked: Sequence[SearchHit]) -> list[SearchHit]:
@@ -457,7 +527,7 @@ async def _call_provider(
     client: httpx.AsyncClient,
     request: ProviderRequest,
     trace_id: str,
-) -> list[SearchHit] | ProviderFailure:
+) -> ProviderCall:
     """Call one provider and read its hits; never raises except on cancellation.
 
     Args:
@@ -467,8 +537,22 @@ async def _call_provider(
         trace_id: Trace id for logging.
 
     Returns:
-        The provider's hits, or the failure.
+        What the call did: its hits or its failure, its status, latency and cost.
     """
+    status: int | None = None
+    cost: float | None = None
+    started = time.monotonic()
+
+    def failed(kind: FailureKind, reason: str) -> ProviderCall:
+        return ProviderCall(
+            provider=provider,
+            hits=(),
+            failure=ProviderFailure(provider, kind, reason),
+            http_status=status,
+            latency_ms=round((time.monotonic() - started) * 1000),
+            cost_usd=cost,
+        )
+
     key = _secret(settings.exa_api_key if provider == "exa" else settings.brave_api_key)
     if not key:
         log.warning(
@@ -478,7 +562,7 @@ async def _call_provider(
             failure_kind="refusal",
             error="no API key configured",
         )
-        return ProviderFailure(provider, "refusal", "no API key configured")
+        return failed("refusal", "no API key configured")
     try:
         # A total deadline per provider, below the tool's own timeout, so one slow provider
         # cannot make the tool time out and lose the other provider's results. The client's
@@ -494,9 +578,25 @@ async def _call_provider(
                     headers={"x-subscription-token": key, "Accept": "application/json"},
                     params=dict(request.brave_params),
                 )
+        status = response.status_code
         response.raise_for_status()
+        # ADR-0160 D9.3: the vendor bills every 2xx, so the call costs from here on, even
+        # when its body then does not parse.
+        cost = _cost_per_call_usd(provider)
         data: object = response.json()
-        return parse_exa_response(data) if provider == "exa" else parse_brave_response(data)
+        if provider == "exa":
+            cost = exa_cost_usd(data)
+            hits = parse_exa_response(data)
+        else:
+            hits = parse_brave_response(data)
+        return ProviderCall(
+            provider=provider,
+            hits=tuple(hits),
+            failure=None,
+            http_status=status,
+            latency_ms=round((time.monotonic() - started) * 1000),
+            cost_usd=cost,
+        )
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         kind = classify_status(status)
@@ -507,7 +607,7 @@ async def _call_provider(
             failure_kind=kind,
             status_code=status,
         )
-        return ProviderFailure(provider, kind, f"HTTP {status}")
+        return failed(kind, f"HTTP {status}")
     except httpx.TimeoutException, TimeoutError:
         log.warning(
             "web_search_timeout",
@@ -516,7 +616,7 @@ async def _call_provider(
             failure_kind="refusal",
             timeout_seconds=settings.web_search_timeout_seconds,
         )
-        return ProviderFailure(provider, "refusal", "timeout")
+        return failed("refusal", "timeout")
     except httpx.ConnectError:
         log.warning(
             "web_search_connect_failed",
@@ -524,7 +624,7 @@ async def _call_provider(
             provider=provider,
             failure_kind="refusal",
         )
-        return ProviderFailure(provider, "refusal", "connection failed")
+        return failed("refusal", "connection failed")
     except Exception as exc:  # noqa: BLE001 — any other failure is this provider's refusal
         log.warning(
             "web_search_failed",
@@ -533,7 +633,7 @@ async def _call_provider(
             failure_kind="refusal",
             error_type=type(exc).__name__,
         )
-        return ProviderFailure(provider, "refusal", type(exc).__name__)
+        return failed("refusal", type(exc).__name__)
 
 
 def _cost_per_call_usd(provider: ProviderName) -> float:
@@ -543,22 +643,49 @@ def _cost_per_call_usd(provider: ProviderName) -> float:
     return settings.brave_search_cost_per_call_usd
 
 
-async def _record_search_cost(provider: ProviderName, ctx: TraceContext) -> None:
-    """Write one ``api_costs`` row for a provider call that returned results (FRE-1656).
+async def _record_search_cost(provider: ProviderName, cost_usd: float, ctx: TraceContext) -> None:
+    """Write one ``api_costs`` row for a provider call that returned HTTP 2xx (ADR-0160 D9.3).
 
     Args:
-        provider: The provider that served the call.
+        provider: The provider that was called.
+        cost_usd: The call's cost (:attr:`ProviderCall.cost_usd`).
         ctx: Trace context that carries the trace and session ids.
     """
     await record_vendor_cost(
         provider=provider,
         model=_COST_MODELS[provider],
         tokens=0,
-        cost_usd=_cost_per_call_usd(provider),
+        cost_usd=cost_usd,
         trace_id=ctx.trace_id,
         session_id=ctx.session_id,
         purpose="web_search",
     )
+
+
+def _outcome_entry(call: ProviderCall) -> dict[str, object]:
+    """Build one ``provider_outcomes`` entry of ``web_search_completed`` (ADR-0160 D9.8).
+
+    Args:
+        call: The provider call.
+
+    Returns:
+        ``provider``, ``http_status`` (only when a response came), ``outcome``,
+        ``result_count``, ``latency_ms`` and, for Exa, ``cost_usd``.
+    """
+    outcome: ProviderOutcome
+    if call.failure is None:
+        outcome = "ok"
+    elif call.failure.kind == "bad_query":
+        outcome = "bad_query"
+    else:
+        outcome = "refused"
+    entry: dict[str, object] = {"provider": call.provider}
+    if call.http_status is not None:
+        entry["http_status"] = call.http_status
+    entry.update(outcome=outcome, result_count=len(call.hits), latency_ms=call.latency_ms)
+    if call.provider == "exa":
+        entry["cost_usd"] = call.cost_usd
+    return entry
 
 
 def _raise_both_failed(failures: Sequence[ProviderFailure], trace_id: str) -> NoReturn:
@@ -615,9 +742,9 @@ async def web_search_executor(
         ctx: Trace context for logging and cost rows.
 
     Returns:
-        Dict with ``results`` (each ``title``, ``url``, ``content``, ``provider``),
-        ``result_count``, ``answers`` and ``infoboxes`` (always empty, kept for the
-        grounding contract), ``query``, ``category``, ``size``, ``providers_contributed``,
+        Dict with ``results`` (each ``title``, ``url``, ``content``, ``provider``, and
+        ``published_date`` when the provider gave one), ``result_count``, ``query``,
+        ``category``, ``size``, ``providers_contributed``,
         ``failed_providers`` (each ``provider``, ``kind``, ``reason``) and
         ``degraded_retrieval``. A ``retrieval_warning`` is added when a provider failed.
 
@@ -653,20 +780,18 @@ async def web_search_executor(
     async with create_guarded_http_client(
         timeout=settings.web_search_timeout_seconds,
     ) as client:
-        outcomes = await asyncio.gather(
+        calls = await asyncio.gather(
             *(_call_provider(p, client, request, trace_id) for p in providers)
         )
 
-    ranked: list[list[SearchHit]] = []
-    failures: list[ProviderFailure] = []
-    contributed: list[ProviderName] = []
-    for provider, outcome in zip(providers, outcomes, strict=True):
-        if isinstance(outcome, ProviderFailure):
-            failures.append(outcome)
-        else:
-            ranked.append(outcome)
-            contributed.append(provider)
-            await _record_search_cost(provider, ctx)
+    # ADR-0160 D9.3: one api_costs row per 2xx call, results or not.
+    billed = [(call.provider, call.cost_usd) for call in calls if call.cost_usd is not None]
+    for provider, cost_usd in billed:
+        await _record_search_cost(provider, cost_usd, ctx)
+
+    failures = [call.failure for call in calls if call.failure is not None]
+    served = [call for call in calls if call.failure is None]
+    contributed: list[ProviderName] = [call.provider for call in served]
 
     if not contributed:
         # FRE-1768: one owner alert per outage when both providers refused.
@@ -674,18 +799,24 @@ async def web_search_executor(
         _raise_both_failed(failures, trace_id)
     # FRE-1768: a served search ends an outage and may take the month to the budget.
     web_search_alerts.note_search_served(
-        served_cost_usd=sum(_cost_per_call_usd(p) for p in contributed), trace_id=trace_id
+        served_cost_usd=sum(cost_usd for _, cost_usd in billed), trace_id=trace_id
     )
 
-    hits = merge_hits(*ranked)
+    hits = merge_hits(*(call.hits for call in served))
+    results: list[dict[str, object]] = []
+    for h in hits:
+        entry: dict[str, object] = {
+            "title": h.title,
+            "url": h.url,
+            "content": h.content,
+            "provider": h.provider,
+        }
+        if h.published_date is not None:
+            entry["published_date"] = h.published_date
+        results.append(entry)
     output: dict[str, object] = {
-        "answers": [],
-        "results": [
-            {"title": h.title, "url": h.url, "content": h.content, "provider": h.provider}
-            for h in hits
-        ],
+        "results": results,
         "result_count": len(hits),
-        "infoboxes": [],
         "query": query,
         "category": category,
         "size": resolved_size,
@@ -703,14 +834,21 @@ async def web_search_executor(
             "miss what a healthy search would return."
         )
 
+    # ADR-0160 D9.8: the result as the contract renders it (``render_content``), before
+    # the contract's token bound.
+    rendered = json.dumps({"ok": True, **output}, default=str)
     log.info(
         "web_search_completed",
         trace_id=trace_id,
+        size=resolved_size,
         result_count=len(hits),
+        result_chars=len(rendered),
+        result_tokens=result_tokens(rendered),
         result_urls=[h.url for h in hits],
         # Flattened to "provider: kind: reason" strings. The name is kept from the SearXNG
         # path so existing telemetry queries keep reading it.
         unresponsive_engine_reasons=[f"{f.provider}: {f.kind}: {f.reason}" for f in failures],
         degraded_retrieval=bool(failures),
+        provider_outcomes=[_outcome_entry(call) for call in calls],
     )
     return output

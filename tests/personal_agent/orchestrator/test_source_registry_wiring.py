@@ -285,7 +285,6 @@ def _search_content() -> str:
     return json.dumps(
         {
             "ok": True,
-            "answers": [{"engine": "wikidata", "answer": "Ortiz was founded in 1891."}],
             "results": [
                 {"title": "Ortiz", "url": _ORTIZ, "snippet": "Bonito del norte in olive oil."},
                 {"title": "Epicerie", "url": _BIARRITZ, "snippet": "Ortiz is sold in Biarritz."},
@@ -328,11 +327,15 @@ def test_the_model_reads_one_marker_per_entry_in_valid_json() -> None:
         assert source is not None
         assert source.referent == entry["url"]
     assert "_citation" not in results[2]
-    # The call-level marker sits only beside the answers, so a result fact has one marker
-    # to copy: its entry's. The answers stay citable.
+    # FRE-1770 (ADR-0160 D9.6): the result has no answers or infoboxes, so no object is
+    # outside an entry and the call-level marker goes nowhere. A result fact has one marker
+    # to copy: its entry's. The call still registers, with no referent.
     assert "_citation" not in parsed
-    call_level = ctx.source_registry.resolve(parsed["answers"][0]["_citation"].strip("[]"))
-    assert call_level is not None and call_level.referent is None
+    assert content.count("_citation") == 2
+    call_level = [
+        s for s in ctx.source_registry.sources() if s.origin == "web_search" and s.referent is None
+    ]
+    assert len(call_level) == 1
 
 
 def test_an_entry_source_holds_no_marker_text() -> None:
@@ -475,15 +478,19 @@ def test_a_url_only_in_the_query_gets_no_marker_in_the_model_content() -> None:
     assert referents == [_ORTIZ]
 
 
-def test_an_answer_that_is_also_an_entry_keeps_its_own_marker() -> None:
-    """The call-level marker never overwrites an entry's admitted marker."""
+def test_a_web_search_object_outside_the_entries_gets_no_call_marker() -> None:
+    """FRE-1770 (ADR-0160 D9.6): the call-level tuple is empty, so only entries are marked.
+
+    ``failed_providers`` holds objects with no ``url``. Before D4 removed ``answers`` and
+    ``infoboxes``, the call-level marker went on those two keys; now it goes on none.
+    """
     ctx = _context()
     assert ctx.source_registry is not None
     content = json.dumps(
         {
             "ok": True,
-            "answers": [{"engine": "wikidata", "answer": "Ortiz, 1891.", "url": _ORTIZ}],
             "results": [{"title": "Epicerie", "url": _BIARRITZ, "snippet": "Sold here."}],
+            "failed_providers": [{"provider": "exa", "kind": "refusal", "reason": "HTTP 429"}],
         }
     )
 
@@ -497,5 +504,7 @@ def test_an_answer_that_is_also_an_entry_keeps_its_own_marker() -> None:
         )
     )
 
-    answer_source = ctx.source_registry.resolve(marked["answers"][0]["_citation"].strip("[]"))
-    assert answer_source is not None and answer_source.referent == _ORTIZ
+    entry_source = ctx.source_registry.resolve(marked["results"][0]["_citation"].strip("[]"))
+    assert entry_source is not None and entry_source.referent == _BIARRITZ
+    assert "_citation" not in marked["failed_providers"][0]
+    assert "S2@0123456789abcdef" not in json.dumps(marked)

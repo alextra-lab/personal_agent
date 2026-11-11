@@ -433,7 +433,7 @@ channel" and "nobody has classified this yet" call for different remedies.
 """
 
 ENTRY_SOURCE_TOOLS: Mapping[str, tuple[str, ...]] = {
-    "web_search": ("answers", "infoboxes"),
+    "web_search": (),
     "weather": (),
 }
 """Tools whose result entries register as sources of their own (FRE-1662).
@@ -441,6 +441,8 @@ ENTRY_SOURCE_TOOLS: Mapping[str, tuple[str, ...]] = {
 The value names the top-level keys whose objects the call-level source covers. Each entry of
 a ``web_search`` result is one page the search engine returned, so its ``url`` field is a
 retrieval and becomes the entry source's referent. That makes a citation of the entry a link.
+``web_search`` names no keys since ADR-0160 D4 removed its ``answers`` and ``infoboxes``
+(FRE-1770): every part of its result is an entry.
 
 Membership is the decision, as in the sets above. A ``url`` field inside a file that ``read``
 returns, a Linear issue or a fetched JSON page is a link that the content carries. That

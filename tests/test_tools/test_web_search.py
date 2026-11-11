@@ -156,9 +156,9 @@ async def test_saved_responses_merge_into_one_list_without_duplicate_urls(keys: 
     assert result["degraded_retrieval"] is False
     assert result["failed_providers"] == []
     assert "retrieval_warning" not in result
-    # Grounding contract: a results list of url-bearing objects, empty answers/infoboxes.
-    assert result["answers"] == [] and result["infoboxes"] == []
-    assert all(set(r) == {"title", "url", "content", "provider"} for r in result["results"])
+    # Grounding contract: a results list of url-bearing objects.
+    base = {"title", "url", "content", "provider"}
+    assert all(set(r) - {"published_date"} == base for r in result["results"])
 
 
 @pytest.mark.asyncio
@@ -576,6 +576,252 @@ async def test_completed_log_carries_result_urls_and_provider_health(keys: None)
     failed = next(c for c in mock_log.warning.call_args_list if c.args[0] == "web_search_failed")
     assert failed.kwargs["provider"] == "exa"
     assert failed.kwargs["failure_kind"] == "refusal"
+
+
+# ── FRE-1770: ADR-0160 D9.8 telemetry, D9.3 cost, D4/D9.1/D9.6 shape, D9.7 text ──
+
+
+def _exa_with_cost(total: object, results: list | None = None) -> httpx.Response:
+    """The recorded Exa response plus a ``costDollars`` block (the fixture is trimmed)."""
+    body = _fixture("exa_search.json")
+    body["costDollars"] = {"total": total}
+    if results is not None:
+        body["results"] = results
+    return httpx.Response(200, json=body)
+
+
+def _logged(mock_log: object, event: str) -> dict:
+    return next(c for c in mock_log.info.call_args_list if c.args[0] == event).kwargs  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac1_started_and_completed_carry_size(keys: None) -> None:
+    """AC-1: both events carry the resolved size."""
+    with patch("personal_agent.tools.web.log") as mock_log:
+        await _search(_Providers(), size="full")
+
+    assert _logged(mock_log, "web_search_started")["size"] == "full"
+    assert _logged(mock_log, "web_search_completed")["size"] == "full"
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac1_completed_carries_result_chars_and_tokens(keys: None) -> None:
+    """AC-1: length and contract token count of the shaped result rendered as JSON."""
+    from personal_agent.tools.contract import result_tokens
+
+    with patch("personal_agent.tools.web.log") as mock_log:
+        result = await _search(_Providers())
+
+    rendered = json.dumps({"ok": True, **result}, default=str)
+    completed = _logged(mock_log, "web_search_completed")
+    assert completed["result_chars"] == len(rendered)
+    assert completed["result_tokens"] == result_tokens(rendered)
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac1_provider_outcomes_when_both_serve(keys: None) -> None:
+    """AC-1: one entry per provider; Exa carries cost_usd from costDollars.total."""
+    with patch("personal_agent.tools.web.log") as mock_log:
+        await _search(_Providers(exa=_exa_with_cost(0.0123)))
+
+    outcomes = {
+        o["provider"]: o for o in _logged(mock_log, "web_search_completed")["provider_outcomes"]
+    }
+    assert set(outcomes) == {"exa", "brave"}
+    exa, brave = outcomes["exa"], outcomes["brave"]
+    assert exa["http_status"] == 200 and brave["http_status"] == 200
+    assert exa["outcome"] == "ok" and brave["outcome"] == "ok"
+    assert exa["result_count"] == 4 and brave["result_count"] == 5
+    assert isinstance(exa["latency_ms"], int) and exa["latency_ms"] >= 0
+    assert isinstance(brave["latency_ms"], int) and brave["latency_ms"] >= 0
+    assert exa["cost_usd"] == 0.0123
+    assert "cost_usd" not in brave
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exa", "status", "outcome"),
+    [
+        (_error(429, EXA_SEARCH_URL), 429, "refused"),
+        (_error(400, EXA_SEARCH_URL), 400, "bad_query"),
+        (httpx.ReadTimeout("slow"), None, "refused"),
+        (httpx.ConnectError("down"), None, "refused"),
+    ],
+)
+async def test_fre1770_ac1_provider_outcomes_of_a_failed_provider(
+    keys: None, exa: Reply, status: int | None, outcome: str
+) -> None:
+    """AC-1: a failed provider's outcome; http_status is absent without an HTTP response."""
+    with patch("personal_agent.tools.web.log") as mock_log:
+        await _search(_Providers(exa=exa))
+
+    outcomes = {
+        o["provider"]: o for o in _logged(mock_log, "web_search_completed")["provider_outcomes"]
+    }
+    entry = outcomes["exa"]
+    assert entry["outcome"] == outcome
+    assert entry["result_count"] == 0
+    assert isinstance(entry["latency_ms"], int)
+    if status is None:
+        assert "http_status" not in entry
+    else:
+        assert entry["http_status"] == status
+    assert entry["cost_usd"] is None  # no 2xx, so no api_costs row
+    assert outcomes["brave"]["outcome"] == "ok"
+
+
+def _rows(record: AsyncMock) -> dict[str, float]:
+    return {c.kwargs["provider"]: c.kwargs["cost_usd"] for c in record.await_args_list}
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac2_exa_writes_cost_dollars_total(keys: None) -> None:
+    """AC-2: the Exa row is costDollars.total from the response, not the setting."""
+    record = await _costs(_Providers(exa=_exa_with_cost(0.0123)))
+    assert record.await_count == 2
+    assert _rows(record) == {"exa": 0.0123, "brave": 0.005}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost_dollars", [None, {}, {"total": "x"}, {"total": True}])
+async def test_fre1770_ac2_exa_without_a_readable_total_writes_the_setting(
+    keys: None, monkeypatch: pytest.MonkeyPatch, cost_dollars: object
+) -> None:
+    """AC-2: a parsed body with no usable costDollars.total falls back to the setting."""
+    monkeypatch.setattr("personal_agent.tools.web.settings.exa_search_cost_per_call_usd", 0.0071)
+    body = _fixture("exa_search.json")
+    if cost_dollars is not None:
+        body["costDollars"] = cost_dollars
+    record = await _costs(_Providers(exa=httpx.Response(200, json=body)))
+    assert _rows(record)["exa"] == 0.0071
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac2_a_2xx_with_zero_results_still_writes_a_row(keys: None) -> None:
+    """AC-2: the vendor bills an empty answer, so both rows are written."""
+    empty_brave = httpx.Response(200, json={"grounding": {"generic": []}, "sources": {}})
+    record = await _costs(_Providers(exa=_exa_with_cost(0.006, results=[]), brave=empty_brave))
+    assert _rows(record) == {"exa": 0.006, "brave": 0.005}
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac2_an_unparseable_2xx_writes_the_setting(
+    keys: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-2: a 2xx whose body does not parse is billed at the setting, even when both fail."""
+    monkeypatch.setattr("personal_agent.tools.web.settings.exa_search_cost_per_call_usd", 0.0072)
+    monkeypatch.setattr("personal_agent.tools.web.settings.brave_search_cost_per_call_usd", 0.0052)
+    record = await _costs(
+        _Providers(exa=httpx.Response(200, text="<html>"), brave=httpx.Response(200, text="{"))
+    )
+    assert _rows(record) == {"exa": 0.0072, "brave": 0.0052}
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac2_a_call_without_2xx_writes_no_row(keys: None) -> None:
+    """AC-2: an error status, a timeout or a missing key writes no row."""
+    record = await _costs(
+        _Providers(exa=_error(402, EXA_SEARCH_URL), brave=httpx.ReadTimeout("slow"))
+    )
+    record.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac2_alert_gets_the_sum_of_the_rows(keys: None) -> None:
+    """AC-2 / FRE-1768: the budget check adds what this search's rows add up to."""
+    served = patch("personal_agent.tools.web.web_search_alerts.note_search_served")
+    with served as note:
+        await _costs(_Providers(exa=_exa_with_cost(0.0123)))
+    assert note.call_args.kwargs["served_cost_usd"] == pytest.approx(0.0123 + 0.005)
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac2_logged_exa_cost_equals_its_row(keys: None) -> None:
+    """AC-5's offline half: the logged Exa cost_usd is the value of its api_costs row."""
+    record = AsyncMock()
+    with (
+        patch(
+            "personal_agent.tools.web.create_guarded_http_client",
+            _Providers(exa=_exa_with_cost(0.0099)).client,
+        ),
+        patch("personal_agent.tools.web.record_vendor_cost", record),
+        patch("personal_agent.tools.web.log") as mock_log,
+    ):
+        await web_search_executor(query="q", ctx=_CTX)
+    outcomes = {
+        o["provider"]: o for o in _logged(mock_log, "web_search_completed")["provider_outcomes"]
+    }
+    assert outcomes["exa"]["cost_usd"] == _rows(record)["exa"]
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac3_result_has_no_answers_infoboxes_or_score(keys: None) -> None:
+    """AC-3 (D4, D9.1): the plugin fields and score are gone."""
+    result = await _search(_Providers())
+    assert "answers" not in result and "infoboxes" not in result
+    assert all("score" not in r for r in result["results"])
+
+
+@pytest.mark.asyncio
+async def test_fre1770_ac3_results_carry_published_date_when_given(keys: None) -> None:
+    """AC-3 (D9.1): Exa publishedDate and Brave sources[url].age become published_date."""
+    brave = _fixture("brave_llm_context.json")
+    first, second = (g["url"] for g in brave["grounding"]["generic"][1:3])
+    brave["sources"] = {
+        first: {"title": "x", "age": ["Monday, March 2, 2026", "2026-03-02", "254 days ago"]},
+        second: {"title": "y", "age": "2025-12-01"},
+    }
+    result = await _search(_Providers(brave=httpx.Response(200, json=brave)))
+
+    by_url = {r["url"]: r for r in result["results"]}
+    assert by_url["https://info-paris.fr/climat-de-paris/"]["published_date"] == (
+        "2026-08-25T11:32:15.000Z"
+    )
+    assert by_url[second]["published_date"] == "2025-12-01"
+    assert by_url[second]["provider"] == "brave"
+    # ``first`` is also Exa's rank-1 URL, which has no date; the merge keeps the Exa entry.
+    assert by_url[first]["provider"] == "exa"
+    # No date from the provider, no key: the other entries carry none.
+    dated = {u for u, r in by_url.items() if "published_date" in r}
+    assert dated == {"https://info-paris.fr/climat-de-paris/", second}
+
+
+def test_fre1770_ac3_brave_age_list_prefers_the_iso_date() -> None:
+    """AC-3: Brave's age list gives its ISO date; a list without one gives its first text."""
+    from personal_agent.tools.web import parse_brave_response
+
+    data = {
+        "grounding": {
+            "generic": [
+                {"url": "https://a.example/", "title": "A", "snippets": ["s"]},
+                {"url": "https://b.example/", "title": "B", "snippets": ["s"]},
+            ]
+        },
+        "sources": {
+            "https://a.example/": {"age": ["Monday, March 2, 2026", "2026-03-02", "254 days ago"]},
+            "https://b.example/": {"age": ["3 days ago"]},
+        },
+    }
+    a, b = parse_brave_response(data)
+    assert a.published_date == "2026-03-02"
+    assert b.published_date == "3 days ago"
+
+
+def test_fre1770_ac3_web_search_has_no_call_level_source_keys() -> None:
+    """AC-3 (D9.6): with answers and infoboxes gone, the call-level tuple is empty."""
+    from personal_agent.grounding.source_registry import ENTRY_SOURCE_TOOLS
+
+    assert ENTRY_SOURCE_TOOLS["web_search"] == ()
+
+
+def test_fre1770_ac4_description_points_weather_to_the_weather_tool() -> None:
+    """AC-4 (D9.7): weather questions go to ``weather``; no plugin examples or engine list."""
+    description = web_search_tool.description
+    assert "weather tool" in description
+    assert "engines" not in description.lower()
+    for plugin in ("Timezone", "time zone", "Calculator", "currency", "Currency"):
+        assert plugin not in description
+    assert not any(p.name == "engines" for p in web_search_tool.parameters)
 
 
 # ── Executor errors and governance ──────────────────────────────────────────

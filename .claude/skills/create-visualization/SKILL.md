@@ -44,7 +44,7 @@ behavior (Sum vs Median vs cumulative), units, thresholds, controls & filters, e
 memory; do not infer the "right" shape from our own objects. **Match the docs to the running version** —
 behavior and schema differ by version.
 
-**Grafana (running 13.1.3 — verify with `GET /api/health`):**
+**Grafana (running 13.1.10 — verify with `GET /api/health`):**
 - Panels & visualizations: https://grafana.com/docs/grafana/v13.1/panels-visualizations/
 - Units / thresholds / standard options: https://grafana.com/docs/grafana/v13.1/panels-visualizations/configure-standard-options/
 - Postgres data source: https://grafana.com/docs/grafana/v13.1/datasources/postgres/
@@ -95,7 +95,7 @@ dev convenience.
      -e GF_AUTH_DISABLE_LOGIN_FORM=true \
      -v "$PWD/config/grafana/provisioning:/etc/grafana/provisioning:ro" \
      -v "$PWD/config/grafana/dashboards:/etc/grafana/dashboards:ro" \
-     grafana/grafana:13.1.3
+     grafana/grafana:13.1.10
    ```
    **This is an unauthenticated Editor.** It is loopback-bound, but any local process can write to it
    while it runs. Tear it down the moment you are done (step 6) — including on the failure path.

@@ -177,7 +177,9 @@ Order, with the lowest risk first. Check each service before the next one:
    healthcheck `healthy`.
 2. OTel collector. Check the container is running and the log has no error.
 3. Tempo. Check the container is running and the log line "Tempo started" appears.
-4. Grafana. Check `curl -s localhost:3003/api/health` shows version 13.1.10, and the dashboard search
+4. Grafana. The host port comes from `GRAFANA_HOST_PORT` in `.env` (the compose default is 3001). Read it with
+   `docker port cloud-sim-grafana` (3003 on 2026-11-11). Check `curl -s localhost:<port>/api/health` shows
+   version 13.1.10, and the dashboard search
    (`/api/search?type=dash-db`, basic auth) returns 17.
 5. Elasticsearch (after the backup). Check `curl -s localhost:9200` shows 8.19.25, `/_cluster/health` is green,
    and the index count is 155 or more.

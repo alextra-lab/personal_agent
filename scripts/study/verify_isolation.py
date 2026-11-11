@@ -34,7 +34,7 @@ import yaml
 
 STUDY_NETWORK = "seshat-study-net"
 STUDY_SERVICE_NAME = "neo4j-study"
-PROD_PROBE_IMAGE = "neo4j:5.26-community"
+PROD_PROBE_IMAGE = "neo4j:5.26.33-community"
 
 # Prod compose service DNS names, paired with the CONTAINER-internal port
 # each listens on (not the host's loopback-published port — see module

@@ -3,7 +3,7 @@
 Applies the forward-compatible schema (evidence layer, preserved ``kind``,
 ``SUBSUMES`` present-but-unused) to the isolated study Neo4j
 (``docker-compose.study.yml``, FRE-838). All constraints are node-key/
-uniqueness constraints only — ``neo4j:5.26-community`` (the image this
+uniqueness constraints only — ``neo4j:5.26.33-community`` (the image this
 sandbox runs) does not support relationship property existence constraints
 (Enterprise-only).
 

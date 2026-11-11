@@ -191,12 +191,12 @@ File: `docker-compose.cloud.yml`
 | Service | Image | Port (internal) | RAM limit | Purpose |
 |---------|-------|-----------------|-----------|---------|
 | `postgres` | pgvector/pgvector:pg17 | 5432 | 512 MB | Sessions, history, metrics |
-| `neo4j` | neo4j:5.26-community | 7474/7687 | 1536 MB | Knowledge graph, memory |
-| `elasticsearch` | elasticsearch:8.19.0 | 9200 | 2048 MB | Logs, traces, telemetry |
-| `tempo` | grafana/tempo:2.10.7 | 3200 | 512 MB | Trace store |
-| `otel-collector` | otel/opentelemetry-collector:0.158.0 | 4317/4318 | 512 MB | Trace and metric intake |
-| `grafana` | grafana/grafana:13.1.3 | 3000 | 512 MB | Dashboards |
-| `redis` | redis:7-alpine | 6379 | 128 MB | Event bus (Redis Streams) |
+| `neo4j` | neo4j:5.26.33-community | 7474/7687 | 1536 MB | Knowledge graph, memory |
+| `elasticsearch` | elasticsearch:8.19.25 | 9200 | 2048 MB | Logs, traces, telemetry |
+| `tempo` | grafana/tempo:2.10.10 | 3200 | 512 MB | Trace store |
+| `otel-collector` | otel/opentelemetry-collector:0.165.0 | 4317/4318 | 512 MB | Trace and metric intake |
+| `grafana` | grafana/grafana:13.1.10 | 3000 | 512 MB | Dashboards |
+| `redis` | redis:7.4.12-alpine | 6379 | 128 MB | Event bus (Redis Streams) |
 | `searxng` | searxng/searxng (pinned tag) | 8080 | 256 MB | Web search backend |
 | `seshat-gateway` | built from `Dockerfile.gateway` | 9001 | 2048 MB | Full service app (FastAPI) |
 | `seshat-pwa` | built from `Dockerfile.pwa` | 3000 | 256 MB | Next.js PWA |

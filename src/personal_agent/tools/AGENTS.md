@@ -20,6 +20,7 @@ tools/
 ├── registry.py          # Tool registration
 ├── filesystem.py        # File operation tools
 ├── web.py               # Web search tools
+├── weather.py           # Open-Meteo forecast tool (FRE-1769)
 └── system_health.py     # System health tools
 ```
 

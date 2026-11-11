@@ -1,0 +1,16 @@
+{
+ "results": [
+  {
+   "id": 2996944,
+   "name": "Lyon",
+   "latitude": 45.74906,
+   "longitude": 4.84789,
+   "elevation": 173.0,
+   "country_code": "FR",
+   "timezone": "Europe/Paris",
+   "country": "France",
+   "admin1": "Auvergne-Rhône-Alpes"
+  }
+ ],
+ "generationtime_ms": 0.60510635
+}

@@ -354,6 +354,7 @@ TYPED_RETRIEVAL_TOOLS: frozenset[str] = frozenset(
         "web_search",
         "mcp_search",
         "fetch_url",
+        "weather",
         # Local state, addressed by typed parameters
         "read",
         "read_skill",
@@ -433,6 +434,7 @@ channel" and "nobody has classified this yet" call for different remedies.
 
 ENTRY_SOURCE_TOOLS: Mapping[str, tuple[str, ...]] = {
     "web_search": ("answers", "infoboxes"),
+    "weather": (),
 }
 """Tools whose result entries register as sources of their own (FRE-1662).
 
@@ -443,6 +445,10 @@ retrieval and becomes the entry source's referent. That makes a citation of the 
 Membership is the decision, as in the sets above. A ``url`` field inside a file that ``read``
 returns, a Linear issue or a fetched JSON page is a link that the content carries. That
 content did not retrieve the page, so those tools are absent.
+
+``weather`` (FRE-1769) is present because its one ``url`` field is the Open-Meteo forecast
+request the tool itself made, so the whole result registers with that request as its
+referent. It names no other keys: the result has no part outside that one entry.
 """
 
 
@@ -885,9 +891,9 @@ retrieval?" but "can this return text the model itself authored?"
   most-restrictive that changes the remedy, not the verdict.
 
 **Members audited and left on ``EXTERNAL``**, so the next reader does not have to re-derive it:
-``web_search``, ``mcp_search``, ``fetch_url`` (external web, no agent write path); ``read_skill``
-(repo files, not agent-writable at runtime); ``mcp_get_mappings``, ``mcp_get_shards``,
-``mcp_list_indices`` (cluster structure, not document content); the three ``mcp_browser_*``
+``web_search``, ``mcp_search``, ``fetch_url``, ``weather`` (external web, no agent write
+path); ``read_skill`` (repo files, not agent-writable at runtime); ``mcp_get_mappings``,
+``mcp_get_shards``, ``mcp_list_indices`` (cluster structure, not document content); the three ``mcp_browser_*``
 observation tools (a third-party page). ``search_memory``, ``recall_personal_history`` and
 ``get_location`` are content-aware instead — see :data:`_CONTENT_AWARE_ENTITLEMENT`.
 

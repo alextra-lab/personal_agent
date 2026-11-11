@@ -3560,3 +3560,47 @@ def test_fre1550_a_tick_makes_at_most_one_owner_attempt_and_the_rest_wait_for_th
     assert owner.attempts == 2  # both latched
     named = " ".join(owner.sent)
     assert "PR #412" in named and "PR #413" in named
+
+
+# --- FRE-1765: model windows + unknown-model warning --------------------------
+
+
+@pytest.mark.parametrize(
+    "model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"]
+)
+def test_current_models_have_a_window(model: str) -> None:
+    """AC-1: every current seat model maps to a documented window (1M each)."""
+    from scripts.dispatch import context_probe
+
+    assert context_probe.MODEL_WINDOWS[model] == 1_000_000
+
+
+def test_master_at_293k_on_opus_5_5_reads_29_pct() -> None:
+    """The FRE-1765 case resolves via the table, not the default."""
+    pressures = context_pressure([ContextReading("cc-master", 293_859, "claude-opus-5-5")], 29.0)
+    assert pressures == [("cc-master", pytest.approx(29.3859))]
+
+
+def test_unknown_model_warns_once_per_model(monkeypatch) -> None:  # noqa: ANN001
+    """AC-2: an unmapped model logs context_window_unknown_model once, not every tick."""
+    from scripts.dispatch import gating_watcher
+    from structlog.testing import capture_logs
+
+    monkeypatch.setattr(gating_watcher, "_WARNED_UNKNOWN_MODELS", set())
+    readings = [ContextReading("cc-master", 1000, "claude-unknown-9")]
+    with capture_logs() as logs:
+        for _ in range(3):
+            context_pressure(readings, 70.0)
+        context_pressure([ContextReading("cc-build", 1000, "claude-other-9")], 70.0)
+    events = [e for e in logs if e["event"] == "context_window_unknown_model"]
+    assert [e["model"] for e in events] == ["claude-unknown-9", "claude-other-9"]
+    assert all(e["log_level"] == "warning" for e in events)
+
+
+def test_default_threshold_is_75_pct_of_the_model_window() -> None:
+    """FRE-1765: owner's rule is "beyond 75%" of the window, as /context reports it."""
+    assert DEFAULT_CONTEXT_PRESSURE_THRESHOLD == 75.0
+    under = [ContextReading("cc-master", 749_999, "claude-opus-5-5")]
+    at = [ContextReading("cc-master", 750_000, "claude-opus-5-5")]
+    assert context_pressure(under, DEFAULT_CONTEXT_PRESSURE_THRESHOLD) == []
+    assert context_pressure(at, DEFAULT_CONTEXT_PRESSURE_THRESHOLD) == [("cc-master", 75.0)]

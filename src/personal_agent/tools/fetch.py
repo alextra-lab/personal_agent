@@ -14,6 +14,7 @@ import asyncio
 import codecs
 import html
 import ipaddress
+import json
 import re
 import socket
 from collections import OrderedDict
@@ -24,6 +25,7 @@ from typing import Any, Literal, cast
 
 import httpx
 import pypdfium2 as pdfium
+from pydantic import JsonValue
 
 from personal_agent.documents.pdf_utils import PDFIUM_LOCK, extract_page_text
 from personal_agent.security import (
@@ -353,18 +355,84 @@ async def _reject_private_targets(request: httpx.Request) -> None:
         )
 
 
+@dataclass
+class _TableRow:
+    """Cell state of the current row of one open ``<table>`` (FRE-1764)."""
+
+    cells: int = 0
+    last_span: int = 1
+
+
+# FRE-1764: a colspan beyond this adds no more empty cells, so a hostile page cannot blow
+# up the extracted text.
+_MAX_COLSPAN = 50
+_CELL_SEPARATOR = " | "
+
+
+def _colspan(attrs: list[tuple[str, str | None]]) -> int:
+    """Read a cell's ``colspan``, bounded to ``1.._MAX_COLSPAN``.
+
+    Args:
+        attrs: The cell tag's attributes.
+
+    Returns:
+        The column count of the cell; 1 when the attribute is absent or not a number.
+    """
+    for name, value in attrs:
+        if name.lower() == "colspan" and value is not None:
+            try:
+                return max(1, min(int(value.strip()), _MAX_COLSPAN))
+            except ValueError:
+                return 1
+    return 1
+
+
 class _TextExtractor(HTMLParser):
-    """Minimal HTML to plain text extractor using stdlib ``html.parser``."""
+    """Minimal HTML to plain text extractor using stdlib ``html.parser``.
+
+    A table comes out one row per line with ``" | "`` between cells (FRE-1764). Each open
+    ``<table>`` keeps its own row state, so a nested table does not reset the outer row.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self._parts: list[str] = []
         self._skip_depth = 0
+        self._tables: list[_TableRow] = []
+
+    def _handle_table_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Emit the line breaks and cell separators of a table start tag.
+
+        Args:
+            tag: ``table``, ``tr``, ``td`` or ``th`` (lower case).
+            attrs: The tag's attributes.
+        """
+        if tag == "table":
+            self._tables.append(_TableRow())
+            self._parts.append("\n")
+        elif tag == "tr":
+            if self._tables:
+                self._tables[-1] = _TableRow()
+            self._parts.append("\n")
+        elif self._tables:  # td or th inside a table
+            row = self._tables[-1]
+            # A spanned cell is followed by one empty cell per extra column it covers.
+            self._parts.append(_CELL_SEPARATOR * row.last_span if row.cells else " ")
+            row.cells += 1
+            row.last_span = _colspan(attrs)
+        else:  # a stray cell outside any table: a word boundary only
+            self._parts.append(" ")
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         if tag in _SKIP_TAGS and tag not in _VOID_TAGS:
             self._skip_depth += 1
+        elif tag in ("table", "tr", "td", "th"):
+            if self._skip_depth == 0:
+                self._handle_table_tag(tag, attrs)
+            elif tag == "table":
+                # Keep the stack balanced with the end tag; a skipped table emits nothing.
+                self._tables.append(_TableRow())
         elif tag in _BLOCK_TAGS:
             self._parts.append("\n")
         else:
@@ -389,6 +457,11 @@ class _TextExtractor(HTMLParser):
             return
         if tag in _SKIP_TAGS:
             self._skip_depth = max(0, self._skip_depth - 1)
+        elif tag == "table":
+            if self._tables:
+                self._tables.pop()
+            # The text after a table starts its own line, not the end of the last row.
+            self._parts.append("\n")
         elif tag not in _BLOCK_TAGS:
             self._parts.append(" ")
 
@@ -410,6 +483,168 @@ def _extract_text(html_body: str) -> str:
     extractor = _TextExtractor()
     extractor.feed(html_body)
     return extractor.get_text()
+
+
+# FRE-1764: a key that names the position of each element in its sibling arrays, so the
+# arrays can be read as rows. snake/kebab case words, then a camelCase suffix.
+_INDEX_KEY_WORDS = (
+    "time|times|timestamp|timestamps|date|dates|datetime|datetimes|index|indices|idx"
+    "|hour|hours|day|days|epoch|period|periods|ts"
+)
+_INDEX_KEY = re.compile(rf"(?:^|[_-])(?:{_INDEX_KEY_WORDS})$", re.IGNORECASE)
+_CAMEL_INDEX_KEY = re.compile(r"[a-z0-9](?:Time|Date|Timestamp|Datetime|Index|Hour|Day)s?$")
+
+
+@dataclass(frozen=True)
+class _RowGroup:
+    """Sibling arrays of one JSON object, rendered one line per index."""
+
+    label: str
+    index_key: str
+    lines: tuple[str, ...]
+
+
+def _is_json(content_type: str) -> bool:
+    """Whether a ``Content-Type`` names JSON (``application/json`` or any ``+json`` type).
+
+    Args:
+        content_type: The ``Content-Type`` header value (may be empty).
+
+    Returns:
+        ``True`` for a JSON media type.
+    """
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type.endswith(("/json", "+json"))
+
+
+def _is_index_key(key: str) -> bool:
+    """Whether a JSON key looks like a time or index axis.
+
+    Args:
+        key: The object key.
+
+    Returns:
+        ``True`` when the key's last word is a time or index word.
+    """
+    return bool(_INDEX_KEY.search(key) or _CAMEL_INDEX_KEY.search(key))
+
+
+def _cell(value: JsonValue) -> str:
+    """Render one array element on one line.
+
+    Args:
+        value: A scalar JSON value.
+
+    Returns:
+        A string as it is (line breaks become spaces), anything else as JSON.
+    """
+    if isinstance(value, str):
+        return value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _row_groups(obj: dict[str, JsonValue]) -> list[tuple[str, list[str]]]:
+    """Find the sibling arrays of an object that line up by index.
+
+    Args:
+        obj: One JSON object.
+
+    Returns:
+        One ``(index_key, keys)`` pair per group: two or more arrays of scalars with the
+        same length (at least 2), one of them under a time or index key. ``keys`` keeps the
+        object's key order with the index key first.
+    """
+    by_length: dict[int, list[str]] = {}
+    for key, value in obj.items():
+        if (
+            isinstance(value, list)
+            and len(value) >= 2
+            and not any(isinstance(item, dict | list) for item in value)
+        ):
+            by_length.setdefault(len(value), []).append(key)
+    groups: list[tuple[str, list[str]]] = []
+    for keys in by_length.values():
+        index_keys = [key for key in keys if _is_index_key(key)]
+        if len(keys) >= 2 and index_keys:
+            index_key = index_keys[0]
+            groups.append((index_key, [index_key, *(k for k in keys if k != index_key)]))
+    return groups
+
+
+def _restructure(
+    value: JsonValue,
+    label: str,
+    units: JsonValue,
+    found: list[_RowGroup],
+) -> JsonValue:
+    """Copy a JSON value with every group of parallel arrays moved out into rows.
+
+    Args:
+        value: The JSON value to walk.
+        label: Its path in the document, for the row heading.
+        units: The ``<key>_units`` object next to it in its parent, or ``None``.
+        found: Collects the row groups, in document order.
+
+    Returns:
+        The value with each grouped array replaced by a short pointer to its rows.
+    """
+    if isinstance(value, list):
+        return [_restructure(item, f"{label}[{i}]", None, found) for i, item in enumerate(value)]
+    if not isinstance(value, dict):
+        return value
+    unit_of = units if isinstance(units, dict) else {}
+    out: dict[str, JsonValue] = {}
+    for index_key, keys in _row_groups(value):
+        columns = [cast("list[JsonValue]", value[key]) for key in keys]
+        lines = []
+        for i, index_value in enumerate(columns[0]):
+            cells = [_cell(index_value)]
+            for key, column in zip(keys[1:], columns[1:], strict=True):
+                unit = unit_of.get(key)
+                suffix = f" {unit}" if isinstance(unit, str) and unit else ""
+                cells.append(f"{key}={_cell(column[i])}{suffix}")
+            lines.append(" | ".join(cells))
+        found.append(_RowGroup(label=label, index_key=index_key, lines=tuple(lines)))
+        pointer = f"<{len(lines)} values: see the rows of {label} by {index_key} below>"
+        out.update(dict.fromkeys(keys, pointer))
+    for key, item in value.items():
+        if key not in out:
+            child = f"{label}.{key}" if label != "(top level)" else key
+            out[key] = _restructure(item, child, value.get(f"{key}_units"), found)
+    # Keep the original key order.
+    return {key: out[key] for key in value}
+
+
+def _render_json(body: str) -> str:
+    """Render a JSON body so that parallel arrays read one line per index (FRE-1764).
+
+    An API often returns a series as one array per measure (``time``, ``temperature_2m``,
+    …), so the model must count positions to pair a value with its time. Each object that
+    holds two or more equal-length arrays, one under a time or index key, has those arrays
+    rendered as rows such as ``2026-11-11T15:00 | temperature_2m=12.3 °C``, with the unit
+    from a sibling ``<key>_units`` object. All other content is kept in full.
+
+    Args:
+        body: The response body.
+
+    Returns:
+        The body unchanged when it is not valid JSON or holds no parallel arrays; otherwise
+        the rest of the document as JSON, then one block of rows per group.
+    """
+    found: list[_RowGroup] = []
+    try:
+        document = cast("JsonValue", json.loads(body))
+        rest = _restructure(document, "(top level)", None, found)
+    except ValueError, RecursionError:
+        # Not JSON, or nested too deep to walk: the body as it came, as before FRE-1764.
+        return body
+    if not found:
+        return body
+    blocks = [json.dumps(rest, ensure_ascii=False)]
+    for group in found:
+        heading = f"{group.label}: {len(group.lines)} rows by {group.index_key}"
+        blocks.append("\n".join([heading, *group.lines]))
+    return "\n\n".join(blocks)
 
 
 # FRE-1669: a body is judged by its first bytes, not only by its header, so a binary body
@@ -670,12 +905,12 @@ async def download_text(url: str, *, trace_id: str) -> tuple[str, int]:
                     next_action="Do not retry. fetch_url reads web pages and PDFs only. "
                     + _OTHER_SOURCE,
                 )
+            elif "html" in content_type or not content_type:
+                text = _extract_text(resp.text)
+            elif _is_json(content_type):
+                text = _render_json(resp.text)
             else:
-                text = (
-                    _extract_text(resp.text)
-                    if "html" in content_type or not content_type
-                    else resp.text
-                )
+                text = resp.text
 
     except FetchError:
         raise

@@ -162,17 +162,20 @@ async def test_adjacent_inline_tags_get_a_word_boundary() -> None:
     Only block tags (br/p/div/h1-6/li/tr) inserted a separator; td/th/span/a and any
     other inline tag did not, so two adjacent inline-tagged cells with no literal
     whitespace between them ran together — corrupting the word boundary this tool's
-    citation-content use depends on.
+    citation-content use depends on. FRE-1764: table cells now get the visible " | "
+    separator, other inline tags keep the single space.
     """
-    html_body = "<table><tr><td>A</td><td>B</td></tr></table>"
+    html_body = "<table><tr><td>A</td><td>B</td></tr></table><p><span>C</span><a>D</a></p>"
     resp = _mock_html_response(html_body)
     with patch(
         "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
     ):
         result = await fetch_url_executor(url="https://example.com", ctx=_CTX)
 
-    assert "A B" in result["text"]
+    assert "A | B" in result["text"]
+    assert "C D" in result["text"]
     assert "AB" not in result["text"]
+    assert "CD" not in result["text"]
 
 
 # ── Void elements (FRE-1307) ─────────────────────────────────────────────

@@ -282,7 +282,10 @@ services:
     # decided by whenever someone last pulled — in practice a 2026.4.17 image four
     # months stale, missing the `exaapi` and refusing to register `braveapi`. Bump this
     # tag deliberately and re-run the per-category engine comparison when you do.
-    image: searxng/searxng:2026.8.29-d226b78bc
+    # Moved 2026.8.29-d226b78bc -> 2026.11.11-248b8ffc0 (FRE-1762). Upstream tags every
+    # commit, so there is no "release"; docker-compose.yml (dev) must carry the same tag
+    # (tests/scripts/test_searxng_image_pin.py).
+    image: searxng/searxng:2026.11.11-248b8ffc0
     container_name: cloud-sim-searxng
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080

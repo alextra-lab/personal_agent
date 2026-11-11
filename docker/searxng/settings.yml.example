@@ -295,6 +295,8 @@ engines:
     results_per_page: 10
     search_type: auto
     content_mode: highlights
+    # SearXNG 2026.11.11-248b8ffc0 (FRE-1762) cuts a result's content to 1200 characters
+    # after the engine returns it, so a value above 1200 asks Exa for text that SearXNG drops.
     content_max_characters: 2000
     categories: [general, exa]
     weight: 3

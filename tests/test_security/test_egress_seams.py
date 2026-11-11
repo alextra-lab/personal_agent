@@ -479,6 +479,15 @@ def _mock_http_client(response: MagicMock) -> AsyncMock:
 
 
 class TestWebSearchToolSeam:
+    """FRE-1766: web_search calls Exa and Brave directly, each through the guarded client."""
+
+    @staticmethod
+    def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import SecretStr
+
+        monkeypatch.setattr("personal_agent.tools.web.settings.exa_api_key", SecretStr("k1"))
+        monkeypatch.setattr("personal_agent.tools.web.settings.brave_api_key", SecretStr("k2"))
+
     @pytest.mark.asyncio
     async def test_disallowed_domain_refused_before_connection(
         self, monkeypatch: pytest.MonkeyPatch
@@ -489,31 +498,42 @@ class TestWebSearchToolSeam:
         _patch_guard(
             monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
         )
-        monkeypatch.setattr(
-            "personal_agent.tools.web.settings.searxng_base_url", "https://not-allowed.example"
-        )
-        with _unreachable_transport(), pytest.raises(ToolExecutionError):
+        self._keys(monkeypatch)
+        with _unreachable_transport(), pytest.raises(ToolExecutionError) as exc_info:
             await web_search_executor(query="python docs", ctx=_CTX)
+        # Both providers were refused by the guard, not by a missing key.
+        assert str(exc_info.value).count("EgressBlockedError") == 2
 
     @pytest.mark.asyncio
     async def test_allowed_domain_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.security import create_guarded_http_client
         from personal_agent.tools.web import web_search_executor
 
         _patch_guard(
-            monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
+            monkeypatch,
+            mode=GuardMode.ALLOWLIST,
+            allowlist=frozenset({"api.exa.ai", "api.search.brave.com"}),
         )
-        monkeypatch.setattr(
-            "personal_agent.tools.web.settings.searxng_base_url", "https://allowed.example"
-        )
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"results": []}
-        with patch(
-            "personal_agent.tools.web.create_guarded_http_client",
-            return_value=_mock_http_client(resp),
+        self._keys(monkeypatch)
+        seen: list[str] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.host)
+            if request.url.host == "api.exa.ai":
+                return httpx.Response(200, json={"results": []})
+            return httpx.Response(200, json={"grounding": {"generic": []}})
+
+        def guarded(**kwargs: Any) -> httpx.AsyncClient:
+            # The real guarded client, with only the transport swapped for a fake.
+            return create_guarded_http_client(transport=httpx.MockTransport(handle), **kwargs)
+
+        with (
+            patch("personal_agent.tools.web.create_guarded_http_client", guarded),
+            patch("personal_agent.tools.web.record_vendor_cost", AsyncMock()),
         ):
             result = await web_search_executor(query="python docs", ctx=_CTX)
-        assert result is not None
+        assert sorted(seen) == ["api.exa.ai", "api.search.brave.com"]
+        assert result["failed_providers"] == []
 
 
 class TestFetchUrlToolSeam:

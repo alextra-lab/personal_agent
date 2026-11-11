@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import inspect
 import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -21,12 +20,13 @@ from scripts.eval.fre1641_anchor_retention.searxng import PORTS
 
 from personal_agent.config import settings
 from personal_agent.tools.fetch import FetchError, download_text
-from personal_agent.tools.web import build_search_params, web_search_executor
+from personal_agent.tools.web import build_search_params
 
 #: D3.2's ranking bound: the fixture keeps up to this many characters of extracted text.
 FIXTURE_MAX_CHARS = 200_000
-#: The executor's own default, read from its signature rather than copied (D5.2).
-DEFAULT_LANGUAGE = str(inspect.signature(web_search_executor).parameters["language"].default)
+#: The SearXNG executor's default language when these searches were logged (D5.2). FRE-1766
+#: moved web_search to Exa and Brave, which take no language argument, so it is fixed here.
+DEFAULT_LANGUAGE = "en"
 _TRACE_ID = "fre1641-harness"
 
 

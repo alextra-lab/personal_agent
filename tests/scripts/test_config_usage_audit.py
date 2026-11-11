@@ -449,7 +449,16 @@ def test_splice_inventory_section_handles_dangling_separator_with_no_marker() ->
 
 # FRE-1701 AC-2: an AppConfig field with no production reader is a control that changes
 # nothing. A field may stay unread only with an entry here, and every entry needs a reason.
-_NO_PRODUCTION_READER: dict[str, str] = {}
+_SEARXNG_LEFT = (
+    "FRE-1766 moved web_search from SearXNG to Exa and Brave; FRE-1763 T2 removes SearXNG "
+    "and this setting"
+)
+_NO_PRODUCTION_READER: dict[str, str] = {
+    "searxng_base_url": _SEARXNG_LEFT,
+    "searxng_default_categories": _SEARXNG_LEFT,
+    "searxng_max_results": _SEARXNG_LEFT,
+    "searxng_timeout_seconds": _SEARXNG_LEFT,
+}
 
 
 def test_every_appconfig_field_has_a_production_reader() -> None:

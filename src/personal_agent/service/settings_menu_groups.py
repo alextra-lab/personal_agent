@@ -391,6 +391,7 @@ _BY_GROUP: Mapping[str, tuple[str, ...]] = {
         "url_guard_cache_ttl_seconds",
         "url_guard_mode",
         "url_guard_novelty_window_days",
+        "weather_timeout_seconds",
     ),
 }
 

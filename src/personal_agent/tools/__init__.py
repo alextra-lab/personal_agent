@@ -64,6 +64,7 @@ from personal_agent.tools.telemetry_query import (
     search_logs_tool,
 )
 from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
+from personal_agent.tools.weather import weather_executor, weather_tool
 from personal_agent.tools.web import (
     web_search_executor,
     web_search_tool,
@@ -117,6 +118,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(perplexity_query_tool, perplexity_query_executor)
     registry.register(get_library_docs_tool, get_library_docs_executor)
     registry.register(fetch_url_tool, fetch_url_executor)  # ADR-0028 Ph3, FRE-1297
+    registry.register(weather_tool, weather_executor)  # FRE-1769: Open-Meteo forecast
     # FRE-1564, FRE-1596: skill-provided, so the primary sees them after the reveal
     registry.register(search_logs_tool, search_logs_executor)
     registry.register(measure_model_latency_tool, measure_model_latency_executor)

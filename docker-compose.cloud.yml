@@ -363,6 +363,13 @@ services:
       # in-process and makes the move cosmetic.
       AGENT_SLM_BASE_URL: http://caddy:8600
       AGENT_ARTIFACTS_EGRESS_BASE_URL: http://caddy:8601
+      # ── Owner push (FRE-1758) ──────────────────────────────────────────────────
+      # ntfy topic URL for the startup push about a stored override with no audit row.
+      # `:-`, never `:?`: a required variable would break every compose command until it
+      # exists. An unset value makes the gateway log owner_ntfy_unconfigured and send nothing.
+      # This entry beats env_file, so compose must run where /opt/seshat/.env is the project
+      # .env (it is, on the VPS). Elsewhere it resolves to "" and the push stays silent.
+      AGENT_OWNER_NTFY_URL: ${AGENT_OWNER_NTFY_URL:-}
     ports:
       # Localhost only — Caddy proxies to this port internally
       - "127.0.0.1:9001:9001"

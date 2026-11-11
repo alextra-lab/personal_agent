@@ -341,6 +341,7 @@ _BY_GROUP: Mapping[str, tuple[str, ...]] = {
         "managed_embedding_token",
         "neo4j_password",
         "openai_api_key",
+        "owner_ntfy_url",
         "perplexity_api_key",
         "r2_access_key_id",
         "r2_secret_access_key",

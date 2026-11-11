@@ -11,6 +11,7 @@ import json
 from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -50,7 +51,7 @@ from personal_agent.config.settings import AppConfig
 from personal_agent.cost_gate import BudgetConfig, BudgetConfigError, CapEntry, CostGate
 from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.orchestrator.executor import _resolve_max_iterations
-from personal_agent.service import settings_edit
+from personal_agent.service import owner_ntfy, settings_edit
 from personal_agent.service.app import app
 from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import get_db_session
@@ -144,6 +145,8 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Store]:
     monkeypatch.setattr(
         settings_edit, "build_provider_availability", lambda *_args: lambda _provider: True
     )
+    # FRE-1758: an exported AGENT_OWNER_NTFY_URL must not make a startup test send a real push.
+    monkeypatch.setattr(settings, "owner_ntfy_url", None)
     replace_overrides({})
     yield fresh
     replace_overrides({})
@@ -1238,4 +1241,209 @@ async def test_fre1753_ac3_a_session_that_fails_to_open_or_close_does_not_stop_t
         await settings_edit.load_overrides_at_startup()
 
     assert len(_warnings_named(entries, _AUDIT_FAILED_EVENT)) == 1
+    assert set(current_overrides()) == {_AUDITED, _UNAUDITED, _CLEARED}
+
+
+# ---------------------------------------------------------------------------
+# FRE-1758: the same startup check pushes one line to the owner through ntfy
+# ---------------------------------------------------------------------------
+
+_NTFY_TOPIC = "sentinel-topic-fre1758"
+
+
+@dataclass
+class _Push:
+    message: str
+    trace_id: str
+
+
+class _FakeSender:
+    """Stand-in for ``push_to_owner``. It records each call and never touches the network."""
+
+    def __init__(self, result: bool = True) -> None:
+        self.result = result
+        self.calls: list[_Push] = []
+
+    async def __call__(self, message: str, *, trace_id: str) -> bool:
+        self.calls.append(_Push(message=message, trace_id=trace_id))
+        return self.result
+
+
+@pytest.fixture
+def sender(monkeypatch: pytest.MonkeyPatch) -> _FakeSender:
+    fake = _FakeSender()
+    monkeypatch.setattr(settings_edit, "push_to_owner", fake)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_fre1758_ac1_two_unaudited_rows_send_one_push_with_the_count_and_the_names(
+    store: _Store, clean_settings: None, sender: _FakeSender, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    await settings_edit.load_overrides_at_startup()
+
+    assert len(sender.calls) == 1
+    push = sender.calls[0]
+    assert "2 stored settings overrides" in push.message
+    assert _CLEARED in push.message
+    assert _UNAUDITED in push.message
+    assert _AUDITED not in push.message
+    assert "\n" not in push.message
+    assert push.trace_id
+
+
+@pytest.mark.asyncio
+async def test_fre1758_ac1_one_unaudited_row_reads_in_the_singular(
+    store: _Store, clean_settings: None, sender: _FakeSender, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.overrides[_UNAUDITED] = _SENTINEL
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    await settings_edit.load_overrides_at_startup()
+
+    assert len(sender.calls) == 1
+    assert "1 stored settings override has" in sender.calls[0].message
+    assert _UNAUDITED in sender.calls[0].message
+
+
+@pytest.mark.asyncio
+async def test_fre1758_ac1_audited_rows_only_send_nothing(
+    store: _Store, clean_settings: None, sender: _FakeSender, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.overrides[_AUDITED] = _SENTINEL
+    store.audit.append(_audit_row(_AUDITED, "set"))
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    await settings_edit.load_overrides_at_startup()
+
+    assert store.audit_reads == 1, "the audit read ran, so the empty result is a real zero"
+    assert sender.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fre1758_ac1_no_stored_override_sends_nothing(
+    store: _Store, clean_settings: None, sender: _FakeSender, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    await settings_edit.load_overrides_at_startup()
+
+    assert sender.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fre1758_a_failed_audit_read_sends_nothing(
+    store: _Store, clean_settings: None, sender: _FakeSender, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check did not run, so the count is unknown. A push would state a guess."""
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+
+    async def _fail(_self: object, _parameters: Collection[str]) -> list[str]:
+        raise RuntimeError("audit table unreadable")
+
+    monkeypatch.setattr(_FakeRepository, "unaudited_parameters", _fail)
+
+    await settings_edit.load_overrides_at_startup()
+
+    assert sender.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fre1758_ac2_the_push_and_the_log_hold_no_override_value_and_no_url(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real sender runs. Only the HTTP opener is a fake, and it records the request it gets."""
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+    url = f"https://ntfy.invalid/{_NTFY_TOPIC}"
+    monkeypatch.setattr(settings, "owner_ntfy_url", url)
+    requests: list[tuple[str, bytes]] = []
+
+    class _Response:
+        status = 200
+
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def opener(request: object, timeout: float) -> _Response:
+        requests.append((request.full_url, request.data))  # type: ignore[attr-defined]
+        return _Response()
+
+    monkeypatch.setattr(
+        settings_edit, "push_to_owner", partial(owner_ntfy.push_to_owner, opener=opener)
+    )
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    assert len(requests) == 1
+    body = requests[0][1].decode("utf-8")
+    assert _UNAUDITED in body
+    assert _SENTINEL not in body
+    assert _SENTINEL not in str(entries)
+    assert _NTFY_TOPIC not in str(entries)
+    assert "ntfy.invalid" not in str(entries)
+    assert [entry["event"] for entry in entries].count("owner_ntfy_sent") == 1
+
+
+@pytest.mark.asyncio
+async def test_fre1758_ac3_an_unset_url_logs_once_and_sends_nothing(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+    monkeypatch.setattr(settings, "owner_ntfy_url", None)
+    opened: list[object] = []
+
+    def opener(*args: object, **_kwargs: object) -> object:
+        opened.append(args)
+        raise AssertionError("an unset URL must not open a connection")
+
+    monkeypatch.setattr(
+        settings_edit, "push_to_owner", partial(owner_ntfy.push_to_owner, opener=opener)
+    )
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    assert opened == []
+    assert len(_warnings_named(entries, "owner_ntfy_unconfigured")) == 1
+    assert len(_warnings_named(entries, _NO_AUDIT_EVENT)) == 2, "the log warning still fires"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("timed out"),
+        ConnectionRefusedError("refused"),
+        OSError("network unreachable"),
+    ],
+)
+async def test_fre1758_ac3_a_failed_send_logs_the_type_and_the_start_continues(
+    store: _Store, clean_settings: None, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    _seed_three_overrides(store)
+    monkeypatch.setattr(settings_edit, "AsyncSessionLocal", _FakeSessionFactory)
+    monkeypatch.setattr(settings, "owner_ntfy_url", f"https://ntfy.invalid/{_NTFY_TOPIC}")
+
+    def opener(*_args: object, **_kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(
+        settings_edit, "push_to_owner", partial(owner_ntfy.push_to_owner, opener=opener)
+    )
+
+    with structlog.testing.capture_logs() as entries:
+        await settings_edit.load_overrides_at_startup()
+
+    failed = _warnings_named(entries, "owner_ntfy_failed")
+    assert [entry["failure"] for entry in failed] == [type(error).__name__]
     assert set(current_overrides()) == {_AUDITED, _UNAUDITED, _CLEARED}

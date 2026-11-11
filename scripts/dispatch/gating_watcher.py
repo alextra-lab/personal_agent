@@ -190,7 +190,7 @@ DEFAULT_UNROUTABLE_LOG_TTL_S: float = DEFAULT_MASTER_TTL_S
 # after 6h if master is still over threshold. The nudge is deliberately phrased as
 # surface-to-owner, NOT as an imperative to master: the reset/checkpoint decision is the
 # owner's alone (a watcher nudge must never read as an instruction to auto-run prepare-reset).
-DEFAULT_CONTEXT_PRESSURE_THRESHOLD: float = 70.0
+DEFAULT_CONTEXT_PRESSURE_THRESHOLD: float = 75.0
 DEFAULT_CONTEXT_PRESSURE_TTL_S: float = DEFAULT_MASTER_TTL_S
 _CONTEXT_PRESSURE_NUDGE = (
     "Context at {pct}% — informational, owner-gated: SURFACE this to the owner as a heads-up. "
@@ -581,7 +581,7 @@ def context_pressure(
 
     Args:
         readings: Raw per-session context readings.
-        threshold: The percent threshold (e.g. ``70.0``).
+        threshold: The percent threshold (e.g. ``75.0``).
 
     Returns:
         ``(session, pct)`` for every reading whose ``pct >= threshold``, in
@@ -2155,7 +2155,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=_context_pressure_threshold_default(),
         help="Context-pressure percent threshold for the master nudge "
-        "(env AGENT_CONTEXT_PRESSURE_THRESHOLD, default 70).",
+        "(env AGENT_CONTEXT_PRESSURE_THRESHOLD, default 75; percent of the model "
+        "window, as /context reports it).",
     )
     parser.add_argument(
         "--queued-escalation-timeout",

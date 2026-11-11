@@ -3595,3 +3595,12 @@ def test_unknown_model_warns_once_per_model(monkeypatch) -> None:  # noqa: ANN00
     events = [e for e in logs if e["event"] == "context_window_unknown_model"]
     assert [e["model"] for e in events] == ["claude-unknown-9", "claude-other-9"]
     assert all(e["log_level"] == "warning" for e in events)
+
+
+def test_default_threshold_is_75_pct_of_the_model_window() -> None:
+    """FRE-1765: owner's rule is "beyond 75%" of the window, as /context reports it."""
+    assert DEFAULT_CONTEXT_PRESSURE_THRESHOLD == 75.0
+    under = [ContextReading("cc-master", 749_999, "claude-opus-5-5")]
+    at = [ContextReading("cc-master", 750_000, "claude-opus-5-5")]
+    assert context_pressure(under, DEFAULT_CONTEXT_PRESSURE_THRESHOLD) == []
+    assert context_pressure(at, DEFAULT_CONTEXT_PRESSURE_THRESHOLD) == [("cc-master", 75.0)]

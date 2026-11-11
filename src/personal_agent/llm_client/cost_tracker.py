@@ -1,6 +1,7 @@
 """Cost tracking service for API calls."""
 
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal, cast
@@ -346,6 +347,37 @@ class CostTrackerService:
 
         except Exception as e:
             log.error("weekly_cost_fetch_failed", error=str(e), exc_info=True)
+            return 0.0
+
+    async def get_cost_since(self, providers: Sequence[str], since: datetime) -> float:
+        """Sum the ``api_costs`` of some providers from a point in time (FRE-1768).
+
+        One ``SUM`` over the timestamp-indexed table. It opens no pool: without a live pool
+        (no cost row was written in this process) it returns 0.0.
+
+        Args:
+            providers: The ``provider`` values to count, such as ``("exa", "brave")``.
+            since: The start of the window, timezone-aware.
+
+        Returns:
+            The total in USD, or 0.0 when there is no pool or the query fails.
+        """
+        if not self._pool_is_usable() or self.pool is None:
+            return 0.0
+        try:
+            async with self.pool.acquire() as conn:
+                result = await conn.fetchval(
+                    """
+                    SELECT COALESCE(SUM(cost_usd), 0)
+                    FROM api_costs
+                    WHERE provider = ANY($1::text[]) AND timestamp >= $2
+                    """,
+                    list(providers),
+                    since,
+                )
+            return float(result) if result else 0.0
+        except Exception as e:
+            log.error("cost_since_fetch_failed", error=str(e), exc_info=True)
             return 0.0
 
     async def get_cost_summary(self, provider: str | None = None) -> dict[str, Any]:

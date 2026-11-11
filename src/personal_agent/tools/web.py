@@ -23,6 +23,7 @@ from personal_agent.config import settings
 from personal_agent.llm_client.cost_tracker import record_vendor_cost
 from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
+from personal_agent.tools import web_search_alerts
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
@@ -688,6 +689,13 @@ async def _call_provider(
         return ProviderFailure(provider, "refusal", type(exc).__name__)
 
 
+def _cost_per_call_usd(provider: ProviderName) -> float:
+    """Return the configured cost of one call to ``provider``."""
+    if provider == "exa":
+        return settings.exa_search_cost_per_call_usd
+    return settings.brave_search_cost_per_call_usd
+
+
 async def _record_search_cost(provider: ProviderName, ctx: TraceContext) -> None:
     """Write one ``api_costs`` row for a provider call that returned results (FRE-1656).
 
@@ -695,15 +703,11 @@ async def _record_search_cost(provider: ProviderName, ctx: TraceContext) -> None
         provider: The provider that served the call.
         ctx: Trace context that carries the trace and session ids.
     """
-    per_call_usd = {
-        "exa": settings.exa_search_cost_per_call_usd,
-        "brave": settings.brave_search_cost_per_call_usd,
-    }
     await record_vendor_cost(
         provider=provider,
         model=_COST_MODELS[provider],
         tokens=0,
-        cost_usd=per_call_usd[provider],
+        cost_usd=_cost_per_call_usd(provider),
         trace_id=ctx.trace_id,
         session_id=ctx.session_id,
         purpose="web_search",
@@ -818,7 +822,13 @@ async def web_search_executor(
             await _record_search_cost(provider, ctx)
 
     if not contributed:
+        # FRE-1768: one owner alert per outage when both providers refused.
+        web_search_alerts.note_search_failed(failures, trace_id=trace_id)
         _raise_both_failed(failures, trace_id)
+    # FRE-1768: a served search ends an outage and may take the month to the budget.
+    web_search_alerts.note_search_served(
+        served_cost_usd=sum(_cost_per_call_usd(p) for p in contributed), trace_id=trace_id
+    )
 
     hits = merge_hits(*ranked)
     output: dict[str, object] = {

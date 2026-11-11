@@ -599,6 +599,15 @@ class AppConfig(BaseSettings):
         ge=1,
         description="Brave maximum_number_of_tokens of a size='full' web_search (FRE-1766)",
     )
+    web_search_monthly_budget_usd: float = Field(
+        default=10.0,
+        gt=0,
+        description=(
+            "Soft monthly budget of web_search in USD (FRE-1768): the owner gets one ntfy alert "
+            "in the UTC calendar month when the api_costs total for Exa plus Brave reaches it. "
+            "Search continues; nothing blocks."
+        ),
+    )
 
     @field_validator("mcp_gateway_command", mode="before")
     @classmethod

@@ -57,7 +57,8 @@ services:
 
   # SearXNG metasearch engine for private web search (ADR-0034)
   searxng:
-    image: searxng/searxng:latest
+    # Same tag as docker-compose.cloud.yml (FRE-1762); a test fails if the two differ.
+    image: searxng/searxng:2026.11.11-248b8ffc0
     environment:
       - SEARXNG_BASE_URL=http://localhost:8888
     volumes:

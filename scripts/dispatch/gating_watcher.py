@@ -565,13 +565,19 @@ def session_for_labels(labels: Collection[str]) -> str | None:
     return None
 
 
+# Models already reported as missing from MODEL_WINDOWS in this process (FRE-1765).
+_WARNED_UNKNOWN_MODELS: set[str] = set()
+
+
 def context_pressure(
     readings: Sequence[ContextReading], threshold: float
 ) -> list[tuple[str, float]]:
     """Return the ``(session, pct)`` pairs whose context usage is at/over ``threshold``.
 
     Delegates the per-model window table to ``context_probe`` so the mapping is
-    defined in one place (FRE-847).
+    defined in one place (FRE-847). A model missing from that table uses
+    ``DEFAULT_WINDOW`` and logs ``context_window_unknown_model`` once per model
+    per process (FRE-1765).
 
     Args:
         readings: Raw per-session context readings.
@@ -583,7 +589,17 @@ def context_pressure(
     """
     pressures: list[tuple[str, float]] = []
     for reading in readings:
-        window = context_probe.MODEL_WINDOWS.get(reading.model, context_probe.DEFAULT_WINDOW)
+        window = context_probe.MODEL_WINDOWS.get(reading.model)
+        if window is None:
+            window = context_probe.DEFAULT_WINDOW
+            if reading.model not in _WARNED_UNKNOWN_MODELS:
+                _WARNED_UNKNOWN_MODELS.add(reading.model)
+                structlog.get_logger(__name__).warning(
+                    "context_window_unknown_model",
+                    model=reading.model,
+                    session=reading.session,
+                    default_window=window,
+                )
         pct = 100 * reading.ctx / window if window else 0.0
         if pct >= threshold:
             pressures.append((reading.session, pct))
@@ -1088,7 +1104,7 @@ def post_channel_event(
     try:
         with opener(request, timeout=timeout_s) as response:  # noqa: S310
             status = int(getattr(response, "status", 0))
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+    except urllib.error.URLError, TimeoutError, OSError, ValueError:
         return "unreachable"
     return "delivered" if 200 <= status < 300 else "unreachable"
 
@@ -1124,7 +1140,7 @@ def load_state(path: Path) -> dict[str, float]:
         return {}
     try:
         raw: object = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return {}
     if not isinstance(raw, dict):
         return {}

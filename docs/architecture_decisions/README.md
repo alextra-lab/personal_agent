@@ -62,7 +62,7 @@ This directory contains Architecture Decision Records for the Personal Agent (Se
 | [ADR-0031](ADR-0031-model-config-consolidation.md) | Model Configuration Consolidation | Accepted |
 | [ADR-0032](ADR-0032-robust-tool-calling-strategy.md) | Robust Tool Calling Strategy Across Model Families | Accepted |
 | [ADR-0033](ADR-0033-multi-provider-model-taxonomy.md) | Multi-Provider Model Taxonomy, LiteLLM & Delegation Architecture | Accepted (Implemented) |
-| [ADR-0034](ADR-0034-searxng-self-hosted-web-search.md) | SearXNG Self-Hosted Web Search Integration | Superseded by the FRE-1763 ADR (2026-11-11) |
+| [ADR-0034](ADR-0034-searxng-self-hosted-web-search.md) | SearXNG Self-Hosted Web Search Integration | Superseded by ADR-0160 |
 | [ADR-0035](ADR-0035-seshat-backend-decision.md) | Seshat Backend Decision — Neo4j vs Graphiti | Accepted |
 | [ADR-0036](ADR-0036-expansion-controller.md) | Expansion Controller — Deterministic Workflow Enforcement | Accepted |
 | [ADR-0037](ADR-0037-recall-controller.md) | Recall Controller — Implicit Memory Recall Path | Superseded by FRE-1135 (2026-08-28) |

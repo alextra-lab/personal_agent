@@ -1909,12 +1909,7 @@ def test_run_once_context_pressure_logs_regardless_of_execute() -> None:
     )
     ctx_events = [f for e, f in logger.events if e == "context_pressure"]
     assert ctx_events == [
-        {
-            "trace_id": ctx_events[0]["trace_id"],
-            "session": MASTER_SESSION,
-            "pct": 75.0,
-            "tokens": 750_000,
-        }
+        {"trace_id": ctx_events[0]["trace_id"], "session": MASTER_SESSION, "pct": 75.0}
     ]
 
 
@@ -1989,7 +1984,7 @@ def test_run_once_context_pressure_sends_nudge_when_idle_and_over_threshold() ->
     assert send_calls == [
         ("tmux", "send-keys", "-t", exact_pane(MASTER_SESSION), "-l", send_calls[0][5])
     ]
-    assert send_calls[0][5].startswith("Context at 75% (750000 tokens) —")
+    assert send_calls[0][5].startswith("Context at 75% —")
     assert state == {"ctxpressure:cc-master": 100.0}
 
 
@@ -3600,65 +3595,3 @@ def test_unknown_model_warns_once_per_model(monkeypatch) -> None:  # noqa: ANN00
     events = [e for e in logs if e["event"] == "context_window_unknown_model"]
     assert [e["model"] for e in events] == ["claude-unknown-9", "claude-other-9"]
     assert all(e["log_level"] == "warning" for e in events)
-
-
-# --- FRE-1765 AC-4: absolute token threshold ----------------------------------
-
-
-def test_token_threshold_nudges_at_210k_on_a_1m_model() -> None:
-    """AC-4: 210k tokens on a 1M model (21%) crosses the 200k absolute threshold."""
-    readings = [ContextReading("cc-master", 210_000, "claude-opus-5-5")]
-    assert context_pressure(readings, 70.0, token_threshold=200_000) == [
-        ("cc-master", pytest.approx(21.0))
-    ]
-
-
-def test_token_threshold_silent_at_150k_on_a_1m_model() -> None:
-    """AC-4: 150k tokens is under both thresholds."""
-    readings = [ContextReading("cc-master", 150_000, "claude-opus-5-5")]
-    assert context_pressure(readings, 70.0, token_threshold=200_000) == []
-
-
-def test_percent_path_still_fires_under_the_token_threshold() -> None:
-    """AC-4: 150k on a 200k model (75%) still nudges via the percent path."""
-    readings = [ContextReading("cc-master", 150_000, "claude-haiku-4-5")]
-    assert context_pressure(readings, 70.0, token_threshold=200_000) == [
-        ("cc-master", pytest.approx(75.0))
-    ]
-
-
-def test_token_threshold_nudge_text_carries_the_token_count() -> None:
-    """AC-4: the nudge names the token count; same dedup key as the percent path."""
-    ledger: dict = {}
-    runner = _idle_runner()
-    run_once(
-        {},
-        now=100.0,
-        board_fetcher=lambda: [],
-        session_resolver=_no_session,
-        runner=runner,
-        persist=lambda _s: None,
-        logger=_NullLogger(),
-        execute=True,
-        ledger=ledger,
-        ledger_persist=ledger.update,
-        context_reader=lambda: [ContextReading(MASTER_SESSION, 210_000, "claude-opus-5-5")],
-        context_pressure_tokens=200_000,
-        channel_poster=_FakeChannelPoster(),
-        channel_secret="s3cret",
-    )
-    assert f"ctxpressure:{MASTER_SESSION}" in ledger
-    sent = " ".join(" ".join(map(str, c)) for c in runner.calls)
-    assert "210000 tokens" in sent
-
-
-def test_context_pressure_tokens_default_reads_env(monkeypatch) -> None:  # noqa: ANN001
-    """AC-4: env AGENT_CONTEXT_PRESSURE_TOKENS sets the default; malformed falls back."""
-    from scripts.dispatch import gating_watcher
-
-    monkeypatch.delenv("AGENT_CONTEXT_PRESSURE_TOKENS", raising=False)
-    assert gating_watcher._context_pressure_tokens_default() == 200_000
-    monkeypatch.setenv("AGENT_CONTEXT_PRESSURE_TOKENS", "300000")
-    assert gating_watcher._context_pressure_tokens_default() == 300_000
-    monkeypatch.setenv("AGENT_CONTEXT_PRESSURE_TOKENS", "lots")
-    assert gating_watcher._context_pressure_tokens_default() == 200_000

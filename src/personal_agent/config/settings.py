@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import structlog
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from personal_agent.config._owner_host_allowlist import is_owner_controlled_host
@@ -542,6 +542,62 @@ class AppConfig(BaseSettings):
             "that used it (FRE-1656). List price $7 per 1,000, up to 10 results "
             "(exa.ai pricing page, read 2026-08-29)."
         ),
+    )
+
+    # Direct web search providers (FRE-1766): web_search calls Exa and Brave LLM Context
+    # in parallel, without SearXNG.
+    exa_api_key: SecretStr | None = Field(
+        default=None,
+        description="Exa API key for web_search (FRE-1766). None leaves Exa out of every search.",
+        json_schema_extra={"secret": True},
+    )
+    brave_api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Brave Search API key for web_search's LLM Context calls (FRE-1766). None leaves "
+            "Brave out of every search."
+        ),
+        json_schema_extra={"secret": True},
+    )
+    web_search_timeout_seconds: int = Field(
+        default=12,
+        ge=1,
+        description=(
+            "Total time limit of each web_search provider request, Exa or Brave (FRE-1766). "
+            "Keep it below the tool's 15 s timeout, so a slow provider fails alone."
+        ),
+    )
+    web_search_brief_exa_num_results: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Exa numResults of a size='brief' web_search (FRE-1766)",
+    )
+    web_search_brief_exa_max_characters: int = Field(
+        default=800,
+        ge=1,
+        description="Exa highlights maxCharacters of a size='brief' web_search (FRE-1766)",
+    )
+    web_search_brief_brave_max_tokens: int = Field(
+        default=2048,
+        ge=1,
+        description="Brave maximum_number_of_tokens of a size='brief' web_search (FRE-1766)",
+    )
+    web_search_full_exa_num_results: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Exa numResults of a size='full' web_search (FRE-1766)",
+    )
+    web_search_full_exa_max_characters: int = Field(
+        default=2000,
+        ge=1,
+        description="Exa highlights maxCharacters of a size='full' web_search (FRE-1766)",
+    )
+    web_search_full_brave_max_tokens: int = Field(
+        default=8192,
+        ge=1,
+        description="Brave maximum_number_of_tokens of a size='full' web_search (FRE-1766)",
     )
 
     @field_validator("mcp_gateway_command", mode="before")

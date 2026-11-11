@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.fetch import fetch_url_executor
@@ -24,16 +25,16 @@ from personal_agent.tools.web import web_search_executor
 _CTX = TraceContext.new_trace()
 
 
-def _mock_searxng_response(results: list[dict]) -> MagicMock:
-    resp = MagicMock()
-    resp.raise_for_status = MagicMock()
-    resp.json.return_value = {
-        "results": results,
-        "suggestions": [],
-        "infoboxes": [],
-        "unresponsive_engines": [],
-    }
-    return resp
+def _providers_client(results: list[dict]) -> httpx.AsyncClient:
+    """Answer Exa with ``results`` (title/url pairs) and Brave with no page."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.exa.ai":
+            exa = [{"title": r["title"], "url": r["url"], "highlights": ["x"]} for r in results]
+            return httpx.Response(200, json={"results": exa})
+        return httpx.Response(200, json={"grounding": {"generic": []}})
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handle))
 
 
 def _mock_html_response(body: str) -> MagicMock:
@@ -56,11 +57,17 @@ def _mock_client(response: MagicMock) -> AsyncMock:
 
 async def _run_search_and_capture_result_urls(results: list[dict]) -> set[str]:
     """Run the real web_search_executor and return the URL set its telemetry recorded."""
-    resp = _mock_searxng_response(results)
-    client = _mock_client(resp)
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        with patch("personal_agent.tools.web.log") as mock_log:
-            await web_search_executor(query="python docs", ctx=_CTX)
+    with (
+        patch(
+            "personal_agent.tools.web.create_guarded_http_client",
+            return_value=_providers_client(results),
+        ),
+        patch("personal_agent.tools.web.settings.exa_api_key", SecretStr("test-exa")),
+        patch("personal_agent.tools.web.settings.brave_api_key", SecretStr("test-brave")),
+        patch("personal_agent.tools.web.record_vendor_cost", AsyncMock()),
+        patch("personal_agent.tools.web.log") as mock_log,
+    ):
+        await web_search_executor(query="python docs", ctx=_CTX)
 
     completed_call = next(
         c for c in mock_log.info.call_args_list if c.args[0] == "web_search_completed"

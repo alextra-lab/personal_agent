@@ -92,7 +92,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     Always registered:
     - search_memory: Query memory graph (ADR-0026)
     - recall_personal_history: Personal time-window retrieval scoped to ctx.user_id (FRE-343)
-    - web_search: Private web search via SearXNG (ADR-0034)
+    - web_search: Web search via Exa and Brave LLM Context, in parallel (FRE-1766)
     - perplexity_query: Perplexity AI synthesized answers (ADR-0028 Phase 2)
     - get_library_docs: Context7 library documentation (ADR-0028 Phase 3)
     - fetch_url: Full-page readable-text fetch, citable under ADR-0138 D2 (ADR-0028

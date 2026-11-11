@@ -1,0 +1,43 @@
+{
+  "grounding": {
+    "generic": [
+      {
+        "url": "https://www.climatestotravel.com/climate/france/paris",
+        "title": "Paris climate: seasons, when to go, monthly averages",
+        "snippets": [
+          "## Temperature\n| Temperatures (°C) / Month | Temperatures (°C) / Min | Temperatures (°C) / Max | Temperatures (°C) / Mean |\n| --- | --- | --- | --- |\n| January | 1.7 | 7.6 | 4.6 |\n| February | 1.6 | 8.8 | 5.2 |\n| March | 3.8 | 12.8 | 8.3 |\n| April | 6 | 16.6 | 11.3 |\n| May | 9.6 | 20.3 | 14.9 |\n| June | 12.8 | 23.7 | 18.2 |\n| July | 14.7 | 26.3 | 20.5 |\n| August | 14.4 | 26.1 | 20.2 |\n| September | 11.2 | 21.8 | 16.5 |\n| October | 8.2 | 16.7 | 12.4 |\n| November | 4.6 | 11.2 | 7.9 |\n| December | 2.2 | 8.1 | 5.2 |\n| Year | 7.6 | 16.7 | 12.15 |"
+        ]
+      },
+      {
+        "url": "https://weatherspark.com/y/47913/Average-Weather-in-Paris-France-Year-Round",
+        "title": "Paris Climate, Weather By Month, Average Temperature (France) - Weather Spark",
+        "snippets": [
+          "Paris Temperature By Month The warm season lasts for 2.9 months, from June 13 to September 10, with an average daily high temperature above 71°F. The hottest month of the year in Paris is July, with an average high of 76°F and low of 58°F. The cool season lasts for 3.7 months, from November 16 to March 7, with an average daily high temperature below 51°F. The coldest month of the year in Paris is January, with an average low of 36°F and high of 44°F."
+        ]
+      },
+      {
+        "url": "https://weatherjourney.com/en/weather-paris-2988507",
+        "title": "Paris, France weather by month: average temperatures & rainfall",
+        "snippets": [
+          "| Month | Avg high | Avg low | Rain | Rainy days | Daylight | Record high | Record low |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| January | 6.2° | 1.3° | 59 mm | 9 | 8.5 h | 16.1° (1975) | −19.1° (1942) |\n| February | 7.7° | 1.7° | 54 mm | 8 | 9.9 h | 20.3° (2019) | −15.1° (1956) |\n| March | 11.3° | 3.6° | 57 mm | 9 | 11.6 h | 25.2° (2021) | −9.1° (1971) |\n| April | 14.7° | 5.8° | 57 mm | 9 | 13.5 h | 28.0° (2018) | −3.2° (1986) |\n| May | 18.4° | 9.4° | 69 mm | 10 | 15.1 h | 31.9° (2005) | 0.5° (1945) |\n| June | 21.7° | 12.4° | 63 mm | 8 | 15.9 h | 36.2° (2017) | 2.9° (1991) |"
+        ]
+      },
+      {
+        "url": "https://www.extremeweatherwatch.com/cities/paris/average-temperature-by-month",
+        "title": "Paris Average Temperature by Month",
+        "snippets": [
+          "| Month | Avg. High | Avg. Low |\n| --- | --- | --- |\n| January | 7.2 °C | 2.0 °C |\n| February | 8.5 °C | 2.0 °C |\n| March | 12.5 °C | 4.1 °C |\n| April | 16.2 °C | 6.4 °C |\n| May | 19.8 °C | 9.9 °C |\n| June | 23.2 °C | 13.1 °C |\n| July | 25.8 °C | 15.0 °C |\n| August | 25.7 °C | 14.6 °C |\n| September | 21.5 °C | 11.5 °C |\n| October | 16.5 °C | 8.7 °C |\n| November | 10.9 °C | 5.0 °C |\n| December | 7.7 °C | 2.5 °C |\n| Year | 16.4 °C | 8.0 °C |"
+        ]
+      },
+      {
+        "url": "https://www.weather2visit.com/north-america/canada/paris.htm#february",
+        "title": "Paris Weather averages & monthly Temperatures",
+        "snippets": [
+          "# Paris monthly weather averages\n## Average daytime temperature\n|   | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| °C | -3.1 | -2.2 | 3.4 | 11.3 | 18.6 | 23.5 | 26.1 | 24.9 | 20.5 | 13.7 | 6.6 | -0.3 |\n| °F | 26.4 | 28 | 38.1 | 52.3 | 65.4 | 74.2 | 79 | 76.8 | 69 | 56.6 | 43.8 | 31.4 |"
+        ]
+      }
+    ],
+    "map": []
+  },
+  "sources": {}
+}

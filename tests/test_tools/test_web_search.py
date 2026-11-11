@@ -1,22 +1,39 @@
-"""Unit tests for web_search native tool (ADR-0034).
+"""Unit tests for the web_search native tool (FRE-1766).
 
-Tests use mocked httpx responses — no SearXNG container required.
-The executor returns dict[str, Any] on success and raises ToolExecutionError on failure.
+``web_search`` calls Exa and Brave LLM Context directly. Provider HTTP runs on
+``httpx.MockTransport`` with responses recorded from one live call to each provider
+(``fixtures/web_search``), so no network and no key is needed. The SearXNG template tests
+stay until FRE-1763 T2 removes SearXNG.
 """
 
-import re
+import asyncio
+import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
 import pytest
 import yaml
+from pydantic import SecretStr
 
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
-from personal_agent.tools.web import web_search_executor, web_search_tool
+from personal_agent.tools.web import (
+    BRAVE_LLM_CONTEXT_URL,
+    EXA_SEARCH_URL,
+    SearchHit,
+    WebSearchError,
+    build_provider_request,
+    classify_status,
+    merge_hits,
+    normalize_url,
+    resolve_category,
+    web_search_executor,
+    web_search_tool,
+)
 
 _CTX = TraceContext.new_trace()
 
@@ -295,77 +312,74 @@ def test_searxng_template_drops_wikipedia() -> None:
     assert "wikipedia" not in declared | kept
 
 
-def _description_list(text: str, label: str) -> list[str]:
-    """Return the comma-separated names that follow ``label:`` up to the sentence end.
+# ── Direct providers (FRE-1766) ────────────────────────────────────────────
 
-    A sentence ends at a period followed by whitespace or the end of the text, so a
-    name that contains a period (``wttr.in``) is not cut short.
-    """
-    after = text.split(f"{label}:", 1)[1]
-    sentence = re.split(r"\.(?:\s|$)", after, maxsplit=1)[0]
-    names = (re.sub(r"\s*\(.*?\)", "", name).strip() for name in sentence.split(","))
-    return [name for name in names if name]
+_FIXTURES = Path(__file__).parent / "fixtures" / "web_search"
+_EXA_KEY = "test-exa-key-not-real"
+_BRAVE_KEY = "test-brave-key-not-real"
 
 
-def test_web_search_description_names_only_engines_and_categories_that_exist() -> None:
-    """The model addresses engines and categories by the names the tool text lists.
-
-    FRE-1331: a stale name silently returns nothing, and the two lists had drifted from
-    the running instance. This ties both lists to the template, so dropping an engine
-    without editing the tool text fails here instead of in a live search.
-    """
-    cfg = _load_searxng_example_config()
-    keep_only = set(cfg["use_default_settings"]["engines"]["keep_only"])
-    categories = {"general"}.union(*(_engine_categories(e) for e in cfg["engines"]))
-
-    engines_param = next(p for p in web_search_tool.parameters if p.name == "engines")
-    listed_engines: set[str] = set()
-    for label in ("General", "IT", "Science", "News", "Social", "Weather", "Recipes"):
-        listed_engines.update(_description_list(engines_param.description, label))
-    assert listed_engines <= keep_only, sorted(listed_engines - keep_only)
-
-    listed_categories = set(_description_list(web_search_tool.description, "Categories"))
-    assert listed_categories <= categories, sorted(listed_categories - categories)
+def _fixture(name: str) -> dict:
+    """Load a recorded provider response (one live call each, 2026-11-11, trimmed)."""
+    return json.loads((_FIXTURES / name).read_text())
 
 
-def _mock_searxng_response(
-    results: list[dict] | None = None,
-    suggestions: list[str] | None = None,
-    infoboxes: list[dict] | None = None,
-    unresponsive_engines: list[list[str]] | None = None,
-) -> MagicMock:
-    """Build a mock httpx response with SearXNG JSON structure.
-
-    ``unresponsive_engines`` mirrors the real shape: a list of ``[engine_name,
-    reason]`` pairs (FRE-1339) — SearXNG uses both a bare reason
-    ("access denied") and a "Suspended: ..." prefix once it has taken the
-    engine out of rotation; callers may pass either.
-    """
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
-        "results": results or [],
-        "suggestions": suggestions or [],
-        "infoboxes": infoboxes or [],
-        "unresponsive_engines": unresponsive_engines or [],
-        # SearXNG's own total is independently untrustworthy (FRE-1339) and
-        # deliberately never matches len(results) here, so a test that
-        # accidentally started trusting it would fail loudly.
-        "number_of_results": 0,
-    }
-    return mock_resp
+Reply = httpx.Response | Exception
 
 
-def _mock_client(response: MagicMock) -> AsyncMock:
-    """Build a mock AsyncClient that returns the given response on .get()."""
-    client = AsyncMock()
-    client.get = AsyncMock(return_value=response)
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=None)
-    return client
+class _Providers:
+    """A fake Exa and Brave behind ``httpx.MockTransport``; records each request it gets."""
+
+    def __init__(self, exa: Reply | None = None, brave: Reply | None = None) -> None:
+        self.exa = exa if exa is not None else httpx.Response(200, json=_fixture("exa_search.json"))
+        self.brave = (
+            brave
+            if brave is not None
+            else httpx.Response(200, json=_fixture("brave_llm_context.json"))
+        )
+        self.requests: dict[str, httpx.Request] = {}
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        name = "exa" if request.url.host == "api.exa.ai" else "brave"
+        self.requests[name] = request
+        reply = self.exa if name == "exa" else self.brave
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    def client(self, **kwargs: object) -> httpx.AsyncClient:
+        """Stand in for ``create_guarded_http_client``."""
+        return httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
+
+    @property
+    def exa_body(self) -> dict:
+        return json.loads(self.requests["exa"].content)
+
+    @property
+    def brave_params(self) -> dict[str, str]:
+        return dict(self.requests["brave"].url.params)
 
 
-# ── Tool definition tests ──────────────────────────────────────────────────
+@pytest.fixture
+def keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set both provider keys to fake values."""
+    monkeypatch.setattr("personal_agent.tools.web.settings.exa_api_key", SecretStr(_EXA_KEY))
+    monkeypatch.setattr("personal_agent.tools.web.settings.brave_api_key", SecretStr(_BRAVE_KEY))
+
+
+async def _search(providers: _Providers, **kwargs: object) -> dict:
+    with (
+        patch("personal_agent.tools.web.create_guarded_http_client", providers.client),
+        patch("personal_agent.tools.web.record_vendor_cost", AsyncMock()),
+    ):
+        return await web_search_executor(ctx=_CTX, **{"query": "paris temperature", **kwargs})
+
+
+def _error(status: int, url: str) -> httpx.Response:
+    return httpx.Response(status, json={"error": "x"}, request=httpx.Request("GET", url))
+
+
+# ── Tool definition ─────────────────────────────────────────────────────────
 
 
 def test_web_search_tool_definition() -> None:
@@ -373,527 +387,493 @@ def test_web_search_tool_definition() -> None:
     assert web_search_tool.name == "web_search"
     assert web_search_tool.category == "network"
     assert web_search_tool.risk_level == "low"
-    assert "NORMAL" in web_search_tool.allowed_modes
-    assert "ALERT" in web_search_tool.allowed_modes
-    assert "DEGRADED" in web_search_tool.allowed_modes
-    assert "LOCKDOWN" not in web_search_tool.allowed_modes
-    assert "RECOVERY" not in web_search_tool.allowed_modes
-    param_names = {p.name for p in web_search_tool.parameters}
-    assert "query" in param_names
-    assert "categories" in param_names
-    assert "engines" in param_names
-    assert "language" in param_names
-    assert "time_range" in param_names
-    assert "max_results" in param_names
-    # query is the only required parameter
-    required = [p for p in web_search_tool.parameters if p.required]
-    assert len(required) == 1
-    assert required[0].name == "query"
+    assert set(web_search_tool.allowed_modes) == {"NORMAL", "ALERT", "DEGRADED"}
+    assert [p.name for p in web_search_tool.parameters] == [
+        "query",
+        "categories",
+        "size",
+        "time_range",
+    ]
+    assert [p.name for p in web_search_tool.parameters if p.required] == ["query"]
+    size = next(p for p in web_search_tool.parameters if p.name == "size")
+    assert size.json_schema == {"type": "string", "enum": ["brief", "full"]}
 
 
 def test_web_search_description_states_when_to_reach_for_it() -> None:
-    """Lead with when to use it, not read as a generic utility that redirects elsewhere."""
-    assert web_search_tool.description.startswith("Search the live web when")
-    assert "Prefer perplexity_query" not in web_search_tool.description
-    # Plugin/category detail is preserved, only the framing changes.
-    assert "Timezone" in web_search_tool.description
-    assert "Categories:" in web_search_tool.description
+    """Lead with when to use it, and say who sees the query."""
+    description = web_search_tool.description
+    assert description.startswith("Search the live web when")
+    assert "Prefer perplexity_query" not in description
+    assert "Exa" in description and "Brave" in description
+    assert "third-party" in description
+    assert "SearXNG" not in description
+    # FRE-1766 owner decision 4: plugin answers are gone, so the text must not offer them.
+    assert "Timezone" not in description and "Calculator" not in description
+    assert "Categories: general (default), news, it, science." in description
 
 
-def test_web_search_description_mentions_exa() -> None:
-    """The model must be told exa exists and how to reach it — it's opt-in, not in general.
-
-    FRE-1310: categories is a free-form string with no code-level validation
-    (tools/web.py), so discoverability is entirely a documentation problem —
-    an engine the model is never told about is dead capability (the same
-    failure mode FRE-1290 found for web_search as a whole).
-    """
-    assert "exa" in web_search_tool.description
-    categories_param = next(p for p in web_search_tool.parameters if p.name == "categories")
-    assert "exa" in categories_param.description
-
-
-# ── Executor happy-path tests ──────────────────────────────────────────────
+# ── AC-1: one merged list from saved responses ──────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_web_search_happy_path() -> None:
-    """Successful search returns structured dict with results."""
-    resp = _mock_searxng_response(
-        results=[
-            {
-                "title": "Python 3.12 docs",
-                "url": "https://docs.python.org/3.12/",
-                "content": "Official Python docs",
-                "engine": "google",
-                "score": 0.9,
-            }
-        ],
-        suggestions=["python tutorial"],
-    )
-    client = _mock_client(resp)
+async def test_saved_responses_merge_into_one_list_without_duplicate_urls(keys: None) -> None:
+    """AC-1: both recorded responses become one list; the 3 shared URLs appear once."""
+    exa_urls = [r["url"] for r in _fixture("exa_search.json")["results"]]
+    brave_urls = [g["url"] for g in _fixture("brave_llm_context.json")["grounding"]["generic"]]
+    shared = {normalize_url(u) for u in exa_urls} & {normalize_url(u) for u in brave_urls}
+    assert len(shared) == 3  # the recorded responses really overlap
 
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="python docs", ctx=_CTX)
+    result = await _search(_Providers())
 
-    assert isinstance(result, dict)
-    assert result["result_count"] == 1
-    assert result["results"][0]["title"] == "Python 3.12 docs"
-    assert result["results"][0]["url"] == "https://docs.python.org/3.12/"
-    assert result["results"][0]["snippet"] == "Official Python docs"
-    assert result["results"][0]["engine"] == "google"
-    assert result["suggestions"] == ["python tutorial"]
-    assert result["query"] == "python docs"
-
-
-@pytest.mark.asyncio
-async def test_web_search_empty_results() -> None:
-    """Zero results still returns success dict with result_count=0."""
-    resp = _mock_searxng_response(results=[])
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="xyzzy_nonexistent_query", ctx=_CTX)
-
-    assert isinstance(result, dict)
-    assert result["result_count"] == 0
-    assert result["results"] == []
-
-
-# ── Engine health signal (FRE-1339) ────────────────────────────────────────
-
-# Real observed unresponsive_engines payload from a collapsed pool: a mix of
-# the bare-reason and "Suspended: ..." forms SearXNG actually emits.
-_COLLAPSED_POOL = [
-    ["brave", "Suspended: too many requests"],
-    ["duckduckgo", "CAPTCHA"],
-    ["startpage", "Suspended: CAPTCHA"],
-    ["qwant", "Suspended: access denied"],
-    ["karmasearch", "access denied"],
-    ["karmasearch videos", "access denied"],
-    ["mojeek", "access denied"],
-    ["yep", "access denied"],
-    ["presearch", "access denied"],
-]
-
-
-@pytest.mark.asyncio
-async def test_web_search_skips_malformed_unresponsive_engine_entries() -> None:
-    """A malformed unresponsive_engines entry is skipped, not a crash.
-
-    ``entry[0]``/``entry[1]`` on a bare string indexes characters, a dict raises
-    ``KeyError``, and ``len()`` on a scalar raises ``TypeError`` — none of these
-    should ever reach the caller as an unhandled exception from a field SearXNG
-    itself controls the shape of.
-    """
-    resp = _mock_searxng_response(
-        results=[],
-        unresponsive_engines=[
-            "brave",  # bare string, not a [name, reason] pair
-            {"engine": "bing", "reason": "down"},  # dict, not indexable by position
-            42,  # scalar — len() would raise
-            ["short"],  # too short
-            ["qwant", "access denied"],  # the one well-formed entry
-        ],
-    )
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="anything", ctx=_CTX)
-
-    assert result["unresponsive_engines"] == [{"engine": "qwant", "reason": "access denied"}]
-    assert result["degraded_retrieval"] is True
-
-
-@pytest.mark.asyncio
-async def test_web_search_surfaces_unresponsive_engines() -> None:
-    """AC-1: a collapsed engine pool is visible on the tool result, not just result_count.
-
-    Modeled on the ticket's own incident: the surviving low-quality engines
-    still return a full page of "successful" junk results while most of the
-    configured pool is down — result_count alone reads as healthy.
-    """
-    resp = _mock_searxng_response(
-        results=[
-            {
-                "title": "Anmelden bei Hotmail",
-                "url": "https://outlook.live.com/",
-                "content": "",
-                "engine": "bing",
-                "score": 1.0,
-            }
-        ],
-        unresponsive_engines=_COLLAPSED_POOL,
-    )
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="EU product safety enforcement", ctx=_CTX)
-
-    assert result["degraded_retrieval"] is True
-    assert len(result["unresponsive_engines"]) == len(_COLLAPSED_POOL)
-    assert {"engine": "brave", "reason": "Suspended: too many requests"} in result[
-        "unresponsive_engines"
-    ]
-    assert {"engine": "karmasearch", "reason": "access denied"} in result["unresponsive_engines"]
-    assert result["engines_contributed"] == ["bing"]
-
-
-@pytest.mark.asyncio
-async def test_web_search_degraded_result_warns_the_model() -> None:
-    """AC-2: degraded state is on the tool result itself, not only in logs."""
-    resp = _mock_searxng_response(
-        results=[
-            {"title": "junk", "url": "https://example.com/junk", "content": "", "engine": "bing"}
-        ],
-        unresponsive_engines=_COLLAPSED_POOL,
-    )
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="anything", ctx=_CTX)
-
-    assert "retrieval_warning" in result
-    assert "brave" in result["retrieval_warning"]
-    assert "bing" in result["retrieval_warning"]
-
-
-@pytest.mark.asyncio
-async def test_web_search_seeded_negative_obscure_query_not_degraded() -> None:
-    """AC-4 (negative case): a legitimately empty search on healthy engines is NOT degraded.
-
-    The signal must be keyed on engine health, not on result_count — otherwise
-    a genuinely obscure query with zero hits would misfire the same alert a
-    collapsed engine pool trips.
-    """
-    resp = _mock_searxng_response(results=[], unresponsive_engines=[])
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="xyzzy_genuinely_obscure_query", ctx=_CTX)
-
-    assert result["result_count"] == 0
+    urls = [r["url"] for r in result["results"]]
+    assert len({normalize_url(u) for u in urls}) == len(urls)
+    assert result["result_count"] == len(exa_urls) + len(brave_urls) - 3 == 6
+    assert {r["provider"] for r in result["results"]} == {"exa", "brave"}
+    assert result["providers_contributed"] == ["brave", "exa"]
     assert result["degraded_retrieval"] is False
-    assert result["unresponsive_engines"] == []
+    assert result["failed_providers"] == []
     assert "retrieval_warning" not in result
+    # Grounding contract: a results list of url-bearing objects, empty answers/infoboxes.
+    assert result["answers"] == [] and result["infoboxes"] == []
+    assert all(set(r) == {"title", "url", "content", "provider"} for r in result["results"])
 
 
 @pytest.mark.asyncio
-async def test_web_search_seeded_positive_collapsed_pool_is_degraded() -> None:
-    """AC-4 (positive case, paired with the negative above).
+async def test_saved_responses_keep_line_breaks_and_markdown_tables(keys: None) -> None:
+    """AC-1: the excerpts keep their newlines and the markdown table rows (SearXNG lost both)."""
+    result = await _search(_Providers())
 
-    The collapsed-pool fixture above DOES trip the signal, even with a full
-    page of results.
-    """
-    resp = _mock_searxng_response(
-        results=[
-            {"title": f"r{i}", "url": f"https://example.com/{i}", "content": "", "engine": "bing"}
-            for i in range(10)
-        ],
-        unresponsive_engines=_COLLAPSED_POOL,
-    )
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="anything", ctx=_CTX)
-
-    assert result["result_count"] == 10
-    assert result["degraded_retrieval"] is True
+    by_provider = {
+        p: [r for r in result["results"] if r["provider"] == p] for p in ("exa", "brave")
+    }
+    assert any("\n" in r["content"] for r in by_provider["exa"])
+    table = next(r["content"] for r in result["results"] if "| --- |" in r["content"])
+    assert "\n| January | 1.7 | 7.6 | 4.6 |\n" in table
 
 
-@pytest.mark.asyncio
-async def test_web_search_completed_log_carries_result_urls_and_engine_health() -> None:
-    """AC-1/AC-3: the telemetry event records engine health, not just the tool result.
-
-    Also carries the result URL list, so a collapsed pool is visible after the
-    fact and ``fetch_url.url in prior_search.result_urls`` becomes checkable.
-    """
-    resp = _mock_searxng_response(
-        results=[
-            {
-                "title": "Python 3.12 docs",
-                "url": "https://docs.python.org/3.12/",
-                "content": "",
-                "engine": "google",
-            }
-        ],
-        unresponsive_engines=_COLLAPSED_POOL,
-    )
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        with patch("personal_agent.tools.web.log") as mock_log:
-            await web_search_executor(query="python docs", ctx=_CTX)
-
-    completed_call = next(
-        c for c in mock_log.info.call_args_list if c.args[0] == "web_search_completed"
-    )
-    assert completed_call.kwargs["result_urls"] == ["https://docs.python.org/3.12/"]
-    assert completed_call.kwargs["degraded_retrieval"] is True
+def test_normalize_url_folds_case_trailing_slash_and_fragment() -> None:
+    """Owner decision 1: scheme/host lowercase, no trailing slash, no fragment."""
     assert (
-        "brave: Suspended: too many requests"
-        in completed_call.kwargs["unresponsive_engine_reasons"]
+        normalize_url("HTTPS://Example.COM/Path/#top")
+        == normalize_url("https://example.com/Path")
+        == "https://example.com/Path"
     )
+    # Path case and the query string still tell pages apart.
+    assert normalize_url("https://example.com/path") != normalize_url("https://example.com/Path")
+    assert normalize_url("https://example.com/a?x=1") != normalize_url("https://example.com/a")
 
 
-@pytest.mark.asyncio
-async def test_web_search_categories_passed_in_params() -> None:
-    """Categories parameter is forwarded to SearXNG query params."""
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="asyncio", categories="it", ctx=_CTX)
-
-    call_kwargs = client.get.call_args
-    params = call_kwargs.kwargs["params"]
-    assert params["categories"] == "it"
-
-
-@pytest.mark.asyncio
-async def test_web_search_engines_passed_in_params() -> None:
-    """Engines parameter is forwarded to SearXNG query params."""
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="test", engines="google,stackoverflow", ctx=_CTX)
-
-    call_kwargs = client.get.call_args
-    params = call_kwargs.kwargs["params"]
-    assert params.get("engines") == "google,stackoverflow"
-
-
-@pytest.mark.asyncio
-async def test_web_search_weather_category_strips_weather_prefix() -> None:
-    """When categories='weather', a leading 'weather ' token is stripped.
-
-    The wttr.in and duckduckgo_weather engines treat the full query as a
-    geo location and raise ValueError on 'weather <city>'. Stripping the
-    prefix at the router lets those engines resolve the location.
-    """
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="weather Berlin", categories="weather", ctx=_CTX)
-
-    params = client.get.call_args.kwargs["params"]
-    assert params["q"] == "Berlin"
-
-
-@pytest.mark.asyncio
-async def test_web_search_weather_engines_strips_weather_prefix() -> None:
-    """When engines targets a weather engine, leading 'weather ' is stripped."""
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="weather Tokyo", engines="wttr.in,openmeteo", ctx=_CTX)
-
-    params = client.get.call_args.kwargs["params"]
-    assert params["q"] == "Tokyo"
-
-
-@pytest.mark.asyncio
-async def test_web_search_weather_prefix_case_insensitive() -> None:
-    """'Weather ' / 'WEATHER ' (any case) is stripped for weather targets."""
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="Weather Paris", categories="weather", ctx=_CTX)
-
-    params = client.get.call_args.kwargs["params"]
-    assert params["q"] == "Paris"
-
-
-@pytest.mark.asyncio
-async def test_web_search_general_category_keeps_weather_prefix() -> None:
-    """General-category searches preserve the literal query (no strip).
-
-    A user asking 'weather Berlin' against the general category wants
-    weather-related pages, not a location lookup.
-    """
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="weather Berlin", categories="general", ctx=_CTX)
-
-    params = client.get.call_args.kwargs["params"]
-    assert params["q"] == "weather Berlin"
-
-
-@pytest.mark.asyncio
-async def test_web_search_non_leading_weather_token_not_stripped() -> None:
-    """Only a leading 'weather ' is stripped; mid-query occurrences stay."""
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="cold weather climate", categories="weather", ctx=_CTX)
-
-    params = client.get.call_args.kwargs["params"]
-    assert params["q"] == "cold weather climate"
-
-
-@pytest.mark.asyncio
-async def test_web_search_sets_x_forwarded_for_header() -> None:
-    """Outbound httpx GET sends an X-Forwarded-For header.
-
-    SearXNG's botdetection logs ERROR-level warnings on requests with
-    neither X-Forwarded-For nor X-Real-IP. The agent calls SearXNG
-    directly over the docker network (no Caddy proxy), so we set the
-    header ourselves to keep telemetry signal clean.
-    """
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="anything", ctx=_CTX)
-
-    headers = client.get.call_args.kwargs.get("headers") or {}
-    assert "X-Forwarded-For" in headers
-    assert headers["X-Forwarded-For"]
-
-
-@pytest.mark.asyncio
-async def test_web_search_time_range_passed() -> None:
-    """time_range parameter is forwarded to SearXNG query params."""
-    resp = _mock_searxng_response()
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="openai news", time_range="week", ctx=_CTX)
-
-    call_kwargs = client.get.call_args
-    params = call_kwargs.kwargs["params"]
-    assert params.get("time_range") == "week"
-
-
-@pytest.mark.asyncio
-async def test_web_search_max_results_capped_at_50() -> None:
-    """Requesting 100 results is silently capped at 50."""
-    many_results = [
-        {
-            "title": f"r{i}",
-            "url": f"https://example.com/{i}",
-            "content": "",
-            "engine": "g",
-            "score": 0.5,
-        }
-        for i in range(60)
+def test_merge_interleaves_by_rank_and_keeps_the_first_duplicate() -> None:
+    """Rank 1 of each provider first; a later duplicate URL is dropped."""
+    exa = [
+        SearchHit("E1", "https://a.example/1", "e1", "exa"),
+        SearchHit("E2", "https://b.example/2/", "e2", "exa"),
     ]
-    resp = _mock_searxng_response(results=many_results)
-    client = _mock_client(resp)
+    brave = [
+        SearchHit("B1", "https://C.example/3#x", "b1", "brave"),
+        SearchHit("B2", "https://B.example/2", "b2", "brave"),
+        SearchHit("B3", "https://d.example/4", "b3", "brave"),
+    ]
+    assert [h.title for h in merge_hits(exa, brave)] == ["E1", "B1", "E2", "B3"]
 
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="test", max_results=100, ctx=_CTX)
 
-    assert result["result_count"] <= 50
+# ── AC-2: size sends the configured sizes ───────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_web_search_infobox_handling() -> None:
-    """Infoboxes are truncated to 2 entries with content capped at 500 chars."""
-    long_content = "x" * 1000
-    infoboxes = [
-        {
-            "infobox": "Python",
-            "content": long_content,
-            "urls": [
-                {"url": "https://a.com"},
-                {"url": "https://b.com"},
-                {"url": "https://c.com"},
-                {"url": "https://d.com"},
+@pytest.mark.parametrize(
+    ("size", "num", "chars", "tokens"),
+    [(None, 10, 800, 2048), ("brief", 10, 800, 2048), ("full", 10, 2000, 8192)],
+)
+async def test_size_sends_the_configured_sizes(
+    keys: None, size: str | None, num: int, chars: int, tokens: int
+) -> None:
+    """AC-2: brief (the default) and full send the owner's sizes to both providers."""
+    providers = _Providers()
+    kwargs = {} if size is None else {"size": size}
+
+    result = await _search(providers, **kwargs)
+
+    assert providers.exa_body["numResults"] == num
+    assert providers.exa_body["contents"] == {"highlights": {"maxCharacters": chars}}
+    assert providers.brave_params["maximum_number_of_tokens"] == str(tokens)
+    assert providers.brave_params["count"] == "20"
+    assert result["size"] == (size or "brief")
+
+
+@pytest.mark.asyncio
+async def test_size_values_come_from_settings(keys: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-2: the sizes are settings, not constants."""
+    monkeypatch.setattr("personal_agent.tools.web.settings.web_search_full_exa_num_results", 7)
+    monkeypatch.setattr("personal_agent.tools.web.settings.web_search_full_exa_max_characters", 99)
+    monkeypatch.setattr("personal_agent.tools.web.settings.web_search_full_brave_max_tokens", 1234)
+    providers = _Providers()
+
+    await _search(providers, size="full")
+
+    assert providers.exa_body["numResults"] == 7
+    assert providers.exa_body["contents"]["highlights"]["maxCharacters"] == 99
+    assert providers.brave_params["maximum_number_of_tokens"] == "1234"
+
+
+# ── AC-3: categories ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_news_category_sets_exa_news_and_brave_past_week(keys: None) -> None:
+    """AC-3: news → Exa category news + Brave freshness pw; no domain filter."""
+    providers = _Providers()
+
+    result = await _search(providers, categories="news")
+
+    assert providers.exa_body["category"] == "news"
+    assert "includeDomains" not in providers.exa_body
+    assert providers.brave_params["freshness"] == "pw"
+    assert providers.brave_params["q"] == "paris temperature"
+    assert result["category"] == "news"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("category", "domains"),
+    [
+        (
+            "it",
+            [
+                "github.com",
+                "stackoverflow.com",
+                "developer.mozilla.org",
+                "huggingface.co",
+                "hub.docker.com",
             ],
-        },
-        {"infobox": "Guido", "content": "Creator of Python", "urls": []},
-        {"infobox": "Third", "content": "Should be dropped", "urls": []},
+        ),
+        (
+            "science",
+            [
+                "arxiv.org",
+                "pubmed.ncbi.nlm.nih.gov",
+                "semanticscholar.org",
+                "crossref.org",
+                "openalex.org",
+            ],
+        ),
+    ],
+)
+async def test_domain_categories_filter_both_providers(
+    keys: None, category: str, domains: list[str]
+) -> None:
+    """AC-3: it/science → Exa includeDomains + Brave ``(site:a OR site:b ...)`` on the query."""
+    providers = _Providers()
+
+    await _search(providers, query="asyncio cancel", categories=category)
+
+    assert providers.exa_body["includeDomains"] == domains
+    assert "category" not in providers.exa_body
+    sites = " OR ".join(f"site:{d}" for d in domains)
+    assert providers.brave_params["q"] == f"asyncio cancel ({sites})"
+    assert "freshness" not in providers.brave_params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", [None, "general", "weather", "recipes", "exa", "social_media"])
+async def test_other_categories_search_the_general_web(keys: None, category: str | None) -> None:
+    """AC-3: any other category → general, with no filter on either provider."""
+    providers = _Providers()
+    kwargs = {} if category is None else {"categories": category}
+
+    result = await _search(providers, **kwargs)
+
+    assert set(providers.exa_body) == {"query", "type", "numResults", "contents"}
+    assert providers.exa_body["type"] == "auto"
+    assert set(providers.brave_params) == {"q", "count", "maximum_number_of_tokens", "safesearch"}
+    assert providers.brave_params["safesearch"] == "off"
+    assert result["category"] == "general"
+
+
+def test_first_supported_name_in_a_list_wins() -> None:
+    """A comma list (the old SearXNG form) resolves to its first supported category."""
+    assert resolve_category("general,it") == "it"
+    assert resolve_category(" News ") == "news"
+    assert resolve_category("weather,science,news") == "science"
+
+
+def test_time_range_filters_both_providers() -> None:
+    """``time_range`` keeps working: Brave freshness and an Exa start date."""
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    request = build_provider_request(
+        "q", category="news", size="brief", time_range="month", now=now
+    )
+    assert request.brave_params["freshness"] == "pm"  # overrides news' past week
+    assert request.exa_body["startPublishedDate"] == "2026-10-11T12:00:00.000Z"
+    ignored = build_provider_request("q", category="general", size="brief", time_range="decade")
+    assert "freshness" not in ignored.brave_params
+    assert "startPublishedDate" not in ignored.exa_body
+
+
+# ── AC-4: one provider fails / both fail ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_exa_refusal_returns_brave_results_and_names_exa(keys: None) -> None:
+    """AC-4: Exa answers 429 → Brave's results, with Exa named as failed."""
+    result = await _search(_Providers(exa=_error(429, EXA_SEARCH_URL)))
+
+    assert result["result_count"] == 5
+    assert {r["provider"] for r in result["results"]} == {"brave"}
+    assert result["failed_providers"] == [
+        {"provider": "exa", "kind": "refusal", "reason": "HTTP 429"}
     ]
-    resp = _mock_searxng_response(infoboxes=infoboxes)
-    client = _mock_client(resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="python creator", ctx=_CTX)
-
-    assert len(result["infoboxes"]) == 2  # capped at 2
-    assert len(result["infoboxes"][0]["content"]) <= 500  # content truncated
-    assert len(result["infoboxes"][0]["urls"]) <= 3  # urls capped at 3
-
-
-# ── Executor error tests ───────────────────────────────────────────────────
+    assert result["providers_contributed"] == ["brave"]
+    assert result["degraded_retrieval"] is True
+    assert "exa (HTTP 429)" in result["retrieval_warning"]
 
 
 @pytest.mark.asyncio
-async def test_web_search_empty_query_raises() -> None:
-    """Empty query string raises ToolExecutionError with descriptive message."""
+async def test_brave_timeout_returns_exa_results_and_names_brave(keys: None) -> None:
+    """AC-4: Brave times out → Exa's results, with Brave named as failed."""
+    result = await _search(_Providers(brave=httpx.ReadTimeout("slow")))
+
+    assert {r["provider"] for r in result["results"]} == {"exa"}
+    assert result["failed_providers"] == [
+        {"provider": "brave", "kind": "refusal", "reason": "timeout"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_hung_provider_fails_alone_at_its_deadline(
+    keys: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider that never answers fails at its own deadline; the other's results return."""
+    monkeypatch.setattr("personal_agent.tools.web.settings.web_search_timeout_seconds", 0.05)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.exa.ai":
+            await asyncio.Event().wait()  # hangs until the deadline cancels it
+        return httpx.Response(200, json=_fixture("brave_llm_context.json"))
+
+    def client(**kwargs: object) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    with (
+        patch("personal_agent.tools.web.create_guarded_http_client", client),
+        patch("personal_agent.tools.web.record_vendor_cost", AsyncMock()),
+    ):
+        result = await asyncio.wait_for(web_search_executor(query="q", ctx=_CTX), timeout=5)
+
+    assert result["providers_contributed"] == ["brave"]
+    assert result["failed_providers"] == [
+        {"provider": "exa", "kind": "refusal", "reason": "timeout"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_key_leaves_that_provider_out_without_a_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider with no key (or an empty one) is a refusal, and no request is sent."""
+    monkeypatch.setattr("personal_agent.tools.web.settings.exa_api_key", SecretStr(""))
+    monkeypatch.setattr("personal_agent.tools.web.settings.brave_api_key", SecretStr(_BRAVE_KEY))
+    providers = _Providers()
+
+    result = await _search(providers)
+
+    assert "exa" not in providers.requests
+    assert result["failed_providers"] == [
+        {"provider": "exa", "kind": "refusal", "reason": "no API key configured"}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exa", "brave", "code"),
+    [
+        (_error(500, EXA_SEARCH_URL), httpx.ConnectError("refused"), "search_unavailable"),
+        (_error(400, EXA_SEARCH_URL), _error(402, BRAVE_LLM_CONTEXT_URL), "search_unavailable"),
+        (_error(400, EXA_SEARCH_URL), _error(422, BRAVE_LLM_CONTEXT_URL), "bad_query"),
+    ],
+)
+async def test_both_failing_is_an_error_result(
+    keys: None, exa: Reply, brave: Reply, code: str
+) -> None:
+    """AC-4: both providers fail → an error naming both; bad_query only when both rejected it."""
+    with pytest.raises(WebSearchError) as exc_info:
+        await _search(_Providers(exa=exa, brave=brave))
+
+    assert exc_info.value.code == code
+    assert "exa:" in str(exc_info.value) and "brave:" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "body", "reason"),
+    [
+        ("exa", httpx.Response(200, text="<html>"), "JSONDecodeError"),
+        ("exa", httpx.Response(200, json={"error": "x"}), "ValueError"),
+        ("brave", httpx.Response(200, json=["not", "an", "object"]), "ValueError"),
+    ],
+)
+async def test_an_unreadable_body_is_a_refusal(
+    keys: None, provider: str, body: httpx.Response, reason: str
+) -> None:
+    """A 200 whose body is not the provider's shape is that provider's failure, not a crash."""
+    result = await _search(_Providers(**{provider: body}))
+
+    assert result["failed_providers"] == [
+        {"provider": provider, "kind": "refusal", "reason": reason}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [
+        (401, "refusal"),
+        (402, "refusal"),
+        (403, "refusal"),
+        (429, "refusal"),
+        (500, "refusal"),
+        (503, "refusal"),
+        (400, "bad_query"),
+        (404, "bad_query"),
+        (422, "bad_query"),
+    ],
+)
+def test_classify_status(status: int, kind: str) -> None:
+    """Owner decision 5: refusal (401/402/403/429/5xx) vs bad query (other 4xx)."""
+    assert classify_status(status) == kind
+
+
+@pytest.mark.asyncio
+async def test_failure_logs_and_results_never_hold_a_key(keys: None) -> None:
+    """The keys go only in request headers: never in the result, the error or a log event."""
+    providers = _Providers(exa=_error(401, EXA_SEARCH_URL))
+    with patch("personal_agent.tools.web.log") as mock_log:
+        result = await _search(providers)
+
+    assert providers.requests["exa"].headers["x-api-key"] == _EXA_KEY
+    assert providers.requests["brave"].headers["x-subscription-token"] == _BRAVE_KEY
+    assert _BRAVE_KEY not in str(providers.requests["brave"].url)
+    logged = repr(mock_log.mock_calls)
+    for key in (_EXA_KEY, _BRAVE_KEY):
+        assert key not in json.dumps(result)
+        assert key not in logged
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_search_cancels_both_provider_calls(keys: None) -> None:
+    """A tool timeout cancels the search; neither provider call is left running."""
+    started: list[str] = []
+    cancelled: list[str] = []
+    both_started = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        name = request.url.host
+        started.append(name)
+        if len(started) == 2:
+            both_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(name)
+            raise
+        raise AssertionError("unreachable")
+
+    def client(**kwargs: object) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    with patch("personal_agent.tools.web.create_guarded_http_client", client):
+        task = asyncio.create_task(web_search_executor(query="q", ctx=_CTX))
+        await asyncio.wait_for(both_started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert sorted(cancelled) == ["api.exa.ai", "api.search.brave.com"]
+
+
+# ── AC-5: one api_costs row per successful provider call ────────────────────
+
+
+async def _costs(providers: _Providers) -> AsyncMock:
+    record = AsyncMock()
+    ctx = TraceContext(trace_id=uuid4().hex, session_id=str(uuid4()))
+    with (
+        patch("personal_agent.tools.web.create_guarded_http_client", providers.client),
+        patch("personal_agent.tools.web.record_vendor_cost", record),
+    ):
+        try:
+            await web_search_executor(query="flights", ctx=ctx)
+        except WebSearchError:
+            pass
+    for call in record.await_args_list:
+        assert call.kwargs["trace_id"] == ctx.trace_id
+        assert call.kwargs["session_id"] == ctx.session_id
+    return record
+
+
+@pytest.mark.asyncio
+async def test_each_successful_provider_call_writes_one_cost_row(keys: None) -> None:
+    """AC-5: both providers served → one row each, named by provider, non-zero."""
+    record = await _costs(_Providers())
+
+    calls = {c.kwargs["provider"]: c.kwargs for c in record.await_args_list}
+    assert record.await_count == 2
+    assert calls["exa"]["model"] == "exa/search"
+    assert calls["brave"]["model"] == "brave/llm-context"
+    for call in calls.values():
+        assert call["cost_usd"] > 0
+        assert call["purpose"] == "web_search"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_provider_call_writes_no_cost_row(keys: None) -> None:
+    """AC-5: only the provider that returned results is billed."""
+    record = await _costs(_Providers(brave=_error(503, BRAVE_LLM_CONTEXT_URL)))
+    assert [c.kwargs["provider"] for c in record.await_args_list] == ["exa"]
+
+    record = await _costs(
+        _Providers(exa=_error(503, EXA_SEARCH_URL), brave=_error(503, BRAVE_LLM_CONTEXT_URL))
+    )
+    record.assert_not_awaited()
+
+
+# ── Telemetry ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_completed_log_carries_result_urls_and_provider_health(keys: None) -> None:
+    """``web_search_completed`` keeps ``result_urls`` (FRE-1339 provenance) and the failures."""
+    with patch("personal_agent.tools.web.log") as mock_log:
+        result = await _search(_Providers(exa=_error(429, EXA_SEARCH_URL)))
+
+    completed = next(c for c in mock_log.info.call_args_list if c.args[0] == "web_search_completed")
+    assert completed.kwargs["result_urls"] == [r["url"] for r in result["results"]]
+    assert completed.kwargs["degraded_retrieval"] is True
+    assert completed.kwargs["unresponsive_engine_reasons"] == ["exa: refusal: HTTP 429"]
+    assert completed.kwargs["trace_id"] == _CTX.trace_id
+    failed = next(c for c in mock_log.warning.call_args_list if c.args[0] == "web_search_failed")
+    assert failed.kwargs["provider"] == "exa"
+    assert failed.kwargs["failure_kind"] == "refusal"
+
+
+# ── Executor errors and governance ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["", "   "])
+async def test_web_search_empty_query_raises(query: str) -> None:
+    """An empty or whitespace query raises with a descriptive message."""
     with pytest.raises(ToolExecutionError, match="query parameter is required"):
-        await web_search_executor(query="", ctx=_CTX)
-
-
-@pytest.mark.asyncio
-async def test_web_search_whitespace_query_raises() -> None:
-    """Whitespace-only query raises ToolExecutionError."""
-    with pytest.raises(ToolExecutionError, match="query parameter is required"):
-        await web_search_executor(query="   ", ctx=_CTX)
-
-
-@pytest.mark.asyncio
-async def test_web_search_connect_error_raises() -> None:
-    """ConnectError raises ToolExecutionError with actionable message."""
-    client = AsyncMock()
-    client.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        with pytest.raises(ToolExecutionError, match="Cannot connect to SearXNG"):
-            await web_search_executor(query="test query", ctx=_CTX)
-
-
-@pytest.mark.asyncio
-async def test_web_search_timeout_raises() -> None:
-    """TimeoutException raises ToolExecutionError mentioning timeout duration."""
-    client = AsyncMock()
-    client.get = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        with pytest.raises(ToolExecutionError, match="timed out"):
-            await web_search_executor(query="test query", ctx=_CTX)
-
-
-@pytest.mark.asyncio
-async def test_web_search_malformed_json_raises() -> None:
-    """Non-JSON response body raises ToolExecutionError."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.side_effect = ValueError("not JSON")
-    client = _mock_client(mock_resp)
-
-    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        with pytest.raises(ToolExecutionError):
-            await web_search_executor(query="test query", ctx=_CTX)
-
-
-# ── Governance / mode tests ────────────────────────────────────────────────
+        await web_search_executor(query=query, ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_web_search_blocked_in_lockdown_mode() -> None:
     """ToolExecutionLayer returns permission-denied ToolResult in LOCKDOWN mode."""
-    from unittest.mock import patch as _patch
-
     from personal_agent.brainstem.mode_manager import ModeManager
     from personal_agent.config.governance_loader import load_governance_config
     from personal_agent.governance.models import Mode
-    from personal_agent.telemetry import TraceContext
     from personal_agent.tools.executor import ToolExecutionLayer
     from personal_agent.tools.registry import ToolRegistry
-    from personal_agent.tools.web import web_search_executor, web_search_tool
 
     reg = ToolRegistry()
     reg.register(web_search_tool, web_search_executor)
@@ -901,7 +881,7 @@ async def test_web_search_blocked_in_lockdown_mode() -> None:
     gov = load_governance_config()
     mode_mgr = ModeManager(governance_config=gov)
 
-    with _patch.object(mode_mgr, "get_current_mode", return_value=Mode.LOCKDOWN):
+    with patch.object(mode_mgr, "get_current_mode", return_value=Mode.LOCKDOWN):
         layer = ToolExecutionLayer(registry=reg, governance_config=gov, mode_manager=mode_mgr)
         trace_ctx = TraceContext.new_trace()
         result = await layer.execute_tool("web_search", {"query": "test"}, trace_ctx)
@@ -911,8 +891,8 @@ async def test_web_search_blocked_in_lockdown_mode() -> None:
     assert "LOCKDOWN" in result.error or "not allowed" in result.error.lower()
 
 
-def test_shape_search_response_is_the_executor_shape() -> None:
-    """FRE-1641: the harness shapes recorded responses with this function (ADR-0158 D1.8)."""
+def test_shape_search_response_keeps_the_harness_shape() -> None:
+    """FRE-1641: the harness still shapes recorded SearXNG responses with it (ADR-0158 D1.8)."""
     from personal_agent.tools.web import build_search_params, shape_search_response
 
     data = {
@@ -943,92 +923,3 @@ def test_shape_search_response_is_the_executor_shape() -> None:
         "pageno": "1",
         "time_range": "year",
     }
-
-
-# ── FRE-1656: paid-engine cost recording ───────────────────────────────────
-
-
-def _paid_ctx() -> TraceContext:
-    return TraceContext(trace_id=uuid4().hex, session_id=str(uuid4()))
-
-
-def _paid_result(engine: str, n: int = 0) -> dict:
-    return {
-        "title": f"{engine} {n}",
-        "url": f"https://example.com/{engine}/{n}",
-        "content": "x",
-        "engine": engine,
-    }
-
-
-async def _search_recording_costs(
-    resp: MagicMock, ctx: TraceContext, **kwargs: object
-) -> AsyncMock:
-    record = AsyncMock()
-    with (
-        patch("personal_agent.tools.web.httpx.AsyncClient", return_value=_mock_client(resp)),
-        patch("personal_agent.tools.web.record_vendor_cost", record),
-    ):
-        await web_search_executor(query="flights", ctx=ctx, **kwargs)
-    return record
-
-
-@pytest.mark.asyncio
-async def test_web_search_records_one_row_per_paid_engine_used() -> None:
-    """AC-2: a search that used Brave and Exa writes one non-zero cost row for each."""
-    ctx = _paid_ctx()
-    resp = _mock_searxng_response(
-        results=[_paid_result("braveapi"), _paid_result("exa"), _paid_result("exa", 1)]
-    )
-
-    record = await _search_recording_costs(resp, ctx)
-
-    calls = {c.kwargs["provider"]: c.kwargs for c in record.await_args_list}
-    assert sorted(calls) == ["brave", "exa"]
-    assert calls["brave"]["model"] == "brave/braveapi"
-    assert calls["exa"]["model"] == "exa/exa"
-    for call in calls.values():
-        assert call["cost_usd"] > 0
-        assert call["purpose"] == "web_search"
-        assert call["trace_id"] == ctx.trace_id
-        assert call["session_id"] == ctx.session_id
-
-
-@pytest.mark.asyncio
-async def test_web_search_counts_an_engine_cut_by_max_results() -> None:
-    """The engine list comes from the raw results, not the ``max_results`` slice."""
-    resp = _mock_searxng_response(results=[_paid_result("exa"), _paid_result("braveapi")])
-
-    record = await _search_recording_costs(resp, _paid_ctx(), max_results=1)
-
-    assert sorted(c.kwargs["provider"] for c in record.await_args_list) == ["brave", "exa"]
-
-
-@pytest.mark.asyncio
-async def test_web_search_records_a_named_paid_engine_that_returned_nothing() -> None:
-    """An engine the caller named is billed per request even when it finds no result."""
-    record = await _search_recording_costs(
-        _mock_searxng_response(results=[]), _paid_ctx(), engines="exa"
-    )
-
-    assert [c.kwargs["provider"] for c in record.await_args_list] == ["exa"]
-
-
-@pytest.mark.asyncio
-async def test_web_search_does_not_record_a_named_engine_that_failed() -> None:
-    """A named engine in ``unresponsive_engines`` did not serve the request."""
-    resp = _mock_searxng_response(results=[], unresponsive_engines=[["exa", "HTTP error"]])
-
-    record = await _search_recording_costs(resp, _paid_ctx(), engines="exa")
-
-    record.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_web_search_records_nothing_for_free_engines() -> None:
-    """A search served only by free engines writes no cost row."""
-    resp = _mock_searxng_response(results=[_paid_result("google"), _paid_result("duckduckgo")])
-
-    record = await _search_recording_costs(resp, _paid_ctx())
-
-    record.assert_not_awaited()

@@ -128,6 +128,7 @@ _BY_GROUP: Mapping[str, tuple[str, ...]] = {
         "eur_usd_rate",
         "exa_search_cost_per_call_usd",
         "orchestrator_spend_threshold",
+        "web_search_monthly_budget_usd",
     ),
     "context and history": (
         "cache_frozen_accum_max_ratio",

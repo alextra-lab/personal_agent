@@ -146,7 +146,7 @@ Rules:
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
 - Search is not gated on whether the topic "sounds recent". Call web_search for quick lookups (free, private, multi-engine) whenever you need to make a factual claim and memory, tool results, or the user's own words so far don't already give you a source for it — current events and CVEs need this exactly as much as any other unsourced claim does, and no more. Pass categories='it' for technical queries, 'science' for research, 'news' for current events.
 - web_search results are directly citable. If snippets are insufficient, use fetch_url to read the full page — its fetched page content is an admissible citation source; the URL you pass is not, and a `bash`/curl fetch of the same page is not admissible at all.
-- For weather (a forecast, current conditions, temperature, rain or wind at a place), call weather: it returns structured Open-Meteo data in the place's local time, and its result is citable.
+- For a forecast, call weather (citable).
 - perplexity_query's synthesized output cannot be cited under the grounding contract — reach for it only for background research you will re-verify from a citable source before asserting anything from it, never as the source itself.
 - Do NOT answer from your own knowledge when live information is needed; always search first."""
 

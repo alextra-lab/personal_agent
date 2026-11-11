@@ -369,6 +369,7 @@ READ_ONLY_SETTINGS: Mapping[str, str] = {
     "neo4j_password": _SECRET,
     "neo4j_user": _SECRET,
     "openai_api_key": _SECRET,
+    "owner_ntfy_url": _SECRET,
     "perplexity_api_key": _SECRET,
     "r2_access_key_id": _SECRET,
     "r2_secret_access_key": _SECRET,

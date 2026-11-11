@@ -83,6 +83,7 @@ from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.orchestrator.constraint_options import build_provider_availability
 from personal_agent.service.auth import RequestUser
 from personal_agent.service.database import AsyncSessionLocal
+from personal_agent.service.owner_ntfy import push_to_owner
 from personal_agent.service.repositories.settings_overrides_repository import (
     SettingsOverridesRepository,
 )
@@ -545,6 +546,10 @@ async def _warn_about_unaudited_overrides(parameters: Sequence[str], trace_id: s
     A failure of any step logs the error type and does not stop the start, because the loader runs
     inside the gateway startup. The error text is not logged, so no value can reach the log.
 
+    When one or more rows are unaudited, one ntfy push also goes to the owner (FRE-1758). It holds
+    the count and the names. A failed audit read sends nothing, because the count is then unknown.
+    The sender never raises, and a hard timeout bounds the wait.
+
     Args:
         parameters: The stored override names that the load returned.
         trace_id: Trace identifier for the log.
@@ -563,6 +568,19 @@ async def _warn_about_unaudited_overrides(parameters: Sequence[str], trace_id: s
         return
     for parameter in unaudited:
         log.warning("setting_override_without_audit", parameter=parameter, trace_id=trace_id)
+    if unaudited:
+        await push_to_owner(_unaudited_push_message(unaudited), trace_id=trace_id)
+
+
+def _unaudited_push_message(unaudited: Sequence[str]) -> str:
+    """Build the one-line push for the owner (FRE-1758). It holds the count and the names only."""
+    count = len(unaudited)
+    subject = (
+        "1 stored settings override has"
+        if count == 1
+        else f"{count} stored settings overrides have"
+    )
+    return f"Seshat gateway start: {subject} no audit row: {', '.join(unaudited)}"
 
 
 def _warn_if_a_preset_exceeds_a_stored_ceiling(trace_id: str) -> None:

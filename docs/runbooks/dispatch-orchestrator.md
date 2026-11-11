@@ -604,6 +604,23 @@ webhook (`scripts/dispatch/owner_notify.py`).
    `unconfigured` means the key is absent. `failed` means ntfy did not accept the line.
 4. The owner confirms that the test line arrived on the phone.
 
+**The gateway uses the same key (FRE-1758).** At each gateway start, if one or more stored settings
+overrides have no audit row (FRE-1753), the gateway sends one line to the owner. The line gives the
+count and the parameter names. It never holds a value. A start with no such row sends nothing.
+
+- **Setting.** The gateway reads `settings.owner_ntfy_url`. The cloud compose passes
+  `AGENT_OWNER_NTFY_URL: ${AGENT_OWNER_NTFY_URL:-}` to the gateway. This entry beats `env_file`.
+  Run compose from `/opt/seshat`, where `.env` is the project `.env`. If compose runs where that file
+  is absent, the entry resolves to an empty string and the push stays silent.
+- **Logs.** `owner_ntfy_sent`, `owner_ntfy_failed` (the error type only) and `owner_ntfy_unconfigured`.
+  No log line holds the URL.
+- **Start time.** The send has a hard 5 second limit. A failed send never stops the start.
+- **Live check.** After a gateway deploy, master runs
+  `docker exec cloud-sim-seshat-gateway uv run python -m personal_agent.service.owner_ntfy`.
+  The last line is `sent` (exit 0), `failed` or `unconfigured`. The command reads and writes no
+  override row. The owner confirms that the test line arrived on the phone.
+- **Do not print the resolved value.** `docker compose config` shows the URL. Do not paste its output.
+
 ### cc-master channel and `trigger_id` (FRE-1555, ADR-0155 D2 track A)
 
 The watcher sends every master trigger to the `cc-master` channel first (port `MASTER_CHANNEL_PORT` in

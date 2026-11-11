@@ -2771,6 +2771,17 @@ class AppConfig(BaseSettings):
             "gateway_auth_enabled=False and no CF Access header is present."
         ),
     )
+    owner_ntfy_url: str | None = Field(
+        default=None,
+        alias="AGENT_OWNER_NTFY_URL",
+        json_schema_extra={"secret": True},
+        description=(
+            "Full ntfy topic URL that carries one-line pushes to the owner's phone (FRE-1758). "
+            "On ntfy.sh the topic name is the secret, so the URL is never logged. The dispatch "
+            "daemons read the same key (FRE-1550). When unset, the gateway logs "
+            "'owner_ntfy_unconfigured' and sends nothing."
+        ),
+    )
 
     # ── Operator Identity (FRE-213 / ADR-0052) ───────────────────────────────
     owner_name: str = Field(

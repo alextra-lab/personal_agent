@@ -487,6 +487,11 @@ class TestWebSearchToolSeam:
 
         monkeypatch.setattr("personal_agent.tools.web.settings.exa_api_key", SecretStr("k1"))
         monkeypatch.setattr("personal_agent.tools.web.settings.brave_api_key", SecretStr("k2"))
+        # FRE-1768: a both-refuse search alerts the owner; no test may reach the real topic.
+        from personal_agent.tools import web_search_alerts
+
+        web_search_alerts.reset_alert_state()
+        monkeypatch.setattr(web_search_alerts, "push_to_owner", AsyncMock(return_value=False))
 
     @pytest.mark.asyncio
     async def test_disallowed_domain_refused_before_connection(

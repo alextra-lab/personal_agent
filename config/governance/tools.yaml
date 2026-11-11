@@ -229,6 +229,13 @@ tools:
     risk_level: "low"
     timeout_seconds: 15
 
+  # Native forecast on Open-Meteo (FRE-1769). Fixed host, no key, no spend; "low" like
+  # web_search, because the model chooses only the place, not the destination.
+  weather:
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "low"
+    timeout_seconds: 30
+
   get_location:
     allowed_in_modes: ["NORMAL", "ALERT"]
     risk_level: "low"

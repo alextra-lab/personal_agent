@@ -153,7 +153,9 @@ class TestRecencyNoLongerGatesSearch:
     def test_forecast_category_hints_survive(self) -> None:
         """Regression guard: the category-selection guidance must not be dropped."""
         assert "categories='it'" in _TOOL_RULES
-        assert "'weather' for forecasts" in _TOOL_RULES
+        # FRE-1769: forecasts moved from the web_search 'weather' category to the weather tool.
+        assert "call weather" in _TOOL_RULES
+        assert "'weather' for forecasts" not in _TOOL_RULES
 
 
 class TestCitationEmissionInstruction:

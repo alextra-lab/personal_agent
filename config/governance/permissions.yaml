@@ -79,6 +79,7 @@ allow:
   - rule: "perplexity_query"
   - rule: "get_library_docs"
   - rule: "fetch_url"
+  - rule: "weather"  # FRE-1769: read-only Open-Meteo forecast
   - rule: "search_logs"
   - rule: "measure_model_latency"
   - rule: "find_linear_issues"

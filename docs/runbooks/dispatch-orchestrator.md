@@ -336,9 +336,11 @@ usually on the wrong model.
 reads master's own live context% in-process (imports `resolve_jsonl`/
 `read_context` from `scripts.dispatch.context_probe`, FRE-847 — no subprocess
 wrapper). If usage is at/over `--context-pressure-threshold` (env
-`AGENT_CONTEXT_PRESSURE_THRESHOLD`, default **70**) it reuses `send_to_session`
+`AGENT_CONTEXT_PRESSURE_THRESHOLD`, default **70**) or at/over
+`--context-pressure-tokens` (env `AGENT_CONTEXT_PRESSURE_TOKENS`, default
+**200000**, FRE-1765), whichever comes first, it reuses `send_to_session`
 (same idle/existence gate as the PR triggers) to type a plain-text nudge into
-`cc-master`: *"Context at `<pct>`% — informational, owner-gated: SURFACE this
+`cc-master`: *"Context at `<pct>`% (`<n>` tokens) — informational, owner-gated: SURFACE this
 to the owner as a heads-up. Do NOT run prepare-reset / checkpoint / `/clear`
 unless the owner explicitly instructs it — the reset decision is the owner's
 alone, never auto-run on this nudge."* (`_CONTEXT_PRESSURE_NUDGE` in

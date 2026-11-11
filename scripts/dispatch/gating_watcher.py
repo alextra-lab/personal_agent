@@ -192,8 +192,12 @@ DEFAULT_UNROUTABLE_LOG_TTL_S: float = DEFAULT_MASTER_TTL_S
 # owner's alone (a watcher nudge must never read as an instruction to auto-run prepare-reset).
 DEFAULT_CONTEXT_PRESSURE_THRESHOLD: float = 70.0
 DEFAULT_CONTEXT_PRESSURE_TTL_S: float = DEFAULT_MASTER_TTL_S
+# Absolute token threshold (FRE-1765): Claude Code compacted master at ~294k on a 1M
+# window, so percent alone fires too late. 200k is master's choice (~70% of that
+# observed compaction point), not a documented value.
+DEFAULT_CONTEXT_PRESSURE_TOKENS: int = 200_000
 _CONTEXT_PRESSURE_NUDGE = (
-    "Context at {pct}% — informational, owner-gated: SURFACE this to the owner as a heads-up. "
+    "Context at {pct}% ({tokens} tokens) — informational, owner-gated: SURFACE this to the owner as a heads-up. "
     "Do NOT run prepare-reset / checkpoint / /clear unless the owner explicitly instructs it — "
     "the reset decision is the owner's alone, never auto-run on this nudge."
 )
@@ -570,9 +574,9 @@ _WARNED_UNKNOWN_MODELS: set[str] = set()
 
 
 def context_pressure(
-    readings: Sequence[ContextReading], threshold: float
+    readings: Sequence[ContextReading], threshold: float, token_threshold: int | None = None
 ) -> list[tuple[str, float]]:
-    """Return the ``(session, pct)`` pairs whose context usage is at/over ``threshold``.
+    """Return ``(session, pct)`` for readings at/over ``threshold`` or ``token_threshold``.
 
     Delegates the per-model window table to ``context_probe`` so the mapping is
     defined in one place (FRE-847). A model missing from that table uses
@@ -582,10 +586,12 @@ def context_pressure(
     Args:
         readings: Raw per-session context readings.
         threshold: The percent threshold (e.g. ``70.0``).
+        token_threshold: Absolute context-token threshold (FRE-1765); ``None``
+            disables it.
 
     Returns:
-        ``(session, pct)`` for every reading whose ``pct >= threshold``, in
-        input order.
+        ``(session, pct)`` for every reading whose ``pct >= threshold`` or whose
+        ``ctx >= token_threshold``, in input order.
     """
     pressures: list[tuple[str, float]] = []
     for reading in readings:
@@ -601,7 +607,8 @@ def context_pressure(
                     default_window=window,
                 )
         pct = 100 * reading.ctx / window if window else 0.0
-        if pct >= threshold:
+        over_tokens = token_threshold is not None and reading.ctx >= token_threshold
+        if pct >= threshold or over_tokens:
             pressures.append((reading.session, pct))
     return pressures
 
@@ -1582,6 +1589,7 @@ def run_once(
     context_reader: Callable[[], Sequence[ContextReading]] = lambda: (),
     context_pressure_threshold: float = DEFAULT_CONTEXT_PRESSURE_THRESHOLD,
     context_pressure_ttl_s: float = DEFAULT_CONTEXT_PRESSURE_TTL_S,
+    context_pressure_tokens: int | None = DEFAULT_CONTEXT_PRESSURE_TOKENS,
     channel_poster: Callable[[int, str, str], ChannelOutcome] = post_channel_event,
     channel_secret: str | None = None,
     queued_escalated: set[str] | None = None,
@@ -1619,6 +1627,8 @@ def run_once(
             no context-pressure behavior at all.
         context_pressure_threshold: Percent threshold for the master nudge.
         context_pressure_ttl_s: Suppression TTL for the context-pressure nudge.
+        context_pressure_tokens: Absolute token threshold for the same nudge
+            (FRE-1765); whichever threshold is crossed first fires it.
         channel_poster: Delivers a channel-mode trigger, a worker's (FRE-872,
             ADR-0116) or master's (FRE-1555). Injectable for tests.
         channel_secret: The gateway-side shared secret for channel delivery
@@ -1967,14 +1977,25 @@ def run_once(
                     owner_notifier=tick_owner_notifier,
                 )
 
-    for session, pct in context_pressure(context_reader(), context_pressure_threshold):
-        logger.info("context_pressure", trace_id=trace_id, session=session, pct=round(pct, 1))
+    readings = list(context_reader())
+    ctx_by_session = {r.session: r.ctx for r in readings}
+    for session, pct in context_pressure(
+        readings, context_pressure_threshold, context_pressure_tokens
+    ):
+        tokens = ctx_by_session[session]
+        logger.info(
+            "context_pressure",
+            trace_id=trace_id,
+            session=session,
+            pct=round(pct, 1),
+            tokens=tokens,
+        )
         if not execute:
             continue
         key = f"ctxpressure:{session}"
         if _suppressed(state, key, now, context_pressure_ttl_s):
             continue
-        command = _CONTEXT_PRESSURE_NUDGE.format(pct=round(pct))
+        command = _CONTEXT_PRESSURE_NUDGE.format(pct=round(pct), tokens=tokens)
         tick_ledger, record_outcome = trigger_ledger.record_pending(
             tick_ledger,
             event_id=key,
@@ -2070,6 +2091,29 @@ def _context_pressure_threshold_default() -> float:
         return DEFAULT_CONTEXT_PRESSURE_THRESHOLD
 
 
+def _context_pressure_tokens_default() -> int:
+    """Resolve the ``--context-pressure-tokens`` CLI default, never raising (FRE-1765).
+
+    Same fallback contract as ``_context_pressure_threshold_default``.
+
+    Returns:
+        The parsed ``AGENT_CONTEXT_PRESSURE_TOKENS``, or
+        ``DEFAULT_CONTEXT_PRESSURE_TOKENS`` if unset or not an integer.
+    """
+    raw = os.environ.get("AGENT_CONTEXT_PRESSURE_TOKENS")
+    if raw is None:
+        return DEFAULT_CONTEXT_PRESSURE_TOKENS
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"warning: AGENT_CONTEXT_PRESSURE_TOKENS={raw!r} is not an integer; "
+            f"falling back to {DEFAULT_CONTEXT_PRESSURE_TOKENS}",
+            file=sys.stderr,
+        )
+        return DEFAULT_CONTEXT_PRESSURE_TOKENS
+
+
 def _master_context_reader() -> list[ContextReading]:
     """Read master's live context usage in-process (FRE-848; no subprocess wrapper).
 
@@ -2158,6 +2202,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "(env AGENT_CONTEXT_PRESSURE_THRESHOLD, default 70).",
     )
     parser.add_argument(
+        "--context-pressure-tokens",
+        type=int,
+        default=_context_pressure_tokens_default(),
+        help="Absolute context-token threshold for the same nudge; whichever of this "
+        "and the percent threshold is crossed first fires it "
+        "(env AGENT_CONTEXT_PRESSURE_TOKENS, default 200000).",
+    )
+    parser.add_argument(
         "--queued-escalation-timeout",
         type=float,
         default=DEFAULT_QUEUED_ESCALATION_S,
@@ -2224,6 +2276,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ledger_persist=lambda lg: trigger_ledger.save_ledger(ledger_path, lg),
             context_reader=_master_context_reader,
             context_pressure_threshold=args.context_pressure_threshold,
+            context_pressure_tokens=args.context_pressure_tokens,
             channel_secret=channel_secret,
             queued_escalated=queued_escalated,
             queued_escalation_s=args.queued_escalation_timeout,

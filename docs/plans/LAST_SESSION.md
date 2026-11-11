@@ -1,60 +1,52 @@
-# Last session — master, to 2026-11-08
+# Last session — master, 2026-11-08 to 2026-11-11
 
 ## Doing / discussing  (≤5 sentences)
-Master delivered the ADR-0159 development agent, one ticket at a time. The last two build tickets
-are with the build seats. The gate on each one is the normal gate, with `/code-review high` on the
-ticket. The owner also asked about plugin and skill versions. Master answered, and the owner did
-not yet ask for an update.
+Master looked for the cause of the false claims in Seshat's answers. The owner said a misread is a
+model problem, so master ran a reading test (7 answers × 3 runs) on qwen3.8-flash-next, GLM-5.3 and
+two engram tables of qwen. The results and their limits are on FRE-1756. A Q8_0 engram arm was
+running at the reset, and `slm_server` waits for master before it tests a new llama.cpp build.
 
 ## What was decided and why
-- **The dev-agent supervisor stays off on purpose.** `AGENT_DEV_AGENT_SUPERVISOR_ENABLED` is unset.
-  Each deploy check expects 0 `dev_job_supervisor` log lines. Do not enable it as part of a ticket
-  deploy. The first real jobs come with the owner's approval card and the paid evaluation.
-- **The GitHub organization uses the Free plan.** ADR-0159 D8.2 uses no branch rules and no GitHub
-  Actions, so a paid plan adds nothing. The VPS token cannot read the plan, so master did not
-  confirm the plan from the API.
-- **The App has three permissions only:** Administration write, Contents write, Metadata read.
-  The FRE-1685 plan step and a live probe confirmed that these three cover every call.
-- **The embedder backup uses the same model on Scaleway.** Scaleway rejects the OVH casing of the
-  model id with a 422, so the config guard compares ids without case. Do not "fix" the lower-case
-  id in `.env`. The measured cross-provider agreement is on FRE-1750.
-- **Three small FRE-1750 items are known and not ticketed**, because the owner does not want
-  over-ticketing: the rate equals the OVH rate, the Scaleway URL is duplicated, and an http endpoint
-  is not refused.
-- **Calendar credential.** The private iCal address is read-only, so it serves only the read side
-  of FRE-1747. For writes, master recommended a Google service account that the owner shares only
-  the Seshat calendar with. The adrs seat and the owner decide at the design step.
-- **A diff that is escalated always needs `/code-review high` before the merge.** Two PRs arrived
-  at the gate before the result existed. Master held both and sent no bounce, because the seat had
-  already started the review. The next trigger, at the fix commit, carried the result.
+- **The cause is split.** qwen makes about 2 to 3.5 times as many false claims as GLM on the same
+  sources. Flattened tool text defeats both models. 4 of the original misreads were chance slips.
+- **Score every arm in one blind pass.** Two reader passes counted at different strictness. Only a
+  comparison inside one pass is valid. That is why the Q8_0 arm needs a final pass of all four arms.
+- **The owner kept the Q5_1 engram table** ("the model is the same"). It showed no measurable gain.
+  The IQ4_NL shard stays on the Mac as the rollback.
+- **FRE-1760 is one ticket for all lost structure** (owner "Option 2"): SearXNG line breaks,
+  `fetch_url` JSON arrays, `fetch_url` HTML tables, and the SearXNG update. Its AC-6 reruns the
+  reading test after the deploy.
+- **The 2026-11-08 replay excluded self-questions.** The owner named Seshat's statements about
+  itself as the main failure, and the test did not cover them. Memory holds the lesson.
+- **A model binding change is the owner's decision.** Master recommended GLM-5.3 from the picker
+  for web questions. The owner has not decided.
 
 ## Corrections from this session
-- Master stated the plan of the organization before it checked the plan. Master then corrected the
-  ticket comment.
-- Master loaded `.env` into a shell to run a script. The shell broke some values. The settings
-  loader reads `.env` itself, so no sourcing is needed.
-- Master ran `scripts/verify_dev_agent_github.py` a second time only to read the top of its output.
-  Each run creates one private probe repo, and v0 deletes none. Save the output of the first run.
+- Master stated "17 claims, 11 unconfirmed". The data held 12 unconfirmed. Corrected on FRE-1756.
+- `docker logs … 2>/dev/null` hid the gateway log, because structlog writes to stderr. Use `2>&1`
+  into a file. Memory holds this.
+- The first qwen arm hit HTTP 524: a long prompt with no streaming passes the 100 s Cloudflare limit.
+  The driver now streams every local call.
 
 ## Worktrees — anything special
-- `adrs`, `explore` and `agent-ad5db2001c2a5c5f9` are on old branches. Master did not touch them.
+- None changed by master.
 
 ## Answers for the fresh start
-- **`.env` backups.** `.env.bak-fre1685` and `.env.bak-fre1750` hold secrets and are ignored by git.
-  They are safe to delete once the owner agrees.
-- **Before the paid evaluation (FRE-1689):** add the Scaleway catalog entry for the chat model,
-  check the DeepSeek catalog id, and get the owner's decision on the weekly `_total` cap. A deploy
-  grant is never a budget grant. The run also needs a preflight, the owner's room confirmation and
-  a recorded go.
-- **Awaiting Deploy holds more than 10 old tickets.** Master offered to go through them, and the
-  owner did not answer. They block no stream. FRE-1724 waits for the owner's AC-5 check in the PWA.
-- **A startup warning for a settings override with no audit row** is an open owner decision. See
-  the master comment of 2026-11-02 on FRE-1724.
-- **Dependabot:** one medium alert is open, `minimatch` in `seshat-pwa/package-lock.json`. It
-  appeared on 2026-11-07. It is not triaged.
-- **Pending updates.** `security-guidance` has an update, 2.0.17 to 2.0.18. Master recommended that
-  update and a pick-up at each session's next normal restart. Claude Code also shows an installed
-  update that waits for a restart. Restart no seat in the middle of a ticket.
-- **Owner-pending:** FRE-1742 acceptance, FRE-1693, FRE-1725, FRE-1726, and the design steps of
-  FRE-1747 and FRE-1748. The FRE-1745 AC-5 reads go as comments on that Done ticket. The first
-  weekly check of FRE-1741 is on 2026-11-12.
+- **In flight at the reset: the Q8_0 arm.** Driver: `~/.cache/seshat-replay/glmtest/driver.py`.
+  Run files: `glmtest/runs/q80_*.json`, 21 expected. If fewer, resume with
+  `uv run python ~/.cache/seshat-replay/glmtest/driver.py q80 3 A008 A015 A022 A027 A045 A050 A051`
+  from `/opt/seshat` (it skips files that exist). Free calls, but only while :8502 serves Q8_0.
+- **Then send `slm_server` the free message** (`bridge:session_015csQHYjLLkJLhZGskjvKGM`). Its
+  build test (llama.cpp f3b407ca1) runs on Q5_1 with b12138 as rollback. It reports the build string.
+- **Then the final blind pass:** build a new blind set of all 84 run files (pattern in
+  `glmtest/pass2/`), two readers (15 facts, and all false claims), unblind, and post on FRE-1756.
+- **Then the owner's choice of table** (Q5_1 or Q8_0). `slm_server` asks the owner after master's run.
+- **Approved paid checks, not run yet** (owner "All approved", 2026-11-11, recorded on FRE-1760):
+  one Exa and one Brave call (do they return line breaks?), and one call per Perplexity model name
+  (`sonar`, `sonar-reasoning-pro`, `sonar-deep-research`). A few cents. The FRE-1760 design waits
+  for the Exa and Brave result.
+- **The model calls two tools that do not exist** (`read_file` 180 times, `system_metrics_snapshot`
+  60 times, FRE-1759 F9). Nobody checked why. Not ticketed.
+- **Private data stays private.** `~/.cache/seshat-replay/` (mode 700) holds owner questions and
+  answers. Tickets and the repo hold ids and counts only.
+- **FRE-1747** waits for the owner's Google service-account setup (owner: "in progress").

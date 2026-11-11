@@ -38,7 +38,7 @@ services:
   # Service name MUST be `elasticsearch` — hardcoded in filebeat.yml's
   # output.elasticsearch.hosts.
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.25
     container_name: fre1243-harness-es
     environment:
       discovery.type: single-node

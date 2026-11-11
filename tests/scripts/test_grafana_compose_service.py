@@ -53,11 +53,12 @@ class TestGrafanaComposeServiceSource:
 
     @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
     def test_image_is_pinned_patched_version(self, compose_file: str) -> None:
-        """13.1.3, not 13.1.1: the bundled Tempo datasource plugin in 13.1.1 reports version
+        """13.1.10, not 13.1.1: the bundled Tempo datasource plugin in 13.1.1 reports version
         13.1.2, one patch behind the fix for GL-Vuln VUL-2026-0062 (path traversal) — verified
-        live by inspecting the actual pinned image's plugin.json.
+        live by inspecting the actual pinned image's plugin.json. The pin was 13.1.3 until
+        FRE-1761 moved it to 13.1.10, a later patch of the same line.
         """
-        assert self._grafana_service(compose_file)["image"] == "grafana/grafana:13.1.3"
+        assert self._grafana_service(compose_file)["image"] == "grafana/grafana:13.1.10"
 
     def test_dev_anonymous_viewer_access_configured(self) -> None:
         """The local dev stack is not tunnel-exposed, so it stays anonymous Viewer."""

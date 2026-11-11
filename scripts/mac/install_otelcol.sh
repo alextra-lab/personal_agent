@@ -2,9 +2,9 @@
 # Install the Mac-local OTel Collector and its launchd unit (FRE-1224).
 #
 # Homebrew carries no collector formula (`otel-cli` is a different tool), so the pinned upstream
-# release tarball is fetched and checksum-verified here. The version is pinned to the SAME build as
-# the VPS Collector in docker-compose.yml, and to the core distribution — not contrib, not a vendor
-# distro (ADR-0129 D5).
+# release tarball is fetched and checksum-verified here. The version is pinned to the core
+# distribution — not contrib, not a vendor distro (ADR-0129 D5). It matched the VPS Collector in
+# docker-compose.yml until FRE-1761 moved the VPS Collector to 0.165.0. The owner updates this pin.
 #
 # Idempotent: safe to re-run. Re-running after editing the config is in fact how you reload it.
 

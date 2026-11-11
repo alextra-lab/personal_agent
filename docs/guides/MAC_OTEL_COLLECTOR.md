@@ -52,8 +52,8 @@ $EDITOR ~/.config/seshat/otlp-collector.env      # fill in the three values
 scripts/mac/install_otelcol.sh
 ```
 
-The installer fetches the pinned `otelcol` 0.158.0 core build — the same version and distribution as
-the VPS Collector — verifies its SHA-256 **before** extracting, installs it to `~/.local/bin`,
+The installer fetches the pinned `otelcol` 0.158.0 core build — the same distribution as the VPS Collector,
+which runs 0.165.0 since FRE-1761 — verifies its SHA-256 **before** extracting, installs it to `~/.local/bin`,
 **copies the wrapper and collector config into `~/.local/libexec/seshat`**, renders the launchd unit
 from `config/otel/com.seshat.otelcol.plist.template` pointing at those copies, and bootstraps it.
 

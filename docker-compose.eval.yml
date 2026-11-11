@@ -122,7 +122,7 @@ services:
 
   # Neo4j (eval) — bolt 7689 / HTTP 7476 on host, separate volume
   neo4j-eval:
-    image: neo4j:5.26-community
+    image: neo4j:5.26.33-community
     container_name: cloud-sim-neo4j-eval
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
@@ -156,7 +156,7 @@ services:
 
   # Elasticsearch (eval) — port 9202 on host, separate volume
   elasticsearch-eval:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.25
     container_name: cloud-sim-elasticsearch-eval
     environment:
       - discovery.type=single-node
@@ -196,7 +196,7 @@ services:
   # `stream:request.captured` sat at 1923 both before and after an eval turn that
   # demonstrably published, while eval's own stream went to 1.
   redis-eval:
-    image: redis:7-alpine
+    image: redis:7.4.12-alpine
     container_name: cloud-sim-redis-eval
     volumes:
       - seshat_redis_eval:/data

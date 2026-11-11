@@ -19,6 +19,7 @@ from personal_agent.grounding.source_registry import (
     TYPED_RETRIEVAL_TOOLS,
     url_entries,
 )
+from personal_agent.security import EgressBlockedError
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools import weather as weather_module
 from personal_agent.tools.weather import WeatherError, weather_executor, weather_tool
@@ -282,6 +283,42 @@ async def test_http_400_is_not_retryable(monkeypatch: pytest.MonkeyPatch) -> Non
     assert info.value.code == "http_error"
     assert "bad" in info.value.message
     assert info.value.retryable is False
+
+
+def _raise(exc_type: type[Exception]) -> Handler:
+    """Build a handler that raises ``exc_type`` for the request it gets."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if exc_type is EgressBlockedError:
+            raise EgressBlockedError(request, "blocklisted", "open-meteo.com")
+        if issubclass(exc_type, httpx.RequestError):
+            raise exc_type("boom", request=request)
+        raise exc_type("boom")
+
+    return handler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "code", "retryable"),
+    [
+        (lambda r: httpx.Response(200, text="<html>not json</html>"), "weather_failed", True),
+        (lambda r: httpx.Response(200, json=[1, 2]), "weather_failed", True),
+        (_raise(EgressBlockedError), "blocked_by_domain_guard", False),
+        (_raise(httpx.ConnectError), "connect_failed", True),
+        (_raise(RuntimeError), "weather_failed", False),
+    ],
+    ids=["not_json", "not_object", "blocked", "connect", "unexpected"],
+)
+async def test_other_failures_are_typed(
+    monkeypatch: pytest.MonkeyPatch, handler: Handler, code: str, retryable: bool
+) -> None:
+    """AC-4: a bad body, a guard block, a connect failure and a crash are typed failures."""
+    _install(monkeypatch, handler)
+    with pytest.raises(WeatherError) as info:
+        await weather_executor(latitude=45.0, longitude=4.0, ctx=_CTX)
+    assert info.value.code == code
+    assert info.value.retryable is retryable
 
 
 @pytest.mark.asyncio

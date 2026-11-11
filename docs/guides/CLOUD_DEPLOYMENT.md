@@ -197,7 +197,6 @@ File: `docker-compose.cloud.yml`
 | `otel-collector` | otel/opentelemetry-collector:0.165.0 | 4317/4318 | 512 MB | Trace and metric intake |
 | `grafana` | grafana/grafana:13.1.10 | 3000 | 512 MB | Dashboards |
 | `redis` | redis:7.4.12-alpine | 6379 | 128 MB | Event bus (Redis Streams) |
-| `searxng` | searxng/searxng (pinned tag) | 8080 | 256 MB | Web search backend |
 | `seshat-gateway` | built from `Dockerfile.gateway` | 9001 | 2048 MB | Full service app (FastAPI) |
 | `seshat-pwa` | built from `Dockerfile.pwa` | 3000 | 256 MB | Next.js PWA |
 | `caddy` | caddy:2-alpine | 80/443 | 64 MB | Reverse proxy |

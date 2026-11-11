@@ -1,9 +1,9 @@
-"""Record the fetch and search fixtures (ADR-0158 D5.2).
+"""Record the fetch fixtures and read the recorded ones (ADR-0158 D5.2).
 
-Both steps run the production code: ``download_text`` (``tools/fetch.py``) for pages and
-``build_search_params`` (``tools/web.py``) for searches (D1.8). Each step appends one JSON line
-per item to a gzip file under the run directory and skips items already recorded, so a rerun
-resumes.
+The fetch step runs the production ``download_text`` (``tools/fetch.py``). It appends one JSON line
+per page to a gzip file under the run directory and skips pages already recorded, so a rerun
+resumes. The search step replayed searches through SearXNG instances; FRE-1767 removed it with
+SearXNG (FRE-1763), and the recorded ``search_<L>.jsonl.gz`` files are only read here.
 """
 
 from __future__ import annotations
@@ -12,31 +12,19 @@ import asyncio
 import gzip
 import json
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-import httpx
-from scripts.eval.fre1641_anchor_retention.searxng import PORTS
-
-from personal_agent.config import settings
 from personal_agent.tools.fetch import FetchError, download_text
-from personal_agent.tools.web import build_search_params
 
 #: D3.2's ranking bound: the fixture keeps up to this many characters of extracted text.
 FIXTURE_MAX_CHARS = 200_000
-#: The SearXNG executor's default language when these searches were logged (D5.2). FRE-1766
-#: moved web_search to Exa and Brave, which take no language argument, so it is fixed here.
-DEFAULT_LANGUAGE = "en"
 _TRACE_ID = "fre1641-harness"
 
 
 #: The keyed vendor engines. One of them unresponsive means the replay did not see what production
 #: sees: on 2026-10-21 run r1, both ran out of credit mid-run and SearXNG suspended them.
 VENDOR_ENGINES = frozenset({"exa", "braveapi"})
-
-
-class VendorRefused(Exception):
-    """A vendor engine refused access (for example, no credit left). The replay stops."""
 
 
 def vendor_failures(data: object) -> list[str]:
@@ -143,112 +131,3 @@ async def record_fetch(urls: Iterable[str], out: Path, concurrency: int = 8) -> 
 
     await asyncio.gather(*(one(u) for u in todo))
     return len(todo)
-
-
-async def search_one(
-    client: httpx.AsyncClient, port: int, replay: Mapping[str, object]
-) -> dict[str, object]:
-    """Replay one search through one harness instance.
-
-    Args:
-        client: The HTTP client.
-        port: The instance's host port.
-        replay: The replay (``query``, ``categories``, ``engines``, ``time_range``).
-
-    Returns:
-        ``replay_id``, ``data`` (the raw SearXNG JSON, or ``None``), ``error``, ``attempts`` and
-        ``wall_s``.
-    """
-    params = build_search_params(
-        str(replay["query"]),
-        str(replay["categories"]),
-        str(replay["engines"]) if replay.get("engines") else None,
-        DEFAULT_LANGUAGE,
-        str(replay["time_range"]) if replay.get("time_range") else None,
-    )
-    t0 = time.monotonic()
-    error: str | None = None
-    for attempt in (1, 2):
-        try:
-            r = await client.get(
-                f"http://127.0.0.1:{port}/search",
-                params=params,
-                headers={"X-Forwarded-For": "127.0.0.1"},
-                timeout=settings.searxng_timeout_seconds,
-            )
-            r.raise_for_status()
-            return {
-                "replay_id": replay["replay_id"],
-                "data": r.json(),
-                "error": None,
-                "attempts": attempt,
-                "wall_s": round(time.monotonic() - t0, 3),
-            }
-        except (httpx.HTTPError, ValueError) as exc:
-            error = f"{type(exc).__name__}: {str(exc)[:200]}"
-            await asyncio.sleep(5.0)
-    return {
-        "replay_id": replay["replay_id"],
-        "data": None,
-        "error": error,
-        "attempts": 2,
-        "wall_s": round(time.monotonic() - t0, 3),
-    }
-
-
-async def record_search(
-    replays: Sequence[Mapping[str, object]], run_dir: Path, per_instance: int = 2
-) -> int:
-    """Replay every search through every instance, skipping rows already recorded.
-
-    Args:
-        replays: The replays.
-        run_dir: The run directory. Instance ``L`` writes ``search_<L>.jsonl.gz``.
-        per_instance: Searches in flight per instance.
-
-    Returns:
-        The number of rows written.
-
-    Raises:
-        VendorRefused: If a vendor engine refused access. The rows recorded so far are kept, and a
-            rerun replays only the rows that are not usable.
-    """
-    written = 0
-    lock = asyncio.Lock()
-    # A vendor that refuses access (no credit) stops every instance, so no call is wasted.
-    stop = asyncio.Event()
-    reasons: set[str] = set()
-    async with httpx.AsyncClient() as client:
-
-        async def instance(length: int, port: int) -> int:
-            out = run_dir / f"search_{length}.jsonl.gz"
-            done = {str(r["replay_id"]) for r in read_jsonl_gz(out) if usable(r)}
-            todo = [r for r in replays if str(r["replay_id"]) not in done]
-            sem = asyncio.Semaphore(per_instance)
-
-            async def one(replay: Mapping[str, object]) -> None:
-                async with sem:
-                    if stop.is_set():
-                        return
-                    row = await search_one(client, port, replay)
-                async with lock:
-                    _append(out, row)
-                refused = [f for f in vendor_failures(row["data"]) if "access denied" in f]
-                if refused:
-                    stop.set()
-                    reasons.update(refused)
-                n = (
-                    len((row["data"] or {}).get("results") or [])
-                    if isinstance(row["data"], dict)
-                    else 0
-                )
-                print(f"search {length} {row['replay_id']} {n} {row['error'] or ''}", flush=True)
-
-            await asyncio.gather(*(one(r) for r in todo))
-            return len(todo)
-
-        counts = await asyncio.gather(*(instance(length, port) for length, port in PORTS.items()))
-        written = sum(counts)
-    if stop.is_set():
-        raise VendorRefused(f"stopped after a vendor refused access: {sorted(reasons)}")
-    return written

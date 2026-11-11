@@ -1,7 +1,7 @@
 # SearXNG Web Search Tool Spec
 
 **Date**: 2026-03-27
-**Status**: Implemented
+**Status**: Superseded — FRE-1763 removed SearXNG; `web_search` calls Exa and Brave directly (FRE-1766)
 **Phase**: Infrastructure + Native Tool
 **Related**: ADR-0034 (SearXNG self-hosted web search), ADR-0026 (search_memory pattern), ADR-0011 (MCP gateway)
 

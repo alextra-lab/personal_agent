@@ -259,7 +259,7 @@ def test_the_network_must_be_the_one_network_all_substrates_share(
         gateway.up(tmp_path, HOST_ENV, port=9012)
 
 
-def test_up_stops_if_the_production_searxng_container_changed(
+def test_up_stops_if_the_production_guard_container_changed(
     docker: FakeDocker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = docker._dispatch
@@ -271,7 +271,7 @@ def test_up_stops_if_the_production_searxng_container_changed(
         return out
 
     monkeypatch.setattr(docker, "_dispatch", recreate_after_run)
-    with pytest.raises(SystemExit, match="cloud-sim-searxng"):
+    with pytest.raises(SystemExit, match="cloud-sim-redis"):
         gateway.up(tmp_path, HOST_ENV, port=9012)
 
 

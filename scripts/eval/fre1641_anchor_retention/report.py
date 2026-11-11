@@ -1,7 +1,8 @@
 """Score the recorded fixtures and write the report (ADR-0158 D5, D6.1, D4; FRE-1641 AC-2 to AC-8).
 
-Offline: reads only the run directory. The search form is the production shaping
-(``shape_search_response``) rendered by the production renderer (``render_content``). The fetch
+Offline: reads only the run directory. The search form is the retired SearXNG shaping
+(``recorded_search.shape_search_response``, the production form when the runs were recorded)
+rendered by the production renderer (``render_content``). The fetch
 form is the production passage module (``split_passages``, ``select_within_budget``,
 ``focus_matched``), with D3.3's fallback: when no returned passage holds a focus term, the tool
 returns the cut from the top at the default ``max_chars``.
@@ -19,6 +20,11 @@ from pathlib import Path
 from scripts.eval.fre1641_anchor_retention.anchors import Anchor, TextIndex
 from scripts.eval.fre1641_anchor_retention.rank import ARMS
 from scripts.eval.fre1641_anchor_retention.record import as_list, read_jsonl_gz, usable
+from scripts.eval.fre1641_anchor_retention.recorded_search import (
+    FULL_FORM_LENGTH,
+    RECORDED_LENGTHS,
+    shape_search_response,
+)
 from scripts.eval.fre1641_anchor_retention.score import (
     MIN_CLASS_SUPPORTED,
     MIN_FETCH_SUPPORTED,
@@ -37,7 +43,6 @@ from scripts.eval.fre1641_anchor_retention.score import (
     support_windows,
     url_key,
 )
-from scripts.eval.fre1641_anchor_retention.searxng import FULL_FORM_LENGTH, PORTS
 
 from personal_agent.tools.contract import render_content
 from personal_agent.tools.fetch import _DEFAULT_MAX_CHARS
@@ -47,7 +52,7 @@ from personal_agent.tools.passages import (
     select_within_budget,
     split_passages,
 )
-from personal_agent.tools.web import shape_search_response, web_search_tool
+from personal_agent.tools.web import web_search_tool
 
 GRID_LENGTHS = (500, 800, 1200, 1600)
 GRID_COUNTS = (5, 10)
@@ -291,7 +296,7 @@ class _Search:
         self.data: dict[int, dict[str, Mapping[str, object]]] = {}
         self.attempts: dict[int, int] = {}
         self.errors: dict[int, int] = {}
-        for length in PORTS:
+        for length in RECORDED_LENGTHS:
             rows = read_jsonl_gz(run_dir / f"search_{length}.jsonl.gz")
             self.attempts[length] = sum(int(str(r.get("attempts", 1))) for r in rows)
             # A rerun appends rows; a usable row wins over an earlier unusable one.
@@ -437,7 +442,9 @@ def analyze(run_dir: Path, usd_per_token: float) -> dict[str, object]:
 
     replays = {str(r["replay_id"]): r for r in facts["replays"]}
     exa = brave = 0
-    search_rows = {length: read_jsonl_gz(run_dir / f"search_{length}.jsonl.gz") for length in PORTS}
+    search_rows = {
+        length: read_jsonl_gz(run_dir / f"search_{length}.jsonl.gz") for length in RECORDED_LENGTHS
+    }
     for rows in search_rows.values():
         for r in rows:
             e, b = vendor_calls(replays[str(r["replay_id"])])

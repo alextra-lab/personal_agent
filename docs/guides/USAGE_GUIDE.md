@@ -20,7 +20,7 @@ This guide shows how to use the Personal Agent for common tasks. Each fact names
 make up
 ```
 
-This starts the services in `docker-compose.yml`: PostgreSQL, Elasticsearch, Neo4j, SearXNG, Tempo, the OpenTelemetry collector, Grafana and Redis. In the `local` environment, the target also runs `scripts/init-services.sh`. Source: `Makefile` (targets `up` and `help`), `docker-compose.yml`.
+This starts the services in `docker-compose.yml`: PostgreSQL, Elasticsearch, Neo4j, Tempo, the OpenTelemetry collector, Grafana and Redis. In the `local` environment, the target also runs `scripts/init-services.sh`. Source: `Makefile` (targets `up` and `help`), `docker-compose.yml`.
 
 ### 2. Start the local model server
 

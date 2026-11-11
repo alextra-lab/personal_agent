@@ -50,7 +50,7 @@ uv run python -m scripts.eval.fre1728.stub_stack down
 
 ## Preflight for the paid pilot (AC-5)
 
-Master runs steps 1 to 4 from `/opt/seshat`. Never run the eval compose from a worktree: it recreates production's searxng.
+Master runs steps 1 to 4 from `/opt/seshat`. Never run the eval compose from a worktree: it can recreate production containers (FRE-1542).
 
 ### 1. Rebuild and repair the eval stack
 
@@ -82,7 +82,7 @@ plan=$(docker compose $F up -d --no-deps --dry-run seshat-gateway-control 2>&1) 
   && printf '%s\n' "$plan" | uv run python -m scripts.eval.compose_plan_guard \
   && docker compose $F up -d --no-deps --build seshat-gateway-control
 docker stop cloud-sim-seshat-gateway-treatment
-docker inspect cloud-sim-searxng --format '{{.State.StartedAt}}'   # must not change
+docker inspect cloud-sim-redis --format '{{.State.StartedAt}}'   # must not change
 ```
 
 **Check the Voyage key.** The relevance gate trusts only the calibrated reranker. Without the key, every memory turn says "records could not be reached" (measured on the stub, 2026-11-02), and each one would rank as a false retrieval defect. The overlay passes the key. In the preflight task, read the primary's request and confirm a `reranker_applied` event with provider `voyage`.
@@ -113,7 +113,7 @@ Production has no row in `settings_overrides` or `user_constraint_preferences` (
 | Anthropic | Span extraction, summaries | Yes | About $8 |
 | OVH | Embeddings | Yes | Under $1 |
 | Voyage | Reranker | Yes | Under $1 |
-| Exa, Brave | `web_search`, through production's searxng | **Yes** | About 330 calls, $2 |
+| Exa, Brave | `web_search`, direct calls with production's keys | **Yes** | About 330 calls, $2 |
 
 FRE-1641 used up the Exa and Brave credit that production shares, so check those two first. Stop the run on any vendor credit or quota error.
 

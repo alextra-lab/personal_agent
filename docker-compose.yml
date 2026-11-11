@@ -55,23 +55,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # SearXNG metasearch engine for private web search (ADR-0034)
-  searxng:
-    # Same tag as docker-compose.cloud.yml (FRE-1762); a test fails if the two differ.
-    image: searxng/searxng:2026.11.11-248b8ffc0
-    environment:
-      - SEARXNG_BASE_URL=http://localhost:8888
-    volumes:
-      - ./docker/searxng:/etc/searxng:rw
-    ports:
-      - "8888:8080"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-
   # Tempo 2.10.10 — trace storage/query backend (ADR-0129 D6). FRE-1072's own fixture-injection
   # tests keep targeting Tempo's OTLP receiver directly (host 4327/4328 below); the otel-collector
   # service further down is the application's own egress path (ADR-0129 D5, FRE-1070), on

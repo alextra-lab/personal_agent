@@ -1,6 +1,6 @@
 # ADR-0034: SearXNG Self-Hosted Web Search Integration
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-0160](ADR-0160-web-search-direct-exa-and-brave-without-searxng.md) (2026-11-11)
 **Date**: 2026-03-27
 **Deciders**: Project owner
 **Extends**: ADR-0011 (MCP Gateway Integration), ADR-0026 (search_memory native tool)

@@ -500,32 +500,13 @@ class AppConfig(BaseSettings):
         ),
     )
 
-    # SearXNG web search (ADR-0034)
-    searxng_base_url: str = Field(
-        default="http://localhost:8888",
-        description="SearXNG instance base URL",
-    )
-    searxng_timeout_seconds: int = Field(
-        default=12,
-        ge=1,
-        description="Timeout for SearXNG search requests",
-    )
     # Native weather tool on Open-Meteo (FRE-1769)
     weather_timeout_seconds: int = Field(
         default=10,
         ge=1,
         description="Timeout for each Open-Meteo request of the weather tool (geocoding, forecast)",
     )
-    searxng_default_categories: str = Field(
-        default="general",
-        description="Default SearXNG categories (comma-separated)",
-    )
-    searxng_max_results: int = Field(
-        default=10,
-        ge=1,
-        le=50,
-        description="Maximum results to return per search",
-    )
+    # Web search vendor prices (FRE-1656)
     brave_search_cost_per_call_usd: float = Field(
         default=0.005,
         ge=0,
@@ -545,7 +526,7 @@ class AppConfig(BaseSettings):
     )
 
     # Direct web search providers (FRE-1766): web_search calls Exa and Brave LLM Context
-    # in parallel, without SearXNG.
+    # in parallel.
     exa_api_key: SecretStr | None = Field(
         default=None,
         description="Exa API key for web_search (FRE-1766). None leaves Exa out of every search.",

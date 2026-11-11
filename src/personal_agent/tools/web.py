@@ -1,10 +1,8 @@
 """Native web search tool: Exa and Brave LLM Context, called directly (FRE-1766).
 
 ``web_search`` sends each query to both providers in parallel and merges the results here.
-It used to go through the self-hosted SearXNG instance (ADR-0034), which stripped line
-breaks and markdown tables from the text. SearXNG stays deployed until FRE-1763 T2 removes
-it; :func:`build_search_params` and :func:`shape_search_response` remain for the FRE-1641
-harness, which replays recorded SearXNG searches.
+Both are paid, third-party APIs: each search bills both vendors and sends them the query text.
+It used to go through a self-hosted metasearch proxy (ADR-0034), removed by FRE-1763.
 """
 
 from __future__ import annotations
@@ -13,7 +11,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NoReturn
+from typing import Literal, NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -121,157 +119,6 @@ web_search_tool = ToolDefinition(
     max_result_tokens=25_000,
     truncation_next_action="Call web_search again with size='brief' or a narrower query.",
 )
-
-# ── SearXNG form, kept for the FRE-1641 harness until FRE-1763 T2 ─────────────
-
-
-def build_search_params(
-    query: str,
-    categories: str,
-    engines: str | None,
-    language: str,
-    time_range: str | None,
-) -> dict[str, str]:
-    """Build the SearXNG ``/search`` query parameters of one ``web_search`` call.
-
-    Used only by the FRE-1641 harness, which replays logged SearXNG searches (ADR-0158 D1.8).
-    ``web_search`` itself no longer calls SearXNG (FRE-1766); FRE-1763 T2 removes this.
-
-    Args:
-        query: Search query text, after the weather-prefix strip.
-        categories: Comma-separated SearXNG categories.
-        engines: Comma-separated engine names, or ``None``.
-        language: BCP-47 language code.
-        time_range: Time filter, or ``None``.
-
-    Returns:
-        The query parameters.
-    """
-    params: dict[str, str] = {
-        "q": query,
-        "format": "json",
-        "categories": categories,
-        "language": language,
-        "pageno": "1",
-    }
-    if engines:
-        params["engines"] = engines
-    if time_range:
-        params["time_range"] = time_range
-    return params
-
-
-def shape_search_response(
-    data: dict[str, Any],
-    *,
-    query: str,
-    categories: str,
-    engines: str | None,
-    max_results: int,
-) -> dict[str, Any]:
-    """Shape a raw SearXNG JSON response into the ``web_search`` result.
-
-    Used only by the FRE-1641 harness, which shapes recorded SearXNG responses (ADR-0158 D1.8).
-    ``web_search`` itself no longer calls SearXNG (FRE-1766); FRE-1763 T2 removes this.
-
-    Args:
-        data: The parsed SearXNG JSON response.
-        query: The query sent.
-        categories: The categories sent.
-        engines: The engines sent, or ``None``.
-        max_results: The number of results to keep (already clamped to 1-50).
-
-    Returns:
-        The ``web_search`` result dict.
-    """
-    # SearXNG's own `number_of_results` total has been observed to read 0 on a
-    # response whose `results` array held 20 real entries — it is independently
-    # untrustworthy and must never be used as the count. `result_count` below is
-    # always derived from `len(results)`.
-    results = [
-        {
-            "title": item.get("title", ""),
-            "url": item.get("url", ""),
-            "snippet": item.get("content", ""),
-            "engine": item.get("engine", ""),
-            "score": item.get("score"),
-        }
-        for item in (data.get("results") or [])[:max_results]
-    ]
-
-    # FRE-1339: SearXNG reports engines it suspended or that errored in the same
-    # response (`[engine_name, reason]` pairs) and we were discarding it — a
-    # collapsed engine pool then looked identical to a healthy one everywhere we
-    # look (result_count, HTTP status), while the surviving low-quality engines'
-    # junk filled the model's context. Surfacing it here, keyed on engine health
-    # rather than result_count, keeps a legitimately empty search for an obscure
-    # query (healthy engines, zero hits) from tripping this signal.
-    unresponsive_engines = [
-        {"engine": str(entry[0]), "reason": str(entry[1])}
-        for entry in (data.get("unresponsive_engines") or [])
-        if isinstance(entry, list | tuple) and len(entry) >= 2
-    ]
-    engines_contributed = sorted({r["engine"] for r in results if r["engine"]})
-    degraded_retrieval = bool(unresponsive_engines)
-
-    # Plugin answers (timezone, unit converter, calculator, openmeteo weather).
-    # These are returned in the top-level "answers" array rather than "results".
-    answers: list[dict[str, Any]] = []
-    for item in data.get("answers") or []:
-        engine = item.get("engine", "")
-        if engine == "openmeteo" or item.get("service") == "Open-meteo":
-            # Weather answer: surface the current conditions summary + location.
-            current = item.get("current", {})
-            location = current.get("location", {})
-            answers.append(
-                {
-                    "engine": engine,
-                    "type": "weather",
-                    "location": location.get("name", ""),
-                    "country": location.get("country_code", ""),
-                    "summary": current.get("summary", ""),
-                    "temperature": current.get("temperature", {}),
-                    "condition": current.get("condition", ""),
-                    "feels_like": current.get("feels_like", {}),
-                    "humidity": current.get("humidity", {}),
-                    "wind_speed": current.get("wind_speed", {}),
-                }
-            )
-        else:
-            text = item.get("answer")
-            if text:
-                answers.append({"engine": engine, "answer": text})
-
-    output: dict[str, Any] = {
-        "answers": answers,
-        "results": results,
-        "result_count": len(results),
-        "suggestions": data.get("suggestions", []),
-        "infoboxes": [
-            {
-                "title": ib.get("infobox", ""),
-                "content": ib.get("content", "")[:500],
-                "urls": [u.get("url") for u in ib.get("urls", [])[:3]],
-            }
-            for ib in (data.get("infoboxes") or [])[:2]
-        ],
-        "query": query,
-        "categories_used": categories,
-        "engines_used": engines,
-        "unresponsive_engines": unresponsive_engines,
-        "engines_contributed": engines_contributed,
-        "degraded_retrieval": degraded_retrieval,
-    }
-    if degraded_retrieval:
-        failed_names = ", ".join(e["engine"] for e in unresponsive_engines)
-        output["retrieval_warning"] = (
-            f"{len(unresponsive_engines)} engine(s) failed this search ({failed_names}); "
-            f"results came only from: {', '.join(engines_contributed) or 'no engine'}. "
-            "Treat this result set with caution — it may not be representative of what "
-            "a healthy search would return."
-        )
-    return output
-
 
 # ── Direct providers (FRE-1766) ─────────────────────────────────────────────
 

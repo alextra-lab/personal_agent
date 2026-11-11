@@ -62,7 +62,7 @@ holds the tool from its closed tool list, as any other tool.
 ```
 src/personal_agent/tools/
 ├── __init__.py          ← add import + registration here
-├── web.py               ← example: SearXNG web search
+├── web.py               ← example: web search (Exa and Brave, direct)
 ├── telemetry_query.py   ← example: allowlisted Elasticsearch + Tempo reads
 ├── perplexity.py        ← example: Perplexity AI queries
 ├── fetch.py             ← example: URL fetch + HTML→text

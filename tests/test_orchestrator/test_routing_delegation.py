@@ -111,7 +111,7 @@ class TestPromptConstants:
         """Tool-use prompt must reference web_search as primary and perplexity_query as fallback.
 
         ADR-0034 + FRE-254: mcp_perplexity_ask replaced by native perplexity_query tool.
-        web_search (SearXNG) is the primary search tool, perplexity_query is the fallback
+        web_search (Exa and Brave) is the primary search tool, perplexity_query is the fallback
         for synthesized answers with citations.
         """
         assert "web_search" in TOOL_USE_SYSTEM_PROMPT

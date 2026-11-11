@@ -482,7 +482,7 @@ async def test_fre1723_the_menu_shows_a_stored_preset_and_cap_after_a_reload(
 
 _TURN_SETTING = "setting.orchestrator_max_tool_iterations"
 _RESTART_SETTING = "setting.mode_evaluation_interval_seconds"
-_HIDDEN_SETTING = "setting.searxng_base_url"
+_HIDDEN_SETTING = "setting.tempo_url"
 _SENTINEL = "fre1724-sentinel-value"
 
 

@@ -45,13 +45,20 @@ from scripts.dispatch.tmux_target import exact_pane
 
 PROJECTS = os.path.expanduser("~/.claude/projects")
 DEFAULT_WINDOW = 1_000_000
-# The transcript has no window field, so map it from the model (confirmed via
-# /context: opus-4-8 = 1M, sonnet-5 = 1M, haiku-4.5 = 200k). ``--window``
-# overrides. An unmapped model falls back to DEFAULT_WINDOW.
+# The transcript has no window field, so map it from the model. ``--window``
+# overrides. An unmapped model falls back to DEFAULT_WINDOW, and the gating
+# watcher logs ``context_window_unknown_model`` once per model (FRE-1765).
+# Sources: opus-4-8 / sonnet-5 / haiku-4-5 confirmed via /context. The FRE-1765
+# entries come from https://platform.claude.com/docs/en/models/overview
+# (read 2026-11-11), which lists each current model at 1M tokens.
 MODEL_WINDOWS = {
     "claude-opus-4-8": 1_000_000,
     "claude-sonnet-5": 1_000_000,
     "claude-haiku-4-5": 200_000,
+    "claude-fable-5-2": 1_000_000,  # models/overview: Fable 5.2 = 1M
+    "claude-opus-5-5": 1_000_000,  # models/overview: Opus 5.5 = 1M
+    "claude-sonnet-5-5": 1_000_000,  # models/overview: Sonnet 5.5 = 1M
+    "claude-haiku-5-5": 1_000_000,  # models/overview: Haiku 5.5 = 1M
 }
 # Read only the transcript tail so a poll is ~O(1) regardless of file size;
 # large enough to contain the last main-chain usage across many recent turns.
@@ -63,7 +70,7 @@ UNKNOWN_LINE = "jsonl=NONE model=? ctx=0 window=0 pct=0.0 idle_s=-1 state=UNKNOW
 def _run(cmd: list[str]) -> str:
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
-    except (subprocess.SubprocessError, OSError):
+    except subprocess.SubprocessError, OSError:
         return ""
 
 

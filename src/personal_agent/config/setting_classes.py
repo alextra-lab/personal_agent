@@ -249,6 +249,7 @@ NEXT_TURN_SETTINGS: frozenset[str] = frozenset(
         "turn_observed_stream_maxlen",
         "upload_max_size_bytes",
         "version",
+        "weather_timeout_seconds",
         "web_search_monthly_budget_usd",
         "within_session_compression_enabled",
         "within_session_hard_threshold_ratio",

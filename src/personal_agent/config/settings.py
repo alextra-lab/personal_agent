@@ -510,6 +510,12 @@ class AppConfig(BaseSettings):
         ge=1,
         description="Timeout for SearXNG search requests",
     )
+    # Native weather tool on Open-Meteo (FRE-1769)
+    weather_timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        description="Timeout for each Open-Meteo request of the weather tool (geocoding, forecast)",
+    )
     searxng_default_categories: str = Field(
         default="general",
         description="Default SearXNG categories (comma-separated)",

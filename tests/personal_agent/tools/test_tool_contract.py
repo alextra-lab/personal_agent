@@ -50,6 +50,7 @@ EXPECTED_TOOLS = frozenset(
         "perplexity_query",
         "get_library_docs",
         "fetch_url",
+        "weather",  # FRE-1769
         "search_logs",
         "measure_model_latency",
         "create_linear_issue",

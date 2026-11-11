@@ -43,8 +43,9 @@ EVAL_SUBSTRATES = (
     "cloud-sim-elasticsearch-eval",
     "cloud-sim-redis-eval",
 )
-# A production container that the 2026-10-03 incident recreated. `up` proves that it did not change.
-PRODUCTION_GUARD = "cloud-sim-searxng"
+# A production container on the eval network. `up` proves that it did not change. The 2026-10-03 incident
+# recreated `cloud-sim-searxng`, which FRE-1767 removed; redis shares its network and project.
+PRODUCTION_GUARD = "cloud-sim-redis"
 DEFAULT_PORT = 9012
 # The eval deployment profile refuses to boot without these two secrets. The model is a stub, so the
 # probe passes an inert value and no cloud call can spend money.

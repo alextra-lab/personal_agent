@@ -1,23 +1,22 @@
-"""FRE-1641 / ADR-0158 T1: the harness guards, the code identity rule, and one scored run."""
+"""FRE-1641 / ADR-0158 T1: the harness guards and one scored run.
+
+The harness is retired (FRE-1767): the SearXNG instance guards and the shaping-identity rule
+went with SearXNG, and the scored run reads the recorded SearXNG form.
+"""
 
 from __future__ import annotations
 
-import ast
 import gzip
 import json
 from pathlib import Path
 
 import httpx
 import pytest
-import yaml
-from personal_agent.tools.passages import split_passages
-from scripts.eval.fre1641_anchor_retention import searxng
 from scripts.eval.fre1641_anchor_retention.facts import ReadOnlyES, task_class
+from scripts.eval.fre1641_anchor_retention.recorded_search import RECORDED_LENGTHS
 from scripts.eval.fre1641_anchor_retention.report import analyze, vendor_calls
 
-REPO = Path(__file__).resolve().parents[2]
-HARNESS = REPO / "scripts" / "eval" / "fre1641_anchor_retention"
-
+from personal_agent.tools.passages import split_passages
 
 # ── AC-6: production is untouched ─────────────────────────────────────────
 
@@ -56,103 +55,30 @@ def test_read_only_es_refuses_a_filled_page() -> None:
         es.search("agent-logs-*", {"size": 10})
 
 
-def test_check_plan_refuses_a_production_container() -> None:
-    ok = "Container fre1641-searxng-500-1  Creating\nNetwork fre1641_default  Creating\n"
-    assert searxng.check_plan(ok) == ["fre1641-searxng-500-1"]
-    with pytest.raises(searxng.SearxngSetupError, match="outside"):
-        searxng.check_plan(ok + "Container cloud-sim-searxng  Recreate\n")
-    with pytest.raises(searxng.SearxngSetupError, match="no container"):
-        searxng.check_plan("nothing\n")
+def test_shape_search_response_keeps_the_harness_shape() -> None:
+    """FRE-1641: the harness shapes recorded SearXNG responses with it (moved from tools/web.py)."""
+    from scripts.eval.fre1641_anchor_retention.recorded_search import shape_search_response
 
-
-def test_compose_file_defines_only_harness_instances() -> None:
-    compose = yaml.safe_load((HARNESS / "docker-compose.fre1641.yml").read_text())
-    services = compose["services"]
-    assert sorted(services) == sorted(f"searxng-{n}" for n in searxng.PORTS)
-    for svc in services.values():
-        assert "container_name" not in svc
-        assert "depends_on" not in svc
-        assert "networks" not in svc
-        assert all(p.startswith("127.0.0.1:") for p in svc["ports"])
-
-
-# ── D5.2: each instance differs only in the Exa length ────────────────────
-
-
-def _example() -> str:
-    return (REPO / "docker" / "searxng" / "settings.yml.example").read_text()
-
-
-def test_with_exa_length_changes_only_that_value() -> None:
-    text = _example()
-    changed = searxng.with_exa_length(text, 800)
-    exa = [e for e in yaml.safe_load(changed)["engines"] if e["name"] == "exa"][0]
-    assert exa["content_max_characters"] == 800
-    assert sum(a != b for a, b in zip(text.splitlines(), changed.splitlines(), strict=True)) == 1
-    assert searxng.with_exa_length(text, 2000) == text
-
-
-def test_with_exa_length_refuses_a_non_full_form_production() -> None:
-    text = _example().replace("content_max_characters: 2000", "content_max_characters: 1500")
-    with pytest.raises(searxng.SearxngSetupError, match="full form"):
-        searxng.with_exa_length(text, 800)
-
-
-def test_settings_copies_are_private_and_removed(tmp_path: Path) -> None:
-    prod = tmp_path / "prod"
-    prod.mkdir()
-    (prod / "settings.yml").write_text(_example())
-    (prod / "limiter.toml").write_text("")
-    root = tmp_path / "copies"
-    searxng.write_settings(root, prod)
-    assert root.stat().st_mode & 0o777 == 0o700
-    assert sorted(p.name for p in root.iterdir()) == sorted(str(n) for n in searxng.PORTS)
-    searxng.remove_settings(root)
-    assert not root.exists()
-
-
-# ── AC-7: the harness imports the shaping code, it holds no copy ──────────
-
-_SHARED = {
-    "build_search_params",
-    "shape_search_response",
-    "download_text",
-    "_extract_text",
-    "split_passages",
-    "bm25_order",
-    "rank_passages",
-    "select_within_budget",
-    "focus_matched",
-    "tokenize",
-    "render_content",
-}
-
-
-def test_the_harness_defines_no_shaping_function() -> None:
-    defined: set[str] = set()
-    imported: set[str] = set()
-    for path in HARNESS.glob("*.py"):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-                defined.add(node.name)
-            if (
-                isinstance(node, ast.ImportFrom)
-                and node.module
-                and node.module.startswith("personal_agent.tools")
-            ):
-                imported.update(a.name for a in node.names)
-    assert not defined & _SHARED
-    assert {
-        "build_search_params",
-        "shape_search_response",
-        "download_text",
-        "split_passages",
-        "rank_passages",
-        "select_within_budget",
-        "focus_matched",
-        "render_content",
-    } <= imported
+    data = {
+        "results": [
+            {"title": f"T{i}", "url": f"https://e.com/{i}", "content": f"S{i}", "engine": "exa"}
+            for i in range(4)
+        ],
+        "answers": [{"engine": "calc", "answer": "42"}],
+        "unresponsive_engines": [["braveapi", "timeout"]],
+        "suggestions": ["s"],
+        "infoboxes": [],
+    }
+    out = shape_search_response(data, query="q", categories="general", engines=None, max_results=2)
+    assert out["results"] == [
+        {"title": "T0", "url": "https://e.com/0", "snippet": "S0", "engine": "exa", "score": None},
+        {"title": "T1", "url": "https://e.com/1", "snippet": "S1", "engine": "exa", "score": None},
+    ]
+    assert out["result_count"] == 2
+    assert out["answers"] == [{"engine": "calc", "answer": "42"}]
+    assert out["engines_contributed"] == ["exa"]
+    assert out["degraded_retrieval"] is True
+    assert out["retrieval_warning"].startswith("1 engine(s) failed this search (braveapi)")
 
 
 # ── vendor accounting and classes ─────────────────────────────────────────
@@ -227,7 +153,7 @@ def _write_run(run: Path) -> None:
         [{"url": url, "status": 200, "chars_total": len(page), "text": page, "error": None}],
     )
     snippet = {500: "Nemotron on M4", 800: "Nemotron reached 159.714 tok/s on the M4 Max"}
-    for length in searxng.PORTS:
+    for length in RECORDED_LENGTHS:
         text = snippet.get(
             length, "Long excerpt. " * 10 + "Nemotron reached 159.714 tok/s on the M4 Max laptop."
         )

@@ -89,10 +89,10 @@ defeat the guard."""
 DICT_KEY_CONTENT_NAMES = EVIDENCE_CONTENT_NAMES - {"content"}
 """Dict-literal-key and keyword-argument match set — deliberately narrower
 than :data:`EVIDENCE_CONTENT_NAMES`. ``"content"`` is too generic a *key name*
-for arbitrary API-response-shaped dicts: ``tools/web.py`` builds
+for arbitrary API-response-shaped dicts: ``tools/web.py`` built
 ``{"content": ib.get("content", "")[:500], ...}`` for an unrelated SearXNG
 infobox field that merely shares the key name, verified by reading the site
-directly. As a bare Python *variable* (``content = msg.get(...)`` then
+directly (FRE-1767 moved that code to the retired FRE-1641 harness). As a bare Python *variable* (``content = msg.get(...)`` then
 ``content[:200]``), ``content`` is precise enough — that match still goes
 through :data:`EVIDENCE_CONTENT_NAMES` via Rule A's Name check."""
 

@@ -17,7 +17,7 @@ personal_agent/
 ├── .cursor/                   # Cursor rules and hooks
 ├── .github/                   # PR template and CI workflows
 ├── config/                    # Tracked runtime config: models.yaml, model_roles.yaml, governance/, grafana/, otel/, …
-├── docker/                    # Service assets: postgres (init.sql + migrations/), elasticsearch templates, searxng, tempo, sandbox, mcp
+├── docker/                    # Service assets: postgres (init.sql + migrations/), elasticsearch templates, tempo, sandbox, mcp
 ├── docs/
 │   ├── architecture/          # Conceptual docs (HOMEOSTASIS_MODEL, …); README points to the Redesign v2 spec
 │   ├── architecture_decisions/  # ADR-XXXX files, HYPOTHESIS_LOG, experiments/
@@ -146,7 +146,7 @@ tools
 
 ## `.gitignore` Strategy
 
-Git tracks the config YAML files in `config/`. Real secret values stay out of the repo. A tracked `.example` file carries the placeholders (`.env.example`, `config/governance/budget.yaml.example`, `docker/searxng/settings.yml.example`). Git does not ignore `telemetry/` as a whole. It ignores the runtime subdirectories and the raw eval run outputs, and it tracks the named evaluation baselines.
+Git tracks the config YAML files in `config/`. Real secret values stay out of the repo. A tracked `.example` file carries the placeholders (`.env.example`, `config/governance/budget.yaml.example`). Git does not ignore `telemetry/` as a whole. It ignores the runtime subdirectories and the raw eval run outputs, and it tracks the named evaluation baselines.
 
 The block below is an **excerpt** of the real `.gitignore` lines. Read `.gitignore` for the full list.
 
@@ -177,8 +177,6 @@ __pycache__/
 # Real operational cost caps — owner ruling 2026-08-09 (FRE-1209): real config
 # values do not belong in the public repo. budget.yaml.example is the template.
 config/governance/budget.yaml
-
-docker/searxng/settings.yml
 
 # Claude Code
 .claude/worktrees/

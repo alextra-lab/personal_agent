@@ -208,11 +208,6 @@ curl_read:
     paths: ["/"]
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "Neo4j health: the discovery page."
-  - hosts: ["searxng:8080"]
-    methods: [GET]
-    paths: ["/healthz"]
-    modes: [NORMAL, ALERT, DEGRADED]
-    reason: "SearXNG health."
   - hosts: ["grafana:3000"]
     methods: [GET]
     paths: ["/api/health"]

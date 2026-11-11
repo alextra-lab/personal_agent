@@ -918,7 +918,7 @@ def test_fre1724_ac4_a_password_in_a_url_is_refused_on_every_setting(
     value = f"http://user:{_SENTINEL}@example.test"
 
     with structlog.testing.capture_logs() as entries:
-        resp = _client().put(_URL, json={"parameter": "setting.searxng_base_url", "value": value})
+        resp = _client().put(_URL, json={"parameter": "setting.tempo_url", "value": value})
 
     assert resp.status_code == 422
     assert _SENTINEL not in resp.text
@@ -931,7 +931,7 @@ def test_fre1724_ac4_a_write_only_row_holds_set_in_the_response_the_audit_and_th
     store: _Store, clean_settings: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     value = f"http://{_SENTINEL}.example.test"
-    parameter = "setting.searxng_base_url"
+    parameter = "setting.tempo_url"
 
     with structlog.testing.capture_logs() as entries:
         put = _client().put(_URL, json={"parameter": parameter, "value": value})

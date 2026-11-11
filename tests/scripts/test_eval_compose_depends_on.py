@@ -81,5 +81,4 @@ class TestEvalComposeDependsOn:
                 "neo4j-eval",
                 "elasticsearch-eval",
                 "redis-eval",  # FRE-1342 — isolated from production's redis
-                "searxng",
             }

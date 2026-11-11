@@ -49,9 +49,9 @@ sub_agent_tools:
       FRE-1463, 2026-09-08. Its absence produces confabulation, not silence: two
       research sub-agents refused this tool wrote a ranked agency table and a
       pricing verification from parametric recall, then ran run_python over the
-      figures they had invented (session 36b4ac05). Egress is the self-hosted
-      SearXNG instance (ADR-0034), so a call bills nothing; only the opt-in
-      categories="exa" reaches a paid vendor.
+      figures they had invented (session 36b4ac05). Egress is two paid,
+      third-party APIs, Exa and Brave, called directly (FRE-1766): each call
+      bills both vendors and sends them the query text.
 
   search_memory:
     granted: true
@@ -70,7 +70,7 @@ sub_agent_tools:
       reaches no external host, but the rows it returns enter the sub-agent's
       message stream and are sent to the configured sub-agent provider, which may
       be a cloud deployment; a sub-agent also holding web_search can place them in
-      a model-authored query that SearXNG forwards to upstream engines. That
+      a model-authored query that goes to Exa and Brave. That
       channel is not new — the sub-agent's context slice already carries the
       turn's own conversation — but it is the honest description of where this
       data can travel.
@@ -202,7 +202,7 @@ sub_agent_tools:
       both recorded rather than dismissed. First, disclosure: the returned rows
       enter the sub-agent's message stream, go to the configured sub-agent
       provider (possibly cloud), and a sub-agent also holding web_search can place
-      them in a model-authored query that SearXNG forwards upstream. Second, the
+      them in a model-authored query that goes to Exa and Brave. Second, the
       tool's own description says to use it only when the user explicitly refers
       to their personal history, and a sub-agent's task text is planner-authored,
       so no deterministic intent gate exists — though the sub-agent does read that
@@ -223,7 +223,7 @@ sub_agent_tools:
       that policy.
 
 tools:
-  # Native web search via SearXNG (ADR-0034)
+  # Native web search: paid direct calls to Exa and Brave (FRE-1766)
   web_search:
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "low"
@@ -238,8 +238,8 @@ tools:
   # Fetched page content is citable; the model-chosen url argument is not.
   # risk_level "medium" — the `network` category default, not web_search's "low"
   # override — because the target host is fully model-chosen and unbounded, unlike
-  # web_search's fixed SearXNG proxy (see the matching comment in tools/fetch.py,
-  # PR #957 bounce).
+  # web_search's two fixed vendor endpoints, Exa and Brave (see the matching comment in
+  # tools/fetch.py, PR #957 bounce).
   fetch_url:
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "medium"

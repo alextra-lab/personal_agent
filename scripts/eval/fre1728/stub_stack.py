@@ -3,7 +3,7 @@
     uv run python -m scripts.eval.fre1728.stub_stack up --run-dir <run>
     uv run python -m scripts.eval.fre1728.stub_stack down
 
-Never ``docker compose``: a compose run from a worktree recreates production's searxng. This launcher uses
+Never ``docker compose``: a compose run from a worktree can recreate production containers (FRE-1542). This launcher uses
 ``docker run`` with its own names and a label, as ``scripts/eval/fre1537/gateway.py`` does. It reuses the deployed
 production image, so it builds nothing.
 
@@ -60,7 +60,6 @@ _KEEP_DEPLOYMENTS = frozenset({"inherit", "embedding", "reranker", "reranker_fal
 #: Production's compose services on the shared network. None of them may answer a stub gateway.
 _BLOCKED_SERVICES = (
     "caddy",
-    "searxng",
     "tempo",
     "postgres",
     "neo4j",

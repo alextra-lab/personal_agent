@@ -978,13 +978,13 @@ def test_fre1724_a_hidden_editable_setting_is_write_only() -> None:
     menu = build_menu(
         _inputs(
             is_owner=True,
-            overrides={"setting.searxng_base_url": "http://sentinel-host.test"},
+            overrides={"setting.tempo_url": "http://sentinel-host.test"},
         )
     )
-    row = next(r for r in _rows(menu) if r.name == "setting.searxng_base_url")
+    row = next(r for r in _rows(menu) if r.name == "setting.tempo_url")
 
     assert row.applies == "next_turn"
-    assert row.value == ("set" if live_settings.searxng_base_url else "not set")
+    assert row.value == ("set" if live_settings.tempo_url else "not set")
     assert row.edit is not None and row.edit.current is None
     assert "sentinel-host" not in row.model_dump_json()
 
@@ -994,7 +994,7 @@ def test_fre1724_a_hidden_editable_setting_is_write_only() -> None:
     [
         ("expansion_enabled", "boolean"),
         ("llm_timeout_seconds", "number"),
-        ("searxng_default_categories", "text"),
+        ("llm_no_think_suffix", "text"),
         ("grounding_verification_mode", "select"),
         ("tool_result_digest_exclude_tools", "json"),
     ],

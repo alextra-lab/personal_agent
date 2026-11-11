@@ -3,7 +3,7 @@
 # Both gateways get the same values, so that a later fix on treatment compares with control.
 # Commands, order and the remaining differences from production: README.md in this directory.
 #
-# Use from /opt/seshat only. A compose run from a worktree recreates production's searxng.
+# Use from /opt/seshat only. A compose run from a worktree can recreate production containers (FRE-1542).
 
 x-fre1728-env: &fre1728-env
   # The simulated user is not the owner. The owner identity is the code path that the owner sees, so the pilot

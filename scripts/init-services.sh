@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize all services (PostgreSQL, Elasticsearch, Neo4j, SearXNG, Redis)
+# Initialize all services (PostgreSQL, Elasticsearch, Neo4j, Redis)
 
 set -e
 
@@ -45,14 +45,6 @@ if ! docker ps | grep -q "personal_agent"; then
   done
   echo "✓ Neo4j is ready"
 
-  # Wait for SearXNG
-  echo "Checking SearXNG..."
-  until curl -s http://localhost:8888/healthz > /dev/null 2>&1; do
-    echo "  Waiting for SearXNG..."
-    sleep 2
-  done
-  echo "✓ SearXNG is ready"
-
   # Wait for Redis
   echo "Checking Redis..."
   until docker-compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do
@@ -83,7 +75,6 @@ echo "  Elasticsearch: http://localhost:9200"
 echo "  Grafana:       http://localhost:3000"
 echo "  Neo4j Browser: http://localhost:7474"
 echo "  Neo4j Bolt:    bolt://localhost:7687"
-echo "  SearXNG:       http://localhost:8888"
 echo "  Redis:         localhost:6379"
 echo ""
 echo "Next steps:"

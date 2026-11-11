@@ -70,9 +70,14 @@ class TestGatewayDependsOn:
             "neo4j",
             "elasticsearch",
             "redis",
-            "searxng",
             "otel-collector",
         }
+
+    def test_searxng_service_removed(self) -> None:
+        """FRE-1767: web_search calls Exa and Brave directly, so no SearXNG service remains."""
+        compose = _render_compose()
+        assert "searxng" not in compose["services"]
+        assert "AGENT_SEARXNG_BASE_URL" not in compose["services"]["seshat-gateway"]["environment"]
 
     def test_embeddings_and_reranker_service_definitions_removed(self) -> None:
         compose = _render_compose()

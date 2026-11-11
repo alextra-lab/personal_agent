@@ -14,7 +14,7 @@
 #   make up                              # start all local services
 #   make up SERVICE=neo4j                # start one service
 #   make logs SERVICE=seshat-gateway     # tail one service
-#   make restart SERVICE=searxng         # restart one service
+#   make restart SERVICE=redis           # restart one service
 #   make shell SERVICE=neo4j             # exec into neo4j container
 #   make rebuild SERVICE=seshat-gateway  # local build + restart
 #   ENV=cloud make services              # list cloud services
@@ -396,13 +396,13 @@ test-infra-ps:          ## Show test infra container status
 EVAL_ENV_FILE := --env-file /opt/seshat/.env
 
 # FRE-1542: the eval stack shares production's compose project name (`seshat`) on purpose —
-# its volumes (`seshat_*_eval`) and its `cloud-sim` network, which carries the DNS names
-# `caddy` and `searxng`, are project-scoped. Left to default, the project name follows the
+# its volumes (`seshat_*_eval`) and its `cloud-sim` network, which carries the DNS name
+# `caddy`, are project-scoped. Left to default, the project name follows the
 # working directory (`build` in a worktree), which gives a worktree run empty eval volumes and
 # an unreachable `caddy`. Pinned, so the stack is the same one from every directory.
 #
 # Every command below names eval services and passes `--no-deps`. Without it, `depends_on`
-# pulls production's `searxng` into the scope of an `up` (FRE-1344's `required: false` did not
+# pulled production's `searxng` (removed by FRE-1767) into the scope of an `up` (FRE-1344's `required: false` did not
 # stop that on 2026-10-03: a worktree run recreated the live container with a bind mount that
 # lacks the gitignored settings.yml). `--no-deps` also drops compose's wait for healthy
 # substrate, so the substrate comes up first, with `--wait`, then the gateways.

@@ -17,7 +17,7 @@ Technical specifications for agent components and features.
 
 - `PROACTIVE_MEMORY_DESIGN.md` — Proactive memory MVP (`suggest_relevant()`, ADR-0039); EVAL harness comparison table pending
 - `SELF_TELEMETRY_TOOL_SPEC.md` — Agent self-inspection (implemented)
-- `SEARXNG_WEB_SEARCH_TOOL_SPEC.md` — Web search tool (implemented)
+- `SEARXNG_WEB_SEARCH_TOOL_SPEC.md` — Web search tool via SearXNG (superseded: FRE-1763 removed SearXNG; `web_search` calls Exa and Brave directly)
 - `CONVERSATION_CONTINUITY_SPEC.md` — Multi-turn context with LLM summarization (ADR-0038)
 - `AGENT_HEALTH_TOOL_SPEC.md` — Health query types for self-telemetry (FRE-108/109/110)
 - `SYSTEM_HEALTH_MONITORING_SPEC.md` — ADR-0012/0013 monitoring (Phase 2.3)

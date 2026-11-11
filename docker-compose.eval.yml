@@ -33,8 +33,8 @@
 #   make eval-infra-down
 #
 # FRE-1542: use the make targets, not a raw `docker compose up`. A raw `up` of the gateways
-# pulls production's `searxng` into its scope through `depends_on`, and a run from a worktree
-# recreated the live container (2026-10-03). The targets pass `--no-deps` and refuse any plan
+# pulled production's `searxng` (removed by FRE-1767) into its scope through `depends_on`, and
+# a run from a worktree recreated the live container (2026-10-03). The targets pass `--no-deps` and refuse any plan
 # that touches a container this file does not define (scripts/eval/compose_plan_guard.py).
 #
 # Reusable for FRE-263 (PIVOT-4) and FRE-264 (PIVOT-5) evals.
@@ -61,17 +61,6 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
       condition: service_healthy
     redis-eval:
       condition: service_healthy
-    # FRE-1344: searxng is PRODUCTION's service, and a depends_on pulls it into the scope
-    # of any `up` naming these gateways — observed recreating the live searxng container
-    # (1ee1fb09d19a -> a49fce879e3d) during an eval bring-up, which is how FRE-1342's AC-3
-    # failed despite the target naming eval services explicitly. `required: false` lets the
-    # eval gateways address it by name without compose managing its lifecycle on their
-    # behalf. Search is not needed for the gateway to become healthy.
-    # FRE-1542: this did NOT prevent a recreate from a worktree on 2026-10-03. The guarantee
-    # is `--no-deps` in `make eval-infra-up`, not this line.
-    searxng:
-      condition: service_started
-      required: false
   volumes:
     # Eval-specific volumes — isolated from production captures and workspace.
     - seshat_captures_eval:/app/telemetry/captains_log/captures
@@ -265,7 +254,6 @@ services:
       # ever change back — but it is not what protects these two gateways today.
       AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
-      AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
       # FRE-1581 (owner, 2026-10-11): the eval stack has no UI, so nobody answers a constraint
       # pause. The 180 s default only adds a wait before the same safe default (answer_now).
@@ -444,7 +432,6 @@ services:
       # ever change back — but it is not what protects these two gateways today.
       AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
-      AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
       # FRE-1581 (owner, 2026-10-11): the eval stack has no UI, so nobody answers a constraint
       # pause. The 180 s default only adds a wait before the same safe default (answer_now).

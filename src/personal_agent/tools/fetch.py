@@ -576,8 +576,8 @@ fetch_url_tool = ToolDefinition(
         ),
     ],
     # risk_level is "medium" (the `network` category's own default), not web_search's
-    # "low" override — deliberately not inherited. web_search's target is a single
-    # fixed, operator-configured proxy (SearXNG); fetch_url's target host is fully
+    # "low" override — deliberately not inherited. web_search's targets are two fixed
+    # vendor endpoints (Exa and Brave, FRE-1766); fetch_url's target host is fully
     # model-chosen and unbounded, so it does not earn the same override even with the
     # private-target guard above in place (PR #957 bounce). requires_approval stays
     # False: the concrete exploit that motivated raising this (unauthenticated internal

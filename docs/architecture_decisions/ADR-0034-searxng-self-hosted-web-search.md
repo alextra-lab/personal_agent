@@ -1,6 +1,6 @@
 # ADR-0034: SearXNG Self-Hosted Web Search Integration
 
-**Status**: Accepted
+**Status**: Superseded by the FRE-1763 ADR (2026-11-11)
 **Date**: 2026-03-27
 **Deciders**: Project owner
 **Extends**: ADR-0011 (MCP Gateway Integration), ADR-0026 (search_memory native tool)

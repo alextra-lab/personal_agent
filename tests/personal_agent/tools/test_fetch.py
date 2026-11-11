@@ -66,7 +66,7 @@ def test_tool_definition() -> None:
     assert fetch_url_tool.category == "network"
     # "medium" (the network category's own default), not web_search's "low" override —
     # fetch_url's target host is fully model-chosen and unbounded, unlike web_search's
-    # fixed SearXNG proxy (PR #957 bounce).
+    # two fixed vendor endpoints, Exa and Brave (PR #957 bounce).
     assert fetch_url_tool.risk_level == "medium"
     assert "NORMAL" in fetch_url_tool.allowed_modes
     param_names = {p.name for p in fetch_url_tool.parameters}

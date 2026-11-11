@@ -46,7 +46,7 @@ that adds the `planner` mode.
   its model endpoint. The event bus is off, so a capture turn writes to no knowledge graph.
   It stops before it starts anything if an eval substrate is missing or unhealthy, if a container of the same
   name exists without the probe label, or if the substrates share more than one network. It checks that
-  `cloud-sim-searxng` is the same container before and after.
+  `cloud-sim-redis` (a production container on the same network) is the same container before and after.
 - **`capture`** runs one `/chat` turn per fixture through that gateway. The 19 fixtures of
   `scripts/eval/fre1498/fixtures.yaml` run as one turn. The 8 follow-ups in `followups.yaml` run as two turns in
   one session. The primary's request body of the last turn is saved. It posts bare HTTP turns and not

@@ -77,7 +77,7 @@ class TestOtelCollectorComposeServiceSource:
         """The plain core `otel/opentelemetry-collector` image, not `-contrib` and not a vendor
         distro (Alloy/EDOT/Splunk/Datadog) — ADR-0129 D5's "vanilla upstream Collector".
         """
-        assert self._service(compose_file)["image"] == "otel/opentelemetry-collector:0.158.0"
+        assert self._service(compose_file)["image"] == "otel/opentelemetry-collector:0.165.0"
 
     def test_dev_config_mount_is_read_only(self) -> None:
         volumes = self._service("docker-compose.yml")["volumes"]

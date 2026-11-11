@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from tests.scripts.test_grafana_compose_service import _render_compose
 
-_IMAGE = "grafana/grafana:13.1.3"
+_IMAGE = "grafana/grafana:13.1.10"
 _AUD = "0" * 64  # the value tests/scripts/test_grafana_compose_service.py renders the tag as
 _OTHER_AUD = "f" * 64  # stands in for the agent app's tag
 _HEADER = "Cf-Access-Jwt-Assertion"

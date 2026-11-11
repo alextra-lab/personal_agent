@@ -55,11 +55,12 @@ class TestTempoComposeServiceSource:
 
     @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
     def test_image_is_pinned_patched_version(self, compose_file: str) -> None:
-        """2.10.7, not 2.10.1: CVE-2026-27878 (memory-exhaustion DoS via TraceQL exemplars hint)
+        """2.10.10, not 2.10.1: CVE-2026-27878 (memory-exhaustion DoS via TraceQL exemplars hint)
         affects up to 2.10.1 and is fixed >=2.10.2 — relevant here because Grafana's anonymous
         Viewer role can trigger arbitrary Tempo queries (ADR-0129 D6's accepted residual).
+        The pin was 2.10.7 until FRE-1761 moved it to 2.10.10, a later patch of the same line.
         """
-        assert self._tempo_service(compose_file)["image"] == "grafana/tempo:2.10.7"
+        assert self._tempo_service(compose_file)["image"] == "grafana/tempo:2.10.10"
 
     @pytest.mark.parametrize("compose_file", ["docker-compose.yml", "docker-compose.cloud.yml"])
     def test_no_healthcheck_declared(self, compose_file: str) -> None:

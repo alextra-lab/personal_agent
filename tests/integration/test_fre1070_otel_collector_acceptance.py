@@ -160,7 +160,7 @@ class TestAC2RunningImageIsVanillaUpstreamCore:
             check=True,
         ).stdout.strip()
 
-        assert image == "otel/opentelemetry-collector:0.158.0", (
+        assert image == "otel/opentelemetry-collector:0.165.0", (
             f"expected the exact vanilla upstream core image, got {image!r} — not a prefix "
             "match, since a lookalike or contrib/vendor image must fail this check"
         )

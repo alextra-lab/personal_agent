@@ -1,7 +1,9 @@
 # Mac-local OTel Collector — credential custodian and buffer for slm_server's spans (FRE-1224).
 #
-# Vanilla upstream core distribution (otelcol 0.158.0), the same pin as the VPS Collector in
-# docker-compose.yml — no contrib components, no vendor distro (ADR-0129 D5).
+# Vanilla upstream core distribution (otelcol 0.158.0) — no contrib components, no vendor
+# distro (ADR-0129 D5). It matched the VPS Collector pin in docker-compose.yml until FRE-1761
+# moved the VPS Collector to 0.165.0. This file validates on both versions (FRE-1761 check);
+# the Mac binary is the owner's to update.
 #
 # What this component is FOR, precisely:
 #   1. Custody — it holds the Cloudflare Access service token so slm_server does not. ADR-0132 D2

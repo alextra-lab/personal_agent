@@ -38,7 +38,7 @@ services:
       retries: 5
 
   elasticsearch-test:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.25
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -54,7 +54,7 @@ services:
       retries: 5
 
   neo4j-test:
-    image: neo4j:5.26-community
+    image: neo4j:5.26.33-community
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-neo4j_dev_password}
       NEO4J_PLUGINS: '["apoc"]'

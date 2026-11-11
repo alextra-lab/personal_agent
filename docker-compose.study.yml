@@ -23,7 +23,7 @@
 
 services:
   neo4j-study:
-    image: neo4j:5.26-community
+    image: neo4j:5.26.33-community
     container_name: seshat-neo4j-study
     environment:
       NEO4J_AUTH: neo4j/${STUDY_NEO4J_PASSWORD:?STUDY_NEO4J_PASSWORD required}

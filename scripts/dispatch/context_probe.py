@@ -49,16 +49,16 @@ DEFAULT_WINDOW = 1_000_000
 # overrides. An unmapped model falls back to DEFAULT_WINDOW, and the gating
 # watcher logs ``context_window_unknown_model`` once per model (FRE-1765).
 # Sources: opus-4-8 / sonnet-5 / haiku-4-5 confirmed via /context. The FRE-1765
-# entries come from Anthropic's model table (claude-api skill, "Current Models",
-# cached 2026-10-06; https://docs.anthropic.com/en/docs/about-claude/models/overview).
+# entries come from https://platform.claude.com/docs/en/models/overview
+# (read 2026-11-11), which lists each current model at 1M tokens.
 MODEL_WINDOWS = {
     "claude-opus-4-8": 1_000_000,
     "claude-sonnet-5": 1_000_000,
     "claude-haiku-4-5": 200_000,
-    "claude-opus-5-5": 1_000_000,  # Anthropic model table: Opus 5.5 = 1M
-    "claude-sonnet-5-5": 1_000_000,  # Anthropic model table: Sonnet 5.5 = 1M
-    "claude-haiku-5-5": 1_000_000,  # Anthropic model table: Haiku 5.5 = 1M
-    "claude-fable-5-1": 1_000_000,  # Anthropic model table: Fable 5.1 = 1M
+    "claude-fable-5-2": 1_000_000,  # models/overview: Fable 5.2 = 1M
+    "claude-opus-5-5": 1_000_000,  # models/overview: Opus 5.5 = 1M
+    "claude-sonnet-5-5": 1_000_000,  # models/overview: Sonnet 5.5 = 1M
+    "claude-haiku-5-5": 1_000_000,  # models/overview: Haiku 5.5 = 1M
 }
 # Read only the transcript tail so a poll is ~O(1) regardless of file size;
 # large enough to contain the last main-chain usage across many recent turns.

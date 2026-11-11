@@ -3566,7 +3566,7 @@ def test_fre1550_a_tick_makes_at_most_one_owner_attempt_and_the_rest_wait_for_th
 
 
 @pytest.mark.parametrize(
-    "model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
+    "model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"]
 )
 def test_current_models_have_a_window(model: str) -> None:
     """AC-1: every current seat model maps to a documented window (1M each)."""

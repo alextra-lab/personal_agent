@@ -162,6 +162,38 @@ async def test_an_undelivered_alert_rearms(push: AsyncMock, month_total: AsyncMo
     assert push.await_count == 2
 
 
+@pytest.mark.asyncio
+async def test_fre1771_ac2_both_404_is_unavailable_and_alerts_once(
+    push: AsyncMock, month_total: AsyncMock
+) -> None:
+    """FRE-1771 AC-2 / ADR-0160 D1.4: a 404 from both is an outage, not a bad query."""
+    replies = {
+        "exa": _error(404, EXA_SEARCH_URL),
+        "brave": _error(404, BRAVE_LLM_CONTEXT_URL),
+    }
+
+    def client(**kwargs: object) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda r: replies["exa" if r.url.host == "api.exa.ai" else "brave"]
+            )
+        )
+
+    with (
+        patch("personal_agent.tools.web.create_guarded_http_client", client),
+        patch("personal_agent.tools.web.record_vendor_cost", AsyncMock()),
+        pytest.raises(WebSearchError) as exc_info,
+    ):
+        await web_search_executor(query="q", ctx=_CTX)
+    await web_search_alerts.wait_for_pending_alerts()
+
+    assert exc_info.value.code == "search_unavailable"
+    assert exc_info.value.retryable is True
+    [message] = _messages(push)
+    assert "exa: HTTP 404" in message.splitlines()
+    assert "brave: HTTP 404" in message.splitlines()
+
+
 # ── AC-2: no alert for a bad query or one failing provider ─────────────────
 
 

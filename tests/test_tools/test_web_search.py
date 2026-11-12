@@ -455,13 +455,15 @@ async def test_an_unreadable_body_is_a_refusal(
         (429, "refusal"),
         (500, "refusal"),
         (503, "refusal"),
+        (404, "refusal"),
+        (405, "refusal"),
         (400, "bad_query"),
-        (404, "bad_query"),
+        (410, "bad_query"),
         (422, "bad_query"),
     ],
 )
 def test_classify_status(status: int, kind: str) -> None:
-    """Owner decision 5: refusal (401/402/403/429/5xx) vs bad query (other 4xx)."""
+    """ADR-0160 D1.4: refusal (401/402/403/404/405/429/5xx) vs bad query (other 4xx)."""
     assert classify_status(status) == kind
 
 

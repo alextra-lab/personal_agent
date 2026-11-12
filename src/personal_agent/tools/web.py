@@ -138,9 +138,10 @@ SearchCategory = Literal["general", "news", "it", "science"]
 FailureKind = Literal["refusal", "bad_query"]
 """How a provider failed (FRE-1766), for the alert of FRE-1763 T3.
 
-``refusal``: the provider did not serve the request — 401, 402, 403, 429, 5xx, a timeout, a
-connection failure, a missing key or an unreadable response. ``bad_query``: any other 4xx,
-so the provider rejected this query.
+``refusal``: the provider did not serve the request — 401, 402, 403, 404, 405, 429, 5xx, a
+timeout, a connection failure, a missing key or an unreadable response. A 404 or 405 means our
+endpoint or integration is wrong, which no other query repairs (ADR-0160 D1.4).
+``bad_query``: any other 4xx, so the provider rejected this query.
 """
 ProviderOutcome = Literal["ok", "refused", "bad_query"]
 """``outcome`` of one ``provider_outcomes`` entry in ``web_search_completed`` (ADR-0160 D9.8)."""
@@ -181,7 +182,7 @@ _TIME_RANGES: Mapping[str, tuple[str, timedelta]] = {
 }
 
 #: HTTP statuses that mean the provider refused to serve, not that the query was bad.
-_REFUSAL_STATUSES = frozenset({401, 402, 403, 429})
+_REFUSAL_STATUSES = frozenset({401, 402, 403, 404, 405, 429})
 
 #: An ISO 8601 date at the start of a string, as in one element of Brave's ``age`` list.
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -510,7 +511,8 @@ def classify_status(status_code: int) -> FailureKind:
         status_code: The response status.
 
     Returns:
-        ``bad_query`` for a 4xx other than 401, 402, 403 and 429; ``refusal`` otherwise.
+        ``bad_query`` for a 4xx other than 401, 402, 403, 404, 405 and 429; ``refusal``
+        otherwise (ADR-0160 D1.4).
     """
     if 400 <= status_code < 500 and status_code not in _REFUSAL_STATUSES:
         return "bad_query"

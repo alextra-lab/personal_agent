@@ -325,6 +325,57 @@ async def _emit_turn_cancelled(*, session_id: str, trace_id: str) -> None:
     clear_cancel_flag(session_id)
 
 
+async def _run_expansion_unless_cancelled(
+    ctx: "ExecutionContext", expansion: "Awaitable[ExpansionResult]"
+) -> "ExpansionResult | None":
+    """Await the expansion, or return ``None`` the moment the user cancels (FRE-1776).
+
+    FRE-1375 raced the cancel event against the primary's own model call only, so a
+    Stop pressed during a sub-agent fan-out waited for every sub-agent to finish.
+    Racing the whole expansion here covers the planner call, every in-flight
+    sub-agent and every task not yet started: cancelling the expansion task
+    propagates into the serial ``await`` or the side-by-side ``TaskGroup`` in
+    ``ExpansionController._run_dispatch``, and each cancelled ``run_sub_agent`` writes
+    its audit record and re-raises. Same two-task ``asyncio.wait`` pattern as
+    :func:`_call_primary_llm`.
+
+    Args:
+        ctx: The turn's context, for ``session_id`` and ``trace_id``.
+        expansion: The ``ExpansionController.execute`` coroutine, not yet awaited.
+
+    Returns:
+        The expansion's result, or ``None`` if the cancel event fired first. With no
+        cancel event for the session (``_get_cancel_event`` is non-creating), the
+        expansion is awaited directly, exactly as before.
+    """
+    cancel_event = _get_cancel_event(ctx.session_id) if ctx.session_id else None
+    if cancel_event is None:
+        return await expansion
+
+    expansion_task = asyncio.ensure_future(expansion)
+    cancel_wait_task = asyncio.ensure_future(cancel_event.wait())
+    race_tasks = (expansion_task, cancel_wait_task)
+    try:
+        done, _pending = await asyncio.wait(race_tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        # Unconditional, as in _call_primary_llm: an outside cancellation of this
+        # await must never orphan sub-agents still generating.
+        for task in race_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*race_tasks, return_exceptions=True)
+
+    # Cancel checked first: Stop wins a tie, as on the primary path.
+    if cancel_wait_task in done:
+        log.info(
+            "user_cancel_during_sub_agents",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return None
+    return expansion_task.result()
+
+
 async def _emit_classified_error(ctx: "ExecutionContext", classified: "ClassifiedError") -> None:
     """Push a ``RUN_ERROR`` event so the PWA renders the classified failure (FRE-398).
 
@@ -1415,6 +1466,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.memory.service import MemoryService
     from personal_agent.orchestrator.cache_reset_scheduler import ResetDecision
     from personal_agent.orchestrator.constraint_options import ConstraintDecision
+    from personal_agent.orchestrator.expansion_controller import ExpansionResult
     from personal_agent.orchestrator.sub_agent_types import SubAgentResult
     from personal_agent.service.repositories.session_repository import SessionRepository
     from personal_agent.transport.events import ConstraintName, ToolEndEvent, ToolStartEvent
@@ -3466,8 +3518,9 @@ def _stop_turn_for_cancel(ctx: ExecutionContext) -> None:
     """Populate ``ctx.final_reply`` for a user-initiated Stop (ADR-0076 / FRE-1375).
 
     Called from :func:`step_llm_call` when the cancel event fires while a primary
-    call is in flight, and from :func:`step_tool_execution`'s between-rounds
-    checkpoint. Deliberately never routes back through another ``LLM_CALL`` — AC-3
+    call is in flight, from :func:`step_tool_execution`'s between-rounds
+    checkpoint, and from :func:`step_init` when the event fires during a sub-agent
+    expansion (FRE-1776). Deliberately never routes back through another ``LLM_CALL`` — AC-3
     requires that pressing Stop cannot itself schedule more model work, which is
     exactly what the old ``force_synthesis_from_limit`` / ``TaskState.LLM_CALL``
     path this replaces used to do.
@@ -6116,7 +6169,9 @@ async def step_init(
             _expansion_turn_deadline = time.monotonic() + min(
                 _turn_deadline_remaining(ctx), _turn_lifetime_remaining(ctx)
             )
-            expansion_result = await controller.execute(
+            # FRE-1776: built here and awaited below, raced against the user's cancel
+            # event, so Stop ends the turn while the planner or a sub-agent runs.
+            expansion = controller.execute(
                 query=get_text_content(ctx.messages[-1].get("content", "")) if ctx.messages else "",
                 strategy=gw.decomposition.strategy.value.upper(),
                 llm_client=llm_client,
@@ -6156,6 +6211,11 @@ async def step_init(
                 # so the primary can cite what a sub-agent read.
                 source_registry=ctx.source_registry,
             )
+            expansion_result = await _run_expansion_unless_cancelled(ctx, expansion)
+            if expansion_result is None:
+                await _emit_turn_cancelled(session_id=ctx.session_id, trace_id=ctx.trace_id)
+                _stop_turn_for_cancel(ctx)
+                return TaskState.SYNTHESIS
 
             ctx.expansion_plan = expansion_result.plan
             ctx.sub_agent_results = expansion_result.sub_agent_results

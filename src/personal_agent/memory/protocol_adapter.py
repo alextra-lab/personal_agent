@@ -69,12 +69,19 @@ class MemoryServiceAdapter:
         """Initialize with the existing MemoryService instance."""
         self._service = service
 
-    async def recall(self, query: MemoryRecallQuery, trace_id: str) -> MemoryRecallResult:
+    async def recall(
+        self,
+        query: MemoryRecallQuery,
+        trace_id: str,
+        session_id: str | None = None,
+    ) -> MemoryRecallResult:
         """Query memory by converting protocol types to service types.
 
         Args:
             query: Protocol-level recall query.
             trace_id: Request trace identifier.
+            session_id: The turn's session id (FRE-1775); the multi-query arm's
+                paraphrase model call needs it to write its cost row.
 
         Returns:
             Recall result with episodes, entities, and relevance scores.
@@ -93,6 +100,7 @@ class MemoryServiceAdapter:
             query_text=query.query_text,
             access_context=AccessContext.CONTEXT_ASSEMBLY,
             trace_id=trace_id,
+            session_id=session_id,
             user_id=query.user_id,
             authenticated=query.authenticated,
         )
@@ -140,6 +148,7 @@ class MemoryServiceAdapter:
         user_id: "UUID | None" = None,
         authenticated: bool = False,
         query_text: str | None = None,
+        session_id: str | None = None,
     ) -> BroadRecallResult:
         """Broad recall delegating to query_memory_broad().
 
@@ -152,6 +161,8 @@ class MemoryServiceAdapter:
             authenticated: Whether the request carries a verified identity (FRE-229).
             query_text: Optional original query text threaded to the relevance-bounded
                 broad path (ADR-0100 FRE-654). None reproduces legacy behaviour.
+            session_id: The turn's session id (FRE-1775); the multi-query arm's
+                paraphrase model call needs it to write its cost row.
 
         Returns:
             Broad recall result with entities grouped by type.
@@ -162,6 +173,7 @@ class MemoryServiceAdapter:
             limit=limit,
             access_context=AccessContext.CONTEXT_ASSEMBLY,
             trace_id=trace_id,
+            session_id=session_id,
             user_id=user_id,
             authenticated=authenticated,
             query_text=query_text,

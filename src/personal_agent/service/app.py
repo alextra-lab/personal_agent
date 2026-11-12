@@ -710,6 +710,7 @@ async def _process_chat_stream_background(
                             source_component="service.app",
                             user_id=user_id,
                             turn_summary=turn_summary,
+                            primary_model=_resolve_active_model_attribution(trace_id=trace_id)[0],
                         ),
                     )
                 except asyncio.CancelledError:
@@ -2902,6 +2903,7 @@ async def _chat_impl(
                     source_component="service.app",
                     eval_mode=(channel.upper() == "EVAL"),
                     user_id=request_user.user_id,
+                    primary_model=_resolve_active_model_attribution(trace_id=trace_id)[0],
                 ),
             )
         except Exception:

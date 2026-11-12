@@ -911,6 +911,12 @@ def resolve_active_attribution(
             this helper is also called from startup smoke checks where no
             trace exists.
 
+    The primary resolves the way the executor resolves it for the turn
+    (FRE-1773): against the per-turn selection
+    (:func:`~personal_agent.config.selection.get_current_selection`) when one
+    is carried, else the ``primary`` binding. Outside a turn the selection is
+    empty, so the binding applies.
+
     Returns:
         ``(primary_model_id, model_config_path_str)`` — ``primary_model_id``
         is ``None`` only if the config has no ``primary`` role assignment
@@ -924,7 +930,9 @@ def resolve_active_attribution(
         # Resolve through the binding: "primary" is a ROLE, and since ADR-0121
         # the catalog is keyed by model, so models.get("primary") returns None
         # and every session/message would lose its model attribution.
-        _, primary = resolve_role_target("primary")
+        from personal_agent.config.selection import get_current_selection  # noqa: PLC0415
+
+        _, primary = resolve_role_target("primary", model_key=get_current_selection("primary"))
         primary_id = primary.id if primary is not None else None
     except Exception as exc:  # noqa: BLE001 — keep the chat-turn path live
         log.warning(

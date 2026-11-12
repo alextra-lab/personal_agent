@@ -2690,7 +2690,8 @@ async def run_sub_agent(
     # in-loop handling exists to avoid. Anything genuinely unforeseen still
     # lands in the `except Exception` below, honestly labelled `error`.
     except asyncio.CancelledError:
-        # The outer dispatch can cancel us on a global timeout (expansion_controller).
+        # The outer dispatch can cancel us: a turn-level cancellation, or the user's
+        # Stop during the expansion (FRE-1776, executor._run_expansion_unless_cancelled).
         # CancelledError is a BaseException — not caught by `except Exception` — so we
         # emit the audit record here (FRE-505) and re-raise to preserve cancellation.
         duration_ms = int(time.monotonic() * 1000) - start_ms
@@ -2699,7 +2700,7 @@ async def run_sub_agent(
             spec,
             duration_ms,
             state,
-            error="cancelled (global dispatch timeout)",
+            error="cancelled (dispatch cancelled)",
             stop_reason="cancelled",
             why="the dispatcher cancelled the worker",
         )

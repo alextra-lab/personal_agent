@@ -206,12 +206,19 @@ class MemoryProtocol(Protocol):
     Remaining methods are stubs until Slice 2/3.
     """
 
-    async def recall(self, query: MemoryRecallQuery, trace_id: str) -> MemoryRecallResult:
+    async def recall(
+        self,
+        query: MemoryRecallQuery,
+        trace_id: str,
+        session_id: str | None = None,
+    ) -> MemoryRecallResult:
         """Query memory for relevant episodes and entities.
 
         Args:
             query: Structured recall query with filters and limits.
             trace_id: Trace identifier for observability.
+            session_id: The turn's session id, carried to any model call recall makes
+                so its cost row can be written (FRE-1775). None for a system path.
 
         Returns:
             MemoryRecallResult containing matched episodes and entities.
@@ -227,6 +234,7 @@ class MemoryProtocol(Protocol):
         user_id: UUID | None = None,
         authenticated: bool = False,
         query_text: str | None = None,
+        session_id: str | None = None,
     ) -> BroadRecallResult:
         """Broad recall for open-ended memory queries.
 
@@ -241,6 +249,8 @@ class MemoryProtocol(Protocol):
                 provided and relevance-bounded recall is enabled, the broad path
                 surfaces vector-relevant entities across all time, not just within
                 the recency window. None reproduces legacy behaviour.
+            session_id: The turn's session id, carried to any model call recall makes
+                so its cost row can be written (FRE-1775). None for a system path.
 
         Returns:
             BroadRecallResult with entities grouped by type and recent sessions.

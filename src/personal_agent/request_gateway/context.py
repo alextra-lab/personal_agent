@@ -652,6 +652,7 @@ async def _query_memory_for_intent(
                 user_id=user_id,
                 authenticated=authenticated,
                 query_text=user_message,
+                session_id=session_id,
             )
             # POST_SELECTION: recall_broad bounds its own read with `limit` and reports
             # nothing about what that cut. FRE-1479 adds the relevance gate's own drops to
@@ -770,7 +771,9 @@ async def _query_memory_for_intent(
             user_id=user_id,
             authenticated=authenticated,
         )
-        result = await memory_adapter.recall(query, trace_id=trace_id)
+        # FRE-1775: the session id reaches the multi-query arm's paraphrase model call,
+        # which writes no cost row without it.
+        result = await memory_adapter.recall(query, trace_id=trace_id, session_id=session_id)
         context: list[dict[str, Any]] = []
         # ADR-0148 D4 (FRE-1480): this is the admission boundary for the entity-match path.
         # Before this it admitted on name resolution plus a 30-day window and computed no

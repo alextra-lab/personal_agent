@@ -329,6 +329,7 @@ class TestMemoryServiceAdapter:
             limit=20,
             access_context=AccessContext.CONTEXT_ASSEMBLY,
             trace_id="test",
+            session_id=None,
             user_id=None,
             authenticated=False,
             query_text=None,

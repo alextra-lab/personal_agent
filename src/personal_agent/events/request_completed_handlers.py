@@ -25,12 +25,14 @@ def build_session_writer_handler() -> Any:
             return
         sid = event.session_id
         # ADR-0074 (FRE-376) — assistant messages must carry model attribution.
-        # We resolve it here rather than threading it onto RequestCompletedEvent
-        # to keep the event schema stable for downstream consumers; the
-        # active-config lookup runs in-process and is cached.
+        # FRE-1773: this consumer runs outside the turn's context, so it cannot see
+        # the turn's model selection; the publisher resolves the model in the turn
+        # and carries it on the event. An event without it falls back to the binding.
         primary_model_id, config_path_str = resolve_active_attribution(
             trace_id=event.trace_id,
         )
+        if event.primary_model is not None:
+            primary_model_id = event.primary_model
         message: dict[str, Any] = {
             "role": "assistant",
             "content": event.assistant_response,

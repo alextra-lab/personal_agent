@@ -252,6 +252,9 @@ class RequestCompletedEvent(EventBase):
         turn_summary: The turn's folded call history, stored on the assistant message so a
             reloaded page renders the same panel (FRE-1543). ``None`` for a turn with no
             phases and no tools.
+        primary_model: Model id of the deployment that served the turn's primary call,
+            resolved in the turn's own context (FRE-1773). ``None`` on an event from an
+            older publisher; the session writer then falls back to the binding.
     """
 
     event_type: Literal["request.completed"] = "request.completed"
@@ -261,6 +264,7 @@ class RequestCompletedEvent(EventBase):
     eval_mode: bool = False
     user_id: UUID | None = None
     turn_summary: TurnSummaryRecord | None = None
+    primary_model: str | None = None
 
 
 # ---------------------------------------------------------------------------

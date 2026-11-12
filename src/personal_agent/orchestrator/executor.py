@@ -1939,7 +1939,8 @@ def _with_entry_sources(
     A ``web_search`` call registers as one source with no referent, so a citation of it
     renders no link. Each entry with a ``url`` now registers too, and its marker goes inside
     the entry, beside the snippet the model reads. When an entry carries a marker, the call's
-    marker goes only on the objects no entry covers (``answers``, ``infoboxes``). So a result
+    marker goes only on the objects no entry covers (the tool's ``ENTRY_SOURCE_TOOLS`` keys;
+    ``web_search`` has none since FRE-1770). So a result
     fact has one marker to copy: its entry's.
 
     Each entry is marked as soon as it registers. A failure part way through keeps the

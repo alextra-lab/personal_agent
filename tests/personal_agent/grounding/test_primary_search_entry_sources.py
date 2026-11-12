@@ -33,7 +33,6 @@ def _search_output() -> dict[str, object]:
     """One ``web_search`` result, in the contract shape ``render_content`` emits."""
     return {
         "ok": True,
-        "answers": [],
         "results": [
             {"title": "Flights", "url": KAYAK, "snippet": "From EUR 2,410.", "engine": "brave"},
             {"title": "Deals", "url": EXPEDIA, "snippet": "From EUR 1,980.", "engine": "exa"},

@@ -40,3 +40,6 @@ __pycache__
 .env.production
 .env.cloud
 .env.caddy
+# Dockerfile.gateway copies docker/mcp/. The real secrets file must never enter the image:
+# the agent's read tool allows /app/**. The gateway reads MCP_SECRETS_FILE at runtime.
+docker/mcp/mcp-secrets.env

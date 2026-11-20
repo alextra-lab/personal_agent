@@ -26,13 +26,18 @@ from personal_agent.orchestrator.expansion_controller import (
     _P2_DECOMPOSITION_POLICY,
     _PLANNER_RULES_HEADING,
     _build_planner_system_prompt,
+    _primary_work_rule,
+    primary_only_skill_names,
 )
 
 _FIXTURES = json.loads(
     (Path(__file__).parent / "fixtures" / "planner_prompt_pre_fre1622.json").read_text()
 )
 _SURFACES: dict[str, list[str]] = _FIXTURES["surfaces"]
-_PRE: dict[str, str] = _FIXTURES["prompts"]
+# FRE-1780 appended one rule to the end of the Rules list, after this fixture was taken. The
+# fixture stays static; the expected prompt is the fixture with that rule appended.
+_FRE1780_RULE = "\n" + _primary_work_rule(primary_only_skill_names())
+_PRE: dict[str, str] = {k: v + _FRE1780_RULE for k, v in _FIXTURES["prompts"].items()}
 _ADR = (
     Path(__file__).resolve().parents[3]
     / "docs"

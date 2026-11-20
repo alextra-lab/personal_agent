@@ -240,7 +240,11 @@ class TestPlannerPromptToolSurface:
             _build_planner_system_prompt,
         )
 
-        assert "bash" not in _build_planner_system_prompt(["bash", "web_search"])
+        prompt = _build_planner_system_prompt(["bash", "web_search"])
+        # FRE-1780's rule names bash on purpose; no worker type line may offer it.
+        type_lines = [line for line in prompt.splitlines() if "Tools granted now" in line]
+        assert type_lines
+        assert not any("bash" in line for line in type_lines)
 
     def test_surface_lookup_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A governance/mode lookup error yields an empty surface, not a crash."""

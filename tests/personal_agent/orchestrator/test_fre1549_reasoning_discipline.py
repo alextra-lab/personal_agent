@@ -27,7 +27,11 @@ import yaml
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import execute_task_safe
-from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
+from personal_agent.orchestrator.expansion_controller import (
+    _build_planner_system_prompt,
+    _primary_work_rule,
+    primary_only_skill_names,
+)
 from personal_agent.orchestrator.prompts import REASONING_DISCIPLINE_PROMPT
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.skills import get_all_skills
@@ -205,16 +209,23 @@ def _pin_round_budgets(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         reset_current_effort(token)
 
 
+def _without_fre1780_rule(prompt: str) -> str:
+    """The prompt without FRE-1780's later rule, which this AC predates."""
+    rule = "\n" + _primary_work_rule(primary_only_skill_names())
+    assert prompt.endswith(rule)
+    return prompt.removesuffix(rule)
+
+
 @pytest.mark.usefixtures("_pin_round_budgets")
 class TestPlannerPromptUnchanged:
     """AC-2: the planner system prompt is byte-identical to main's."""
 
     def test_planner_prompt_hash_equals_main_with_tools(self) -> None:
-        prompt = _build_planner_system_prompt(["web_search", "run_python"])
+        prompt = _without_fre1780_rule(_build_planner_system_prompt(["web_search", "run_python"]))
         assert hashlib.sha256(prompt.encode()).hexdigest() == _MAIN_PLANNER_SHA256_WITH_TOOLS
 
     def test_planner_prompt_hash_equals_main_without_tools(self) -> None:
-        prompt = _build_planner_system_prompt([])
+        prompt = _without_fre1780_rule(_build_planner_system_prompt([]))
         assert hashlib.sha256(prompt.encode()).hexdigest() == _MAIN_PLANNER_SHA256_NO_TOOLS
 
     def test_planner_prompt_does_not_carry_the_rule(self) -> None:

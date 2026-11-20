@@ -6218,6 +6218,10 @@ async def step_init(
                 return TaskState.SYNTHESIS
 
             ctx.expansion_plan = expansion_result.plan
+            if expansion_result.kept_on_primary:
+                # FRE-1780: the plan named bash work, so the turn did not expand. Its label
+                # goes, as a decline's does (record_planner_outcome).
+                ctx.expansion_strategy = None
             ctx.sub_agent_results = expansion_result.sub_agent_results
             ctx.sub_agents_dispatched = expansion_result.dispatched_count
             ctx.expansion_phase_results = expansion_result.phase_results

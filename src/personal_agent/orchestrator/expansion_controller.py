@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -68,6 +69,7 @@ from personal_agent.orchestrator.expansion_types import (
     SubAgentInterval,
 )
 from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
+from personal_agent.orchestrator.skills import get_all_skills
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import get_shared_tool_execution_layer
@@ -166,6 +168,66 @@ _PLANNER_DECLINE_RULE = (
     '{"strategy": "SINGLE", "tasks": []} and nothing else. Choose HYBRID or DECOMPOSE only when '
     "splitting the work into independent sub-tasks would produce a better answer than one pass\n"
 )
+
+# FRE-1780: the tool that only the primary holds, named in the planner rule and matched by the
+# check. Only `bash`: `write` (mermaid-diagrams) is also primary-only, but it is an English
+# verb, and matching it would keep every "write a summary" plan on the primary.
+_PRIMARY_ONLY_TOOL = "bash"
+
+
+def primary_only_skill_names() -> tuple[str, ...]:
+    """The skills that no worker type can run, sorted (FRE-1780).
+
+    A skill is primary-only when its ``requires-tools`` is not a subset of any worker type's
+    closed tool list. Governance can only remove a type's tools, never add one, so the
+    registry alone decides this.
+
+    Returns:
+        The skill names, sorted so the planner prompt renders the same bytes every time.
+    """
+    return tuple(
+        sorted(
+            name
+            for name, doc in get_all_skills().items()
+            if not any(set(doc.requires_tools) <= set(s.tools) for s in WORKER_TYPES.values())
+        )
+    )
+
+
+def _primary_work_rule(skill_names: Sequence[str]) -> str:
+    """The planner rule that keeps bash work with the primary (FRE-1780)."""
+    skills = f", or one of the skills {', '.join(skill_names)}," if skill_names else ""
+    return (
+        f"- No worker holds {_PRIMARY_ONLY_TOOL}. Work that needs {_PRIMARY_ONLY_TOOL}{skills} "
+        "stays with the primary agent: do not plan a task for it. If the request needs such "
+        f"work, write one task whose goal names that skill or {_PRIMARY_ONLY_TOOL}: the "
+        "primary agent then answers the whole request itself, and no worker runs"
+    )
+
+
+def tasks_needing_the_primary(plan: ExpansionPlan) -> tuple[str, ...]:
+    """The names of the plan's tasks that name work only the primary can do (FRE-1780).
+
+    The signal is the task text the planner already writes: a task whose goal or constraints
+    name ``bash`` or a primary-only skill (:func:`primary_only_skill_names`) as a whole word.
+    The planner rule asks for exactly that name. A hyphen and an underscore match each other,
+    so ``service_health`` matches ``service-health``. A false match costs only one turn run by
+    the primary with its own tools instead of by helpers.
+
+    Args:
+        plan: The validated plan, from the planner or the fallback planner.
+
+    Returns:
+        The matching task names, in plan order. Empty when every task is helper work.
+    """
+    words = [_PRIMARY_ONLY_TOOL, *primary_only_skill_names()]
+    alternatives = "|".join("[-_]".join(map(re.escape, w.split("-"))) for w in words)
+    pattern = re.compile(rf"(?<![\w-])(?:{alternatives})(?![\w-])", re.IGNORECASE)
+    return tuple(
+        task.name
+        for task in plan.tasks
+        if pattern.search("\n".join([task.goal, *task.constraints]))
+    )
 
 
 def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
@@ -289,7 +351,7 @@ def _build_planner_system_prompt(
         "- Do NOT answer the question — only produce the plan"
     )
     briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
-    prompt = f"{prompt}\n{briefing_rules}"
+    prompt = f"{prompt}\n{briefing_rules}\n{_primary_work_rule(primary_only_skill_names())}"
     if admit_single:
         # ADR-0157 D6: the P2 block, then one blank line, directly before the heading.
         p2 = spec is not None and spec.planner_policy == "p2"
@@ -944,6 +1006,9 @@ class ExpansionResult:
             holds its slot.
         planner_run: What the planner run decided and cost (ADR-0154 D6). Set by the
             planner phase on every run; ``None`` only before it ends.
+        kept_on_primary: True when the plan named work that only the primary can do
+            (FRE-1780). Nothing was dispatched, ``plan`` is ``None``, and the turn
+            returns to the tool loop as a decline does.
     """
 
     plan: ExpansionPlan | None = None
@@ -960,6 +1025,7 @@ class ExpansionResult:
     dispatched_count: int = 0
     redispatched_count: int = 0
     planner_run: PlannerRunRecord | None = None
+    kept_on_primary: bool = False
 
     @property
     def cost_usd(self) -> float:
@@ -1311,6 +1377,23 @@ class ExpansionController:
                     expected="a tool-using sub-agent plan",
                     actual="no plan — fall back to the primary loop",
                 )
+            return result
+
+        primary_tasks = tasks_needing_the_primary(plan)
+        if primary_tasks:
+            # FRE-1780: a worker that lacks bash cannot run that work, and on 2026-11-20 two
+            # helpers fell back to log searches instead. The primary holds bash, so the turn
+            # returns to the tool loop the way a decline does: no worker, no synthesis.
+            logger.info(
+                "expansion_kept_on_primary",
+                reason="task_needs_primary_tool",
+                tasks=list(primary_tasks),
+                plan_task_count=len(plan.tasks),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            result.plan = None
+            result.kept_on_primary = True
             return result
 
         if strategy.upper() == "HYBRID":

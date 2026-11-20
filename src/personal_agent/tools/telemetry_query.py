@@ -1673,9 +1673,9 @@ async def search_logs_executor(
         # FRE-1777: say whether the refused field exists, so the model does not conclude
         # that the data is absent. The query itself is never sent.
         exists = await _field_exists(exc.family, exc.field_name, trace_id=trace_id)
-        error = (
-            exc if exists is None else _refuse(_field_refusal(exc.family, exc.field_name, exists))
-        )
+        error: TelemetryQueryError = exc
+        if exists is not None:
+            error = _refuse(_field_refusal(exc.family, exc.field_name, exists))
         log.warning(
             "search_logs_refused", trace_id=trace_id, session_id=session_id, reason=str(error)
         )

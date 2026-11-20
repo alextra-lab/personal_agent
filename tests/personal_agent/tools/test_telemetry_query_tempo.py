@@ -27,6 +27,7 @@ from personal_agent.security import EgressBlockedError
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.telemetry_query import (
+    _FIELD_EXISTS_CACHE,
     ALLOWED_FIELDS,
     FAMILY_TIME_FIELD,
     TEMPO_ATTRIBUTES,
@@ -148,7 +149,15 @@ async def _refused(rec: _Recorder, match: str = "refused", **kwargs: Any) -> Non
 async def _refused_search(rec: _Recorder, match: str = "refused", **kwargs: Any) -> None:
     with pytest.raises(ToolExecutionError, match=match):
         await _run_search(rec, **kwargs)
-    assert rec.calls == 0, "a refused call must send no request"
+    # A field refusal may read the field mapping (FRE-1777); it never sends the query.
+    sent = [r for r in rec.requests if "/_mapping/" not in r.url.path]
+    assert not sent, "a refused call must send no search or count"
+
+
+@pytest.fixture(autouse=True)
+def _empty_field_cache() -> None:
+    """Each test starts with no cached field-mapping answer (FRE-1777)."""
+    _FIELD_EXISTS_CACHE.clear()
 
 
 def _listed(description: str, prefix: str) -> set[str]:

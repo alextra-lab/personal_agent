@@ -163,7 +163,7 @@ Check the result before you answer:
 
 | Failure | Cause | Next step |
 |---|---|---|
-| `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | A field outside the allowlist (for example `time_window` or `running_total`) | For the budget fields use Pattern 3b. Otherwise pick a field from the list |
+| `refused: field 'x' exists in this index (agent-logs) but is not readable by this tool. Allowed fields: ...` (or `is not available in agent-logs`) | A field outside the allowlist (for example `time_window` or `running_total`) | For the budget fields use Pattern 3b. Otherwise pick a field from the list |
 | An aggregation returns no buckets | The field does not exist for this event, or the window is empty | Run a terms aggregation on `event_type` with `exists` on the field (see the `log-search` skill). Widen the window once |
 | A query on `cache_read_input_tokens` returns nothing on `model_call_completed` | That name is for `api_cost_recorded` | Use `cache_read_tokens` on `model_call_completed` |
 | A hit rate above 1 | The input does not include the cache for that provider | Use `cached / (input + cached)` for it, and say so |

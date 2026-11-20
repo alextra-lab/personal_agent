@@ -73,7 +73,8 @@ class AppConfig(BaseSettings):
     )
 
     # Application
-    project_name: str = Field(default="Personal Local AI Collaborator", description="Project name")
+    # FRE-1779: the primary prompt's identity line renders this name.
+    project_name: str = Field(default="Seshat", description="Project name")
     version: str = Field(default="0.1.0", description="Application version")
     build_fingerprint: str | None = Field(
         default=None,

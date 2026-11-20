@@ -84,7 +84,7 @@ class TestAppConfig:
         config = AppConfig()
         assert config.environment == Environment.DEVELOPMENT
         assert config.debug is False
-        assert config.project_name == "Personal Local AI Collaborator"
+        assert config.project_name == "Seshat"
         assert config.version == "0.1.0"
         assert config.log_level == "INFO"
         assert config.log_format == "json"

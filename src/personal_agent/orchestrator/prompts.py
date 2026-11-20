@@ -239,7 +239,10 @@ def get_tool_awareness_prompt() -> str:
             by_category[cat].append(tool.name)
 
         lines = [
-            f"You are {settings.project_name} v{settings.version}.",
+            # FRE-1779: without this the model called Seshat an outside service.
+            f"You are {settings.project_name} v{settings.version}, the user's self-hosted "
+            f"personal agent. A question about {settings.project_name} is a question about "
+            "you and your own deployment.",
             "",
             f"Available tools ({len(tools)} total):",
         ]

@@ -32,7 +32,17 @@ _FIXTURES = json.loads(
     (Path(__file__).parent / "fixtures" / "planner_prompt_pre_fre1622.json").read_text()
 )
 _SURFACES: dict[str, list[str]] = _FIXTURES["surfaces"]
-_PRE: dict[str, str] = _FIXTURES["prompts"]
+# FRE-1779 adds one line after the role sentence. The fixture stays as captured; the line is
+# inserted here, so the rest of each prompt is still compared byte for byte.
+_FRE1779_ANCHOR = "produce a JSON plan that breaks the query into independent sub-tasks.\n"
+_FRE1779_LINE = (
+    "Seshat is the system that runs this plan, so a task about Seshat is about this "
+    "deployment: its code at `/app/src`, its logs and its services.\n"
+)
+_PRE: dict[str, str] = {
+    key: prompt.replace(_FRE1779_ANCHOR, _FRE1779_ANCHOR + _FRE1779_LINE, 1)
+    for key, prompt in _FIXTURES["prompts"].items()
+}
 _ADR = (
     Path(__file__).resolve().parents[3]
     / "docs"

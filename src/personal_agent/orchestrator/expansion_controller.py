@@ -255,7 +255,10 @@ def _build_planner_system_prompt(
     level_names = "|".join(THOROUGHNESS_LEVELS)
     prompt = (
         "You are a task decomposition planner. Given a user query and a strategy, "
-        "produce a JSON plan that breaks the query into independent sub-tasks.\n\n"
+        "produce a JSON plan that breaks the query into independent sub-tasks.\n"
+        # FRE-1779: the planner once briefed helpers that Seshat was an outside service.
+        "Seshat is the system that runs this plan, so a task about Seshat is about this "
+        "deployment: its code at `/app/src`, its logs and its services.\n\n"
         "Output ONLY valid JSON matching this schema:\n"
         f'{{{_PLANNER_SCHEMA_STRATEGY}, "tasks": [{{"name": "string", '
         f'"goal": "string", "constraints": ["string"], "type": "{type_names}", '

@@ -93,3 +93,19 @@ def test_helper_task_message_omits_the_line_without_read_or_outside_production(
 
     monkeypatch.setattr(settings, "environment", Environment.DEVELOPMENT)
     assert _HELPER_LINE not in _build_task_message(_spec(WorkerType.GENERAL), "t", None)
+
+
+_PLANNER_LINE = (
+    "Seshat is the system that runs this plan, so a task about Seshat is about this "
+    "deployment: its code at `/app/src`, its logs and its services."
+)
+
+
+def test_planner_prompt_names_seshat_near_the_top() -> None:
+    """The planner prompt carries the identity line right after its role sentence."""
+    from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
+
+    prompt = _build_planner_system_prompt(["read", "web_search"])
+
+    assert _PLANNER_LINE in prompt
+    assert prompt.index(_PLANNER_LINE) < prompt.index("Output ONLY valid JSON")

@@ -48,8 +48,12 @@ from personal_agent.telemetry.trace import TraceContext
 # with tools 38fdec72…, no tools 253510e7…. The ADR-0154 D7 probe is NOT run here: model
 # testing is stopped (FRE-1573). Owner decision, 2026-10-11: re-pin now, and run the D7 probe
 # in the FRE-1581 (T9) gate run.
-_MAIN_PLANNER_SHA256_WITH_TOOLS = "890df5867739c11c8b057f5bdf20d0fe1f018861b09a31e321be729b587174d1"
-_MAIN_PLANNER_SHA256_NO_TOOLS = "e58e730b60084751a99e289c87c24b14406651360a466149249f135f4c489f0f"
+#
+# Re-pinned for FRE-1779 (2026-11-20): one Seshat identity line after the role sentence. Before:
+# with tools 890df586…, no tools e58e730b…. The ADR-0154 D7 probe is NOT run in the build (no
+# paid calls); the owner approved the line on the ticket.
+_MAIN_PLANNER_SHA256_WITH_TOOLS = "03349969091744efeb8ee138f86a028283607d1016c4b38fea0cbb7dc7e82ca2"
+_MAIN_PLANNER_SHA256_NO_TOOLS = "fa09610c65fa8658ab89ff93dcad3bc816bd48a8d4102e8980f7a44241649694"
 _PINNED_ROUNDS = {"quick": 3, "standard": 10, "thorough": 20}
 
 # No skill keyword: nothing here can route the sequential-thinking skill.

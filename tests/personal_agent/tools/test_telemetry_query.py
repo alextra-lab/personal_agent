@@ -20,6 +20,8 @@ from personal_agent.security import EgressBlockedError
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.telemetry_query import (
+    _FIELD_CACHE_MAX,
+    _FIELD_EXISTS_CACHE,
     ALLOWED_FIELDS,
     FAMILY_TIME_FIELD,
     search_logs_executor,
@@ -64,6 +66,11 @@ class _Recorder:
     def calls(self) -> int:
         return len(self.requests)
 
+    @property
+    def queries(self) -> int:
+        """Requests other than a field-mapping read (FRE-1777): the searches and counts."""
+        return sum("/_mapping/" not in r.url.path for r in self.requests)
+
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         return self._reply(request)
@@ -83,7 +90,15 @@ async def _run(rec: _Recorder, **kwargs: Any) -> dict[str, Any]:
 async def _refused(rec: _Recorder, **kwargs: Any) -> None:
     with pytest.raises(ToolExecutionError, match="refused"):
         await _run(rec, **kwargs)
-    assert rec.calls == 0, "a refused call must send no request"
+    # A field refusal may read the field mapping (FRE-1777); it never sends the query.
+    assert rec.queries == 0, "a refused call must send no search or count"
+    assert all(r.method == "GET" for r in rec.requests)
+
+
+@pytest.fixture(autouse=True)
+def _empty_field_cache() -> None:
+    """Each test starts with no cached field-mapping answer (FRE-1777)."""
+    _FIELD_EXISTS_CACHE.clear()
 
 
 # ── Definition ────────────────────────────────────────────────────────────────
@@ -490,6 +505,187 @@ async def test_the_refusal_names_the_allowed_fields() -> None:
         await _run(_Recorder(), action="search", index="agent-logs", fields=["user_message"])
     assert "event_type" in str(err.value)
     assert "user_message" in str(err.value)
+
+
+# ── A refusal says whether the field exists (FRE-1777, AC-1) ─────────────────
+
+
+def _mapping_reply(*, exists: bool) -> Callable[[httpx.Request], httpx.Response]:
+    """A field-mapping reply over two monthly indices; the field is in the newer one or none."""
+    found = {"path": {"full_name": "path", "mapping": {"path": {"type": "keyword"}}}}
+    return lambda _r: httpx.Response(
+        200,
+        json={
+            "agent-logs-2026-10": {"mappings": {}},
+            "agent-logs-2026-11": {"mappings": found if exists else {}},
+        },
+    )
+
+
+async def _refusal(rec: _Recorder, **kwargs: Any) -> str:
+    with pytest.raises(ToolExecutionError) as err:
+        await _run(rec, action="search", index="agent-logs", **kwargs)
+    assert getattr(err.value, "code", None) == "refused"
+    assert rec.queries == 0, "a refused call must send no search or count"
+    return str(err.value)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_field_that_exists_says_it_is_not_readable() -> None:
+    rec = _Recorder(_mapping_reply(exists=True))
+    message = await _refusal(rec, query={"exists": {"field": "user_message"}})
+
+    assert "'user_message' exists in this index (agent-logs) but is not readable by this tool" in (
+        message
+    )
+    allowed = ", ".join(sorted(ALLOWED_FIELDS["agent-logs"]))
+    assert f"Allowed fields: {allowed}" in message
+    # One bounded read of the field mapping of the family the query targets.
+    assert rec.calls == 1
+    request = rec.requests[0]
+    assert request.method == "GET"
+    assert request.url.path == "/agent-logs-*/_mapping/field/user_message,user_message.*"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_field_that_does_not_exist_says_so() -> None:
+    rec = _Recorder(_mapping_reply(exists=False))
+    message = await _refusal(rec, fields=["elapsed_wall_ms"])
+
+    assert "'elapsed_wall_ms' does not exist in this index (agent-logs)" in message
+    assert "Allowed fields: " in message
+
+
+@pytest.mark.asyncio
+async def test_a_keyword_suffix_is_looked_up_by_its_base_name() -> None:
+    rec = _Recorder(_mapping_reply(exists=False))
+    await _refusal(rec, aggs={"a": {"terms": {"field": "nope.keyword"}}})
+    assert rec.requests[0].url.path == "/agent-logs-*/_mapping/field/nope,nope.*"
+
+
+def _boom(_r: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("refused")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    [
+        lambda _r: httpx.Response(500, json={"error": "boom"}),
+        lambda _r: httpx.Response(200, text="not json"),
+        lambda _r: httpx.Response(200, json=["not", "an", "object"]),
+        lambda _r: httpx.Response(200, json={"agent-logs-2026-11": {"mappings": "odd"}}),
+        _boom,
+    ],
+    ids=["http_500", "not_json", "not_object", "bad_shape", "connect_error"],
+)
+async def test_a_failed_mapping_read_falls_back_to_the_plain_refusal(
+    reply: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    rec = _Recorder(reply)
+    message = await _refusal(rec, fields=["user_message"])
+
+    assert "field 'user_message' is not available in agent-logs. Allowed fields: " in message
+    assert "exists in this index" not in message
+    assert "does not exist" not in message
+
+
+@pytest.mark.asyncio
+async def test_an_egress_block_on_the_mapping_read_falls_back_to_the_plain_refusal() -> None:
+    def blocked(request: httpx.Request) -> httpx.Response:
+        raise EgressBlockedError(request, "domain not allowlisted", None)
+
+    message = await _refusal(_Recorder(blocked), fields=["user_message"])
+    assert "is not available in agent-logs" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields", [["*"], ["user_*"], [""], [7], ["a,b"], ["x/../_search"]])
+async def test_a_name_that_is_not_a_plain_field_name_is_never_looked_up(fields: Any) -> None:
+    """A wildcard or a path fragment would turn the mapping read into a probe."""
+    rec = _Recorder(_mapping_reply(exists=True))
+    message = await _refusal(rec, fields=fields)
+    assert rec.calls == 0
+    assert "is not available in agent-logs" in message
+
+
+@pytest.mark.asyncio
+async def test_the_answer_is_cached_briefly() -> None:
+    rec = _Recorder(_mapping_reply(exists=True))
+    await _refusal(rec, fields=["user_message"])
+    second = await _refusal(rec, fields=["user_message"])
+    assert rec.calls == 1, "the second refusal reads the cache"
+    assert "exists in this index" in second
+
+
+@pytest.mark.asyncio
+async def test_the_cache_expires() -> None:
+    rec = _Recorder(_mapping_reply(exists=True))
+    with patch("personal_agent.tools.telemetry_query.time.monotonic", return_value=1000.0):
+        await _refusal(rec, fields=["user_message"])
+    with patch("personal_agent.tools.telemetry_query.time.monotonic", return_value=1000.0 + 61):
+        await _refusal(rec, fields=["user_message"])
+    assert rec.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_is_not_cached() -> None:
+    rec = _Recorder(lambda _r: httpx.Response(500, json={}))
+    await _refusal(rec, fields=["user_message"])
+    await _refusal(rec, fields=["user_message"])
+    assert rec.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_the_cache_is_bounded() -> None:
+    rec = _Recorder(_mapping_reply(exists=False))
+    for i in range(_FIELD_CACHE_MAX + 5):
+        await _refusal(rec, fields=[f"absent_{i}"])
+    assert len(_FIELD_EXISTS_CACHE) <= _FIELD_CACHE_MAX
+
+
+# ── Health-check fields are readable (FRE-1777, AC-3) ────────────────────────
+
+_HEALTH_CHECK_FIELDS = ("path", "used_percent", "threshold", "capture_trace_id")
+
+
+def test_the_health_check_fields_are_on_the_agent_logs_list() -> None:
+    assert set(_HEALTH_CHECK_FIELDS) <= ALLOWED_FIELDS["agent-logs"]
+
+
+def test_reason_stays_off_the_list() -> None:
+    """FRE-1777 PII check: a sampled ``reason`` value carried a home-directory user name."""
+    assert "reason" not in ALLOWED_FIELDS["agent-logs"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", _HEALTH_CHECK_FIELDS)
+async def test_a_health_check_field_can_be_queried_aggregated_and_returned(name: str) -> None:
+    rec = _Recorder()
+    await _run(
+        rec,
+        action="search",
+        index="agent-logs",
+        query={"exists": {"field": name}},
+        aggs={"a": {"terms": {"field": name, "size": 5}}},
+        fields=["@timestamp", name],
+        since="7d",
+    )
+    assert rec.calls == 1
+    body = rec.body()
+    assert body["_source"]["includes"] == ["@timestamp", name]
+    assert body["aggs"]["a"]["terms"]["field"] == name
+
+
+def test_the_description_lists_the_health_check_fields() -> None:
+    """AC-4: the description is rendered from ``ALLOWED_FIELDS``, so the added fields show."""
+    line = next(
+        line
+        for line in search_logs_tool.description.splitlines()
+        if line.startswith("- agent-logs fields: ")
+    )
+    listed = set(line.removeprefix("- agent-logs fields: ").rstrip(".").split(", "))
+    assert listed == ALLOWED_FIELDS["agent-logs"]
 
 
 # ── Failure mapping ───────────────────────────────────────────────────────────

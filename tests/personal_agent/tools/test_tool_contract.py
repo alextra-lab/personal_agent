@@ -17,6 +17,7 @@ from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from tests._helpers.log_capture import capture_log_records
@@ -497,12 +498,14 @@ async def test_a_search_logs_refusal_reaches_the_model_with_the_allowed_fields(
         governance_config=governance,
         mode_manager=ModeManager(governance_config=governance),
     )
-    result, records = await _dispatch(
-        layer,
-        "search_logs",
-        {"action": "search", "index": "agent-logs", "fields": ["user_message"]},
-        revealed_tools=frozenset({"search_logs"}),  # a providing skill was loaded (A5.3)
-    )
+    # FRE-1777: the refusal reads the field mapping. Stub it so no request leaves the test.
+    with patch("personal_agent.tools.telemetry_query._field_exists", AsyncMock(return_value=True)):
+        result, records = await _dispatch(
+            layer,
+            "search_logs",
+            {"action": "search", "index": "agent-logs", "fields": ["user_message"]},
+            revealed_tools=frozenset({"search_logs"}),  # a providing skill was loaded (A5.3)
+        )
     payload = assert_conforms(result["content"])
     error = payload["error"]
     allowed = ", ".join(sorted(ALLOWED_FIELDS["agent-logs"]))

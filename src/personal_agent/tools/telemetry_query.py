@@ -72,7 +72,7 @@ class TelemetryQueryError(ToolError[TelemetryCode]):
     """A ``search_logs`` or ``measure_model_latency`` failure."""
 
 
-_REFUSED_NEXT = "Nothing was sent. Correct the request as the message states and call again."
+_REFUSED_NEXT = "The query was not sent. Correct the request as the message states and call again."
 _RETRY_SEARCH = "Call search_logs once more; if it fails again, tell the user."
 _RETRY_LATENCY = "Call measure_model_latency once more; if it fails again, tell the user."
 
@@ -89,10 +89,18 @@ FAMILY_TIME_FIELD: Mapping[str, str] = MappingProxyType(
 # checked against the live mappings on 2026-10-10. A name plus ``.keyword`` is also allowed.
 # FRE-1567 removed duration_ms, latency_ms and response_time_ms: no event wrote them in the
 # 30-day window (ADR-0129, FRE-1219), and the window cap makes older data unreachable.
+# FRE-1777 added the health-check fields path, used_percent, threshold and capture_trace_id
+# after a sample of their values (2026-11-20) held no personal data. ``reason`` stays off:
+# one sampled value held a home-directory user name. ``scripts/monitors/search_logs_field_drift``
+# reports listed fields that no longer exist and unlisted fields that hold data.
 ALLOWED_FIELDS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         "agent-logs": frozenset(
             {
+                "path",
+                "used_percent",
+                "threshold",
+                "capture_trace_id",
                 "@timestamp",
                 "level",
                 "event_type",
@@ -584,6 +592,130 @@ def _refuse(reason: str) -> TelemetryQueryError:
     )
 
 
+def _field_refusal(family: str, name: object, exists: bool | None) -> str:
+    """Word a field refusal, with what the live mapping says about the field (FRE-1777).
+
+    Args:
+        family: The index family the query targets.
+        name: The field name the model wrote.
+        exists: ``True`` or ``False`` from the field mapping, ``None`` when it was not read.
+
+    Returns:
+        The reason. It always ends with the family's allowed fields.
+    """
+    allowed = f"Allowed fields: {', '.join(sorted(ALLOWED_FIELDS[family]))}"
+    if exists is None:
+        return f"field {name!r} is not available in {family}. {allowed}"
+    if exists:
+        return (
+            f"field {name!r} exists in this index ({family}) but is not readable by this "
+            f"tool. {allowed}"
+        )
+    return f"field {name!r} does not exist in this index ({family}). {allowed}"
+
+
+class _FieldRefusedError(TelemetryQueryError):
+    """A field outside the allowlist. The executor adds whether the field exists."""
+
+    def __init__(self, family: str, name: object) -> None:
+        """Build the plain refusal; it is the message when the mapping cannot be read.
+
+        Args:
+            family: The index family the query targets.
+            name: The field name the model wrote.
+        """
+        super().__init__(
+            "refused",
+            f"refused: {_field_refusal(family, name, None)}",
+            retryable=False,
+            next_action=_REFUSED_NEXT,
+        )
+        self.family = family
+        self.field_name = name
+
+
+# A name that is looked up must be a plain field name: no wildcard, comma or slash can turn
+# the mapping read into a probe of other fields or another endpoint.
+_LOOKUP_NAME_RE = re.compile(r"[A-Za-z0-9@_][A-Za-z0-9@_.-]{0,99}")
+_FIELD_CACHE_TTL_S = 60.0
+_FIELD_CACHE_MAX = 256
+_MAPPING_TIMEOUT_S = 3.0
+# (family, field) -> (expiry on the monotonic clock, exists)
+_FIELD_EXISTS_CACHE: dict[tuple[str, str], tuple[float, bool]] = {}
+
+
+def _mapping_has_field(data: object) -> bool | None:
+    """Read a field-mapping reply: does any index of the family map the field?
+
+    Args:
+        data: The decoded reply of ``GET /<family>-*/_mapping/field/<name>,<name>.*``.
+
+    Returns:
+        ``True`` when one index maps the field or a sub-field, ``False`` when none does,
+        ``None`` when the reply does not have the expected shape.
+    """
+    if not isinstance(data, dict):
+        return None
+    found = False
+    for entry in data.values():
+        mappings = entry.get("mappings") if isinstance(entry, dict) else None
+        if not isinstance(mappings, dict):
+            return None
+        found = found or bool(mappings)
+    return found
+
+
+async def _field_exists(family: str, name: object, *, trace_id: str) -> bool | None:
+    """Say whether the family's live mapping holds a field, from a short cache (FRE-1777).
+
+    One bounded GET of the field mapping of ``<family>-*``, the indices the query targets.
+    An object field counts as existing when a sub-field is mapped.
+
+    Args:
+        family: The index family.
+        name: The refused field name. A ``.keyword`` suffix is looked up by its base name.
+        trace_id: For logging.
+
+    Returns:
+        ``True`` or ``False``, or ``None`` when the name is not a plain field name or the
+        mapping cannot be read. ``None`` means "use the plain refusal".
+    """
+    if not isinstance(name, str):
+        return None
+    base = name.removesuffix(".keyword")
+    if not _LOOKUP_NAME_RE.fullmatch(base):
+        return None
+    key = (family, base)
+    now = time.monotonic()
+    cached = _FIELD_EXISTS_CACHE.get(key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+
+    url = f"{settings.elasticsearch_url.rstrip('/')}/{family}-*/_mapping/field/{base},{base}.*"
+    try:
+        async with asyncio.timeout(_MAPPING_TIMEOUT_S):
+            async with create_guarded_http_client(timeout=_MAPPING_TIMEOUT_S) as client:
+                response = await client.get(
+                    url, params={"ignore_unavailable": "true", "allow_no_indices": "true"}
+                )
+        exists = None if response.is_error else _mapping_has_field(response.json())
+    except (EgressBlockedError, httpx.HTTPError, TimeoutError, ValueError) as exc:
+        log.warning(
+            "search_logs_mapping_read_failed",
+            trace_id=trace_id,
+            family=family,
+            error=type(exc).__name__,
+        )
+        return None
+    if exists is None:
+        log.warning("search_logs_mapping_read_failed", trace_id=trace_id, family=family)
+        return None
+    if len(_FIELD_EXISTS_CACHE) >= _FIELD_CACHE_MAX:
+        _FIELD_EXISTS_CACHE.clear()
+    _FIELD_EXISTS_CACHE[key] = (now + _FIELD_CACHE_TTL_S, exists)
+    return exists
+
+
 def _is_number(value: object) -> TypeGuard[int | float]:
     """Report whether ``value`` is a finite int or float and not a bool."""
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
@@ -620,10 +752,7 @@ class _Validator:
             ToolExecutionError: The name is not a string or not in this family's list.
         """
         if not isinstance(name, str) or name.removesuffix(".keyword") not in self._allowed:
-            raise _refuse(
-                f"field {name!r} is not available in {self._family}. "
-                f"Allowed fields: {', '.join(sorted(self._allowed))}"
-            )
+            raise _FieldRefusedError(self._family, name)
         return name
 
     def scalar(self, value: object) -> None:
@@ -1540,6 +1669,17 @@ async def search_logs_executor(
     session_id = ctx.session_id
     try:
         path, body = _build_request(action, index, query, aggs, fields, size, since)
+    except _FieldRefusedError as exc:
+        # FRE-1777: say whether the refused field exists, so the model does not conclude
+        # that the data is absent. The query itself is never sent.
+        exists = await _field_exists(exc.family, exc.field_name, trace_id=trace_id)
+        error: TelemetryQueryError = exc
+        if exists is not None:
+            error = _refuse(_field_refusal(exc.family, exc.field_name, exists))
+        log.warning(
+            "search_logs_refused", trace_id=trace_id, session_id=session_id, reason=str(error)
+        )
+        raise error from None
     except ToolExecutionError as exc:
         log.warning(
             "search_logs_refused", trace_id=trace_id, session_id=session_id, reason=str(exc)

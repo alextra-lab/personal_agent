@@ -117,7 +117,9 @@ Check the result before you answer:
 
 | Failure | Cause | Next step |
 |---|---|---|
-| `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | The field is not in the allowlist, or the name is wrong | Pick a field from the list in the message. If none fits, check the field with `_field_caps` and use curl |
+| `refused: field 'x' exists in this index (agent-logs) but is not readable by this tool. Allowed fields: ...` | The field holds data, but it is not on the allowlist | The data exists. Do not say that it does not. Pick a field from the list, or read the field with curl |
+| `refused: field 'x' does not exist in this index (agent-logs). Allowed fields: ...` | The name is wrong | Pick a field from the list in the message. List the fields with `_field_caps` |
+| `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | The field is not in the allowlist, and the tool could not check the mapping | Pick a field from the list in the message. If none fits, check the field with `_field_caps` and use curl |
 | `refused: index must be one of ...` | The family is not one of the three | Use the curl path in Step 2 |
 | `refused: since ...` | The window is malformed or over 30 days | Write a number and `m`, `h` or `d` |
 | `store_unavailable` or `store_timeout` | Elasticsearch is down or slow | Call once more. If it fails again, stop and tell the user. The `service-health` skill checks the service |

@@ -346,7 +346,8 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
                 "read_skill",
                 # ADR-0156 D9.4: reads only the files its task names in read_paths
                 # (governance/worker_read_grant.py). Held on every task so every general
-                # worker has the same tool bytes; with no file named, a read is refused.
+                # worker has the same tool bytes; with no file named, a read is refused,
+                # except a file under /app/src, the deployed code (FRE-1778).
                 "read",
                 # FRE-1678: an artifact has no file path, so `read` cannot reach it. The
                 # worker reads the artifact its task names by id, scoped to the turn's user.

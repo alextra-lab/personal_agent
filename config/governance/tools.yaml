@@ -313,6 +313,9 @@ tools:
       # interpreter's import path change only through a reviewed PR and a rebuild.
       - "/app/skills/**"
       - "/app/.venv/**"
+      # FRE-1778: the deployed code. Helpers and the primary read it to diagnose Seshat, so
+      # it changes only through a reviewed PR and a rebuild.
+      - "/app/src/**"
     loop_max_per_signature: 1
     loop_max_consecutive: 2
 

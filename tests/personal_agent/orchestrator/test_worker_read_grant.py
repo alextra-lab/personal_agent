@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from personal_agent.governance.worker_read_grant import ReadGrant
 
+from personal_agent.governance.worker_read_grant import ReadGrant
 from personal_agent.orchestrator.sub_agent_types import SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 from personal_agent.orchestrator.worker_types import WorkerType
@@ -295,9 +295,7 @@ class TestTheChecksHoldUnderARace:
         grant = ReadGrant.for_task([str(files["named"])], trace_id="t")
         replacement = files["work"] / "replacement.md"
         replacement.write_text("swapped in\n", encoding="utf-8")
-        self._swap_after_check_path(
-            monkeypatch, lambda: os.replace(replacement, files["named"])
-        )
+        self._swap_after_check_path(monkeypatch, lambda: os.replace(replacement, files["named"]))
         payload = await _read(worker_layer(), grant, str(files["named"]))
         _refused(payload, "file_replaced")
         assert "swapped in" not in json.dumps(payload)
@@ -345,3 +343,122 @@ class TestTheLayerFailsClosedToo:
         )
         assert result.success is True
         assert result.output["content"] == "the named file\n"
+
+
+# --- FRE-1778: a helper reads the deployed code under /app/src without the task naming it ---
+
+
+@pytest.fixture
+def code_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A stand-in for /app/src: the grant module's root is patched to a tmp directory."""
+    from personal_agent.governance import worker_read_grant
+
+    root = (tmp_path / "code").resolve()
+    (root / "pkg").mkdir(parents=True)
+    (root / "pkg" / "app.py").write_text("deployed code\n", encoding="utf-8")
+    monkeypatch.setattr(worker_read_grant, "DEPLOYED_CODE_ROOT", root)
+    return root
+
+
+class TestTheHelperReadsTheDeployedCode:
+    """FRE-1778 AC-2: any file under /app/src is readable; every other D9.4 rule holds."""
+
+    def test_the_root_is_the_image_code_directory(self) -> None:
+        from personal_agent.governance import worker_read_grant
+
+        assert Path("/app/src") == worker_read_grant.DEPLOYED_CODE_ROOT
+
+    @pytest.mark.asyncio
+    async def test_an_unnamed_file_under_the_code_root_is_read(self, code_root: Path) -> None:
+        """The 2026-11-12 incident: a helper with no read_paths reads the service code."""
+        target = code_root / "pkg" / "app.py"
+        with shared_layer(worker_layer()):
+            run = await run_worker(_spec(()), [("read", {"path": str(target)})])
+        payload = run.payload("c0")
+        assert payload["ok"] is True, payload
+        assert payload["content"] == "deployed code\n"
+
+    @pytest.mark.asyncio
+    async def test_an_unnamed_file_outside_the_code_root_is_still_refused(
+        self, code_root: Path, files: dict[str, Path]
+    ) -> None:
+        with shared_layer(worker_layer()):
+            run = await run_worker(_spec(()), [("read", {"path": str(files["other"])})])
+        _refused(run.payload("c0"), "not_granted")
+        assert "another file" not in run.tool_messages["c0"]["content"]
+
+    @pytest.mark.asyncio
+    async def test_dot_dot_out_of_the_code_root_is_refused(
+        self, code_root: Path, files: dict[str, Path]
+    ) -> None:
+        escape = code_root / "pkg" / ".." / ".." / "agent_workspace" / "other.md"
+        grant = ReadGrant.for_task([], trace_id="t")
+        payload = await _read(worker_layer(), grant, str(escape))
+        _refused(payload, "not_granted")
+        assert "another file" not in json.dumps(payload)
+
+    @pytest.mark.asyncio
+    async def test_a_symlink_out_of_the_code_root_is_refused(
+        self, code_root: Path, files: dict[str, Path]
+    ) -> None:
+        link = code_root / "pkg" / "link.py"
+        link.symlink_to(files["other"])
+        grant = ReadGrant.for_task([], trace_id="t")
+        payload = await _read(worker_layer(), grant, str(link))
+        _refused(payload, "not_granted")
+        assert "another file" not in json.dumps(payload)
+
+    @pytest.mark.asyncio
+    async def test_a_symlinked_directory_out_of_the_code_root_is_refused(
+        self, code_root: Path, files: dict[str, Path]
+    ) -> None:
+        (code_root / "pkg" / "outside").symlink_to(files["work"], target_is_directory=True)
+        grant = ReadGrant.for_task([], trace_id="t")
+        path = code_root / "pkg" / "outside" / "other.md"
+        _refused(await _read(worker_layer(), grant, str(path)), "not_granted")
+
+    @pytest.mark.asyncio
+    async def test_a_sibling_with_the_root_as_a_name_prefix_is_refused(
+        self, code_root: Path
+    ) -> None:
+        sibling = code_root.parent / f"{code_root.name}_evil"
+        sibling.mkdir()
+        (sibling / "x.py").write_text("not the code\n", encoding="utf-8")
+        grant = ReadGrant.for_task([], trace_id="t")
+        _refused(await _read(worker_layer(), grant, str(sibling / "x.py")), "not_granted")
+
+    @pytest.mark.asyncio
+    async def test_a_symlink_swapped_in_after_the_check_is_refused(
+        self, code_root: Path, files: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TOCTOU: the open refuses a link in any path part, so a late swap reads nothing."""
+        target = code_root / "pkg" / "app.py"
+        original = ReadGrant.check_path
+
+        def _check_then_swap(self: ReadGrant, real_path: Path) -> Any:
+            entry = original(self, real_path)
+            target.unlink()
+            target.symlink_to(files["other"])
+            return entry
+
+        monkeypatch.setattr(ReadGrant, "check_path", _check_then_swap)
+        grant = ReadGrant.for_task([], trace_id="t")
+        payload = await _read(worker_layer(), grant, str(target))
+        assert payload["ok"] is False, payload
+        assert "another file" not in json.dumps(payload)
+
+    @pytest.mark.asyncio
+    async def test_a_code_read_after_the_task_ends_is_refused(self, code_root: Path) -> None:
+        grant = ReadGrant.for_task([], trace_id="t")
+        grant.close()
+        payload = await _read(worker_layer(), grant, str(code_root / "pkg" / "app.py"))
+        _refused(payload, "grant_ended")
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_names_the_code_root(
+        self, code_root: Path, files: dict[str, Path]
+    ) -> None:
+        grant = ReadGrant.for_task([], trace_id="t")
+        payload = await _read(worker_layer(), grant, str(files["other"]))
+        _refused(payload, "not_granted")
+        assert str(code_root) in payload["error"]["message"]

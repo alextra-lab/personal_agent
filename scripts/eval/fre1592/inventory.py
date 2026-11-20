@@ -62,6 +62,8 @@ DEPLOYMENT_CONTEXT = (
     "## Deployment Context\n"
     "You are running inside a Docker container on a cloud VPS.\n"
     "- App code is at `/app` — the host's repo mount point is NOT accessible from here\n"
+    "- Your own deployed code is at `/app/src`. Before you state how Seshat works or why "
+    'something failed, read that code with `read` or `rg`; if you did not, say "not checked".\n'
     "- Configuration is injected as environment variables at startup; there is no `.env` file "
     "inside the container\n"
     "- Do NOT search for files at host filesystem paths (the host's repo checkout or home "

@@ -17,6 +17,13 @@ The rules, from the ADR:
   refuses a file replaced after the grant, by a rename or by a symlink).
 - The read tool's path rules still apply. The grant never widens them.
 - The grant ends with the task.
+
+One exception (FRE-1778, owner decision 2026-11-20): any file whose real path is under
+:data:`DEPLOYED_CODE_ROOT` (``/app/src``, the code the image runs) may be read without the task
+naming it, so a helper can read Seshat's own code to diagnose it. The test is on the real path,
+so a ``../`` or symlink path out of the root is refused. Such a file has no inode recorded at
+grant time; the read tool's open refuses a symbolic link in any path part, so a link swapped in
+after the check is refused too. No tool may write under the root.
 """
 
 from __future__ import annotations
@@ -34,6 +41,10 @@ log = structlog.get_logger(__name__)
 
 #: At most this many ``read_paths`` entries are considered for one task.
 MAX_GRANTED_FILES = 10
+
+#: The deployed code in the gateway image. A worker may read any file under it (FRE-1778).
+#: A constant, not a setting: widening the worker's reads is a code change and a review.
+DEPLOYED_CODE_ROOT = Path("/app/src")
 
 GrantRefusalCode = Literal["not_granted", "file_replaced", "grant_ended"]
 
@@ -141,27 +152,33 @@ class ReadGrant:
         """End the grant. Every later read is refused."""
         self._closed = True
 
-    def check_path(self, real_path: Path) -> GrantedFile:
+    def check_path(self, real_path: Path) -> GrantedFile | None:
         """The first read-time check: the requested real path is a granted real path.
 
         Args:
             real_path: The fully resolved path that the read asks for.
 
         Returns:
-            The granted entry for that path.
+            The granted entry for that path, or ``None`` when the path is under
+            :data:`DEPLOYED_CODE_ROOT` (FRE-1778), which has no entry to check the opened
+            file against.
 
         Raises:
-            ReadGrantRefused: The grant ended, or the path is not a granted file.
+            ReadGrantRefused: The grant ended, or the path is neither a granted file nor
+                under the deployed code root.
         """
         if self._closed:
             raise ReadGrantRefused("grant_ended", "The task that named this file has ended.")
         for entry in self._files:
             if entry.real_path == str(real_path):
                 return entry
+        if real_path.is_absolute() and real_path.is_relative_to(DEPLOYED_CODE_ROOT):
+            return None
         named = ", ".join(f.real_path for f in self._files) or "none"
         raise ReadGrantRefused(
             "not_granted",
-            f"{str(real_path)!r} is not a file that this task names. Files it names: {named}.",
+            f"{str(real_path)!r} is not a file that this task names. Files it names: {named}. "
+            f"Any file under {DEPLOYED_CODE_ROOT} may also be read.",
         )
 
     def check_opened(self, entry: GrantedFile, st: os.stat_result) -> None:

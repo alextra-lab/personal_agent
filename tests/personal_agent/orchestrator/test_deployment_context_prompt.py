@@ -122,3 +122,18 @@ class TestDeploymentContextDeadServices:
         assert "neo4j:7474" in system_prompt
         assert "elasticsearch:9200" in system_prompt
         assert "redis:6379" in system_prompt
+
+
+class TestDeploymentContextPointsAtTheCode:
+    """FRE-1778 AC-1: the production base prompt points the agent at its deployed code."""
+
+    @pytest.mark.asyncio
+    async def test_names_the_code_directory_and_the_not_checked_rule(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        system_prompt = await _dispatched_system_prompt(monkeypatch)
+
+        assert "`/app/src`" in system_prompt
+        assert "how Seshat works or why something failed" in system_prompt
+        assert "`rg`" in system_prompt
+        assert '"not checked"' in system_prompt

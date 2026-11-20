@@ -426,7 +426,8 @@ async def read_executor(
 
     # 2b. ADR-0156 D9.4, first check: the real path is a path the task named. This
     # refuses an unnamed file, a ../ or symlink path to another file, a hard link at
-    # another path, and any read after the task ended.
+    # another path, and any read after the task ended. A real path under /app/src passes
+    # with no entry (FRE-1778); the no-symlink open below still refuses a late link swap.
     granted: GrantedFile | None = None
     if read_grant is not None:
         try:

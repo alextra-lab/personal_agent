@@ -7379,6 +7379,9 @@ async def step_llm_call(
             "## Deployment Context\n"
             "You are running inside a Docker container on a cloud VPS.\n"
             "- App code is at `/app` — the host's repo mount point is NOT accessible from here\n"
+            # FRE-1778: the owner's decision is that Seshat reads its own code to self-diagnose.
+            "- Your own deployed code is at `/app/src`. Before you state how Seshat works or why "
+            'something failed, read that code with `read` or `rg`; if you did not, say "not checked".\n'
             "- Configuration is injected as environment variables at startup; there is no `.env` file inside the container\n"
             "- Do NOT search for files at host filesystem paths (the host's repo checkout or home directory) — they do not exist inside the container\n"
             # FRE-1165: embeddings/reranker deliberately absent — that substrate is the

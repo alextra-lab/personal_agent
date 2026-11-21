@@ -165,9 +165,25 @@ async def test_a_call_held_past_the_limit_settles_before_the_gate_ttl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC-4: the call is ended at the limit; the dev_agent reservation never reaches expired."""
+    # The route's deadline is a real asyncio.Timeout, but it expires only once the call is in
+    # flight. A wall-clock limit also had to cover respond()'s work before the gate reserves,
+    # which took 555 ms on a CI runner: the limit then fired inside gate.reserve, with no row.
+    real_timeout = asyncio.timeout
+    deadlines: list[asyncio.Timeout] = []
+
+    def held_deadline(delay: float | None) -> asyncio.Timeout:
+        if delay != config.call_timeout_seconds:
+            return real_timeout(delay)
+        deadline = real_timeout(None)
+        deadlines.append(deadline)
+        return deadline
 
     async def hang(**_kwargs: object) -> None:
+        [deadline] = deadlines
+        deadline.reschedule(asyncio.get_running_loop().time())  # the limit is reached now
         await asyncio.Event().wait()
+
+    monkeypatch.setattr(asyncio, "timeout", held_deadline)
 
     monkeypatch.setattr(settings, "scaleway_secret_key", "test-key")
     # CI has no budget.yaml (it is gitignored); respond() reads the role's estimate from it.

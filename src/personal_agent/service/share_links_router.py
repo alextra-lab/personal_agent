@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Literal
 from urllib.parse import urlparse
@@ -231,35 +232,26 @@ async def _link_row_committed(link_id: UUID) -> bool | None:
     return found is not None
 
 
-async def _undo_failed_create(
-    db: AsyncSession,
+async def _remove_orphan_snapshot(
     *,
     link_id: UUID,
-    snapshot_key: str | None,
+    snapshot_key: str,
     commit_sent: bool,
     trace_id: str,
 ) -> None:
-    """Leave no row and no object after a failed create (L5, V-L13).
+    """Delete the snapshot of a failed create, so it leaves no row and no object (L5, V-L13).
 
-    The rollback and the delete run independently, so a failure of one does not skip the other.
     When the commit was sent, its outcome is unknown, so the row is read again on a new session:
     an object that a committed row names is kept, and so is the object when that read fails,
     because a row without its object would break a live link, while an object that no row
     names is served by nothing.
 
     Args:
-        db: The request's session.
         link_id: The id of the link being created.
-        snapshot_key: The snapshot's R2 key, or ``None`` for an upload.
+        snapshot_key: The snapshot's R2 key.
         commit_sent: Whether the commit was attempted.
         trace_id: Trace id for the log lines.
     """
-    try:
-        await db.rollback()
-    except SQLAlchemyError, OSError:
-        log.warning("share_link_create_rollback_failed", trace_id=trace_id)
-    if snapshot_key is None:
-        return
     if commit_sent and await _link_row_committed(link_id) is not False:
         log.warning("share_link_create_commit_unknown", link_id=str(link_id), trace_id=trace_id)
         return
@@ -391,18 +383,30 @@ async def create_share_link(
         commit_sent = True
         await db.commit()
         committed = True
+    except SQLAlchemyError as exc:
+        # The error text holds the bound parameters, among them token_hash, and a traceback
+        # would log it (L3). Only the class name is kept.
+        log.error(
+            "share_link_create_db_failed", error_class=type(exc).__name__, trace_id=ctx.trace_id
+        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE) from None
     finally:
         if not committed:
-            # Shielded: a cancelled request still runs its cleanup to the end.
-            await asyncio.shield(
-                _undo_failed_create(
-                    db,
-                    link_id=link_id,
-                    snapshot_key=snapshot_key,
-                    commit_sent=commit_sent,
-                    trace_id=ctx.trace_id,
+            try:
+                await db.rollback()
+            except SQLAlchemyError, OSError:
+                log.warning("share_link_create_rollback_failed", trace_id=ctx.trace_id)
+            if snapshot_key is not None:
+                # Shielded, and on its own session: a cancelled request still removes the
+                # object, even after the request's session is closed.
+                await asyncio.shield(
+                    _remove_orphan_snapshot(
+                        link_id=link_id,
+                        snapshot_key=snapshot_key,
+                        commit_sent=commit_sent,
+                        trace_id=ctx.trace_id,
+                    )
                 )
-            )
 
     log.info(
         "share_link_created",
@@ -541,6 +545,73 @@ async def revoke_share_link(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@dataclass(frozen=True)
+class _OpenedLink:
+    """An active link whose open was counted."""
+
+    link_id: UUID
+    artifact_id: UUID
+    snapshot_r2_key: str | None
+    r2_key: str
+    content_type: str
+    slug: str | None
+    title: str | None
+
+
+async def _open_link(db: AsyncSession, token_hash: bytes) -> _OpenedLink | UUID | None:
+    """Count an open of an active link in one statement, and commit (L6 step 3).
+
+    Args:
+        db: Database session.
+        token_hash: SHA-256 of the presented token.
+
+    Returns:
+        The opened link; else the id of an inactive link with this hash; else ``None``.
+
+    Raises:
+        SQLAlchemyError: On a database failure. The caller hides its text.
+    """
+    opened = (
+        await db.execute(
+            text(
+                """
+                UPDATE artifact_share_links AS l
+                   SET view_count = l.view_count + 1,
+                       last_viewed_at = now()
+                  FROM artifacts AS a
+                 WHERE l.token_hash = :token_hash
+                   AND l.revoked_at IS NULL
+                   AND l.expires_at > now()
+                   AND a.id = l.artifact_id
+                   AND a.upload_pending = FALSE
+                RETURNING l.id, l.artifact_id, l.snapshot_r2_key,
+                          a.r2_key, a.content_type, a.slug, a.title
+                """
+            ),
+            {"token_hash": token_hash},
+        )
+    ).one_or_none()
+    if opened is None:
+        known = (
+            await db.execute(
+                text("SELECT id FROM artifact_share_links WHERE token_hash = :token_hash"),
+                {"token_hash": token_hash},
+            )
+        ).one_or_none()
+        return None if known is None else UUID(str(known.id))
+
+    await db.commit()
+    return _OpenedLink(
+        link_id=opened.id,
+        artifact_id=opened.artifact_id,
+        snapshot_r2_key=opened.snapshot_r2_key,
+        r2_key=opened.r2_key,
+        content_type=opened.content_type,
+        slug=opened.slug,
+        title=opened.title,
+    )
+
+
 def _presented_token_hash(raw_body: bytes) -> bytes | None:
     """Return the hash of the token in a resolve body, or ``None`` for any other shape."""
     if len(raw_body) > _MAX_RESOLVE_BODY_BYTES:
@@ -610,50 +681,34 @@ async def resolve_share_link(
     if token_hash is None:
         raise _refused("unknown", link_id=None, trace_id=ctx.trace_id)
 
-    opened = (
-        await db.execute(
-            text(
-                """
-                UPDATE artifact_share_links AS l
-                   SET view_count = l.view_count + 1,
-                       last_viewed_at = now()
-                  FROM artifacts AS a
-                 WHERE l.token_hash = :token_hash
-                   AND l.revoked_at IS NULL
-                   AND l.expires_at > now()
-                   AND a.id = l.artifact_id
-                   AND a.upload_pending = FALSE
-                RETURNING l.id, l.artifact_id, l.snapshot_r2_key,
-                          a.r2_key, a.content_type, a.slug, a.title
-                """
-            ),
-            {"token_hash": token_hash},
+    try:
+        opened = await _open_link(db, token_hash)
+    except SQLAlchemyError as exc:
+        # The error text holds the bound token_hash, and a traceback would log it (L3).
+        log.error(
+            "share_link_resolve_db_failed", error_class=type(exc).__name__, trace_id=ctx.trace_id
         )
-    ).one_or_none()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, headers=_NO_STORE
+        ) from None
     if opened is None:
-        known = (
-            await db.execute(
-                text("SELECT id FROM artifact_share_links WHERE token_hash = :token_hash"),
-                {"token_hash": token_hash},
-            )
-        ).one_or_none()
-        if known is None:
-            raise _refused("unknown", link_id=None, trace_id=ctx.trace_id)
-        raise _refused("inactive", link_id=known.id, trace_id=ctx.trace_id)
+        raise _refused("unknown", link_id=None, trace_id=ctx.trace_id)
+    if isinstance(opened, UUID):
+        raise _refused("inactive", link_id=opened, trace_id=ctx.trace_id)
 
-    await db.commit()
     is_snapshot = opened.snapshot_r2_key is not None
+    served_key = opened.snapshot_r2_key or opened.r2_key
     content_type = served_content_type(content_type=opened.content_type, is_snapshot=is_snapshot)
     filename = safe_filename(slug=opened.slug, title=opened.title, content_type=content_type)
     log.info(
         "share_link_opened",
-        link_id=str(opened.id),
+        link_id=str(opened.link_id),
         artifact_id=str(opened.artifact_id),
         trace_id=ctx.trace_id,
     )
     response.headers.update(_NO_STORE)
     return ShareLinkResolved(
-        r2_key=opened.snapshot_r2_key if is_snapshot else opened.r2_key,
+        r2_key=served_key,
         content_type=content_type,
         filename=filename,
         content_disposition=f'inline; filename="{filename}"',

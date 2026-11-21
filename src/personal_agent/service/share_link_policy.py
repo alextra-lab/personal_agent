@@ -96,6 +96,20 @@ def is_link_creator(user: RequestUser) -> bool:
     return user.email.strip().lower() in creators
 
 
+def offers_share_links(user: RequestUser) -> bool:
+    """Return whether this deployment lets this caller create links (``can_share_link``, L9).
+
+    It also needs ``share_public_base_url``, so the PWA shows no Share button that would get 503.
+
+    Args:
+        user: The resolved request identity.
+
+    Returns:
+        ``True`` for a link creator on a deployment with a share base URL.
+    """
+    return bool(settings.share_public_base_url) and is_link_creator(user)
+
+
 def is_shareable(*, item_type: str, content_type: str, upload_pending: bool) -> bool:
     """Return whether a link can open this item (L5).
 

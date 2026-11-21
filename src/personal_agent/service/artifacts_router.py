@@ -49,7 +49,7 @@ from personal_agent.service.cf_access_jwt import (
 )
 from personal_agent.service.database import get_db_session
 from personal_agent.service.models import ArtifactModel
-from personal_agent.service.share_link_policy import is_link_creator, is_shareable
+from personal_agent.service.share_link_policy import is_shareable, offers_share_links
 from personal_agent.storage import get_artifact_store
 from personal_agent.storage.artifact_export import (
     ArtifactExportError,
@@ -128,7 +128,7 @@ def _row_to_summary(row: object, *, link_creator: bool = False) -> ArtifactSumma
 
     Args:
         row: A row of the caller's own artifacts, not pending.
-        link_creator: Whether the caller is a link creator (ADR-0153 L9).
+        link_creator: Whether the caller may create links here (ADR-0153 L9).
 
     Returns:
         The public summary, with ``can_share_link`` set for a creator on a shareable item.
@@ -304,7 +304,7 @@ async def list_artifacts(
         },
     )
     rows = result.all()
-    link_creator = is_link_creator(request_user)
+    link_creator = offers_share_links(request_user)
     return ArtifactListResponse(items=[_row_to_summary(r, link_creator=link_creator) for r in rows])
 
 
@@ -352,7 +352,7 @@ async def get_artifact_metadata(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    return _row_to_summary(row, link_creator=is_link_creator(request_user))
+    return _row_to_summary(row, link_creator=offers_share_links(request_user))
 
 
 # ---------------------------------------------------------------------------

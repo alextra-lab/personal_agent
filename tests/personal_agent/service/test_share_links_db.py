@@ -31,7 +31,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -528,6 +528,15 @@ async def test_can_share_link_is_true_only_for_a_creator_on_its_shareable_item(
     assert c_meta["can_share_link"] is True
 
 
+async def test_can_share_link_is_false_while_share_links_are_not_configured(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "share_public_base_url", None)
+    async with _client(world) as c:
+        x_meta = (await c.get(f"/api/v1/artifacts/{world.items['X']}", headers=_A)).json()
+    assert x_meta["can_share_link"] is False
+
+
 # --- AC-3 / V-L3 / V-L6: resolve outcomes ----------------------------------------------------
 
 
@@ -784,6 +793,8 @@ class _FailingSession:
     async def execute(self, statement: Any, params: Any = None) -> Any:
         if self._fail == "insert" and "INSERT INTO artifact_share_links" in str(statement):
             raise IntegrityError("INSERT", params, Exception("injected insert failure"))
+        if self._fail == "resolve" and "UPDATE artifact_share_links AS l" in str(statement):
+            raise OperationalError("UPDATE", params, Exception("injected connection loss"))
         return await self._inner.execute(statement, params)
 
     async def commit(self) -> None:
@@ -805,9 +816,34 @@ async def test_an_injected_insert_or_commit_failure_leaves_nothing(world: World,
     transport = httpx.ASGITransport(app=world.app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         resp = await _create(c, world, "X")
-    assert resp.status_code == 500
+    assert resp.status_code == 503
     assert await _count_for(world, "X") == 0
     assert world.store.share_objects() == []
+
+
+@pytest.mark.parametrize("fail", ["insert", "resolve"])
+async def test_a_database_error_logs_no_token_hash(world: World, fail: str) -> None:
+    """The error text of a failed statement holds its parameters, among them token_hash (L3)."""
+    async with _client(world) as c:
+        token = _token(await _create(c, world, "P"))
+    digest = hashlib.sha256(base64.urlsafe_b64decode(token + "=")).digest()
+
+    async def _db() -> AsyncIterator[Any]:
+        async with world.maker() as session:
+            yield _FailingSession(session, fail=fail)
+
+    world.app.dependency_overrides[get_db_session] = _db
+    with capture_log_records() as logs:
+        async with _client(world) as c:
+            resp = await (_resolve(c, token) if fail == "resolve" else _create(c, world, "X"))
+    assert resp.status_code == 503
+    assert any(
+        r.get("event") in {"share_link_create_db_failed", "share_link_resolve_db_failed"}
+        for r in logs
+    )
+    for needle in (token, digest.hex(), repr(digest)[2:40]):
+        assert not _holds(logs, needle)
+        assert needle not in resp.text
 
 
 class _CommitThenFailSession(_FailingSession):
@@ -827,7 +863,7 @@ async def test_a_commit_that_landed_but_reported_failure_keeps_the_object(world:
     transport = httpx.ASGITransport(app=world.app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         resp = await _create(c, world, "X")
-    assert resp.status_code == 500
+    assert resp.status_code == 503
     (row,) = await _rows(world, "artifact_id = :a", a=world.items["X"])
     assert world.store.share_objects() == [row["snapshot_r2_key"]]
 
@@ -848,7 +884,7 @@ async def test_a_failed_recheck_after_a_commit_failure_keeps_the_object(
     transport = httpx.ASGITransport(app=world.app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         resp = await _create(c, world, "X")
-    assert resp.status_code == 500
+    assert resp.status_code == 503
     assert await _count_for(world, "X") == 0
     assert len(world.store.share_objects()) == 1
 

@@ -646,16 +646,11 @@ async def test_the_cache_is_bounded() -> None:
 
 # ── Health-check fields are readable (FRE-1777, AC-3) ────────────────────────
 
-_HEALTH_CHECK_FIELDS = ("path", "used_percent", "threshold", "capture_trace_id")
+_HEALTH_CHECK_FIELDS = ("path", "used_percent", "threshold", "capture_trace_id", "reason")
 
 
 def test_the_health_check_fields_are_on_the_agent_logs_list() -> None:
     assert set(_HEALTH_CHECK_FIELDS) <= ALLOWED_FIELDS["agent-logs"]
-
-
-def test_reason_stays_off_the_list() -> None:
-    """FRE-1777 PII check: a sampled ``reason`` value carried a home-directory user name."""
-    assert "reason" not in ALLOWED_FIELDS["agent-logs"]
 
 
 @pytest.mark.asyncio

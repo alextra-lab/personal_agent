@@ -90,9 +90,11 @@ FAMILY_TIME_FIELD: Mapping[str, str] = MappingProxyType(
 # FRE-1567 removed duration_ms, latency_ms and response_time_ms: no event wrote them in the
 # 30-day window (ADR-0129, FRE-1219), and the window cap makes older data unreachable.
 # FRE-1777 added the health-check fields path, used_percent, threshold and capture_trace_id
-# after a sample of their values (2026-11-20) held no personal data. ``reason`` stays off:
-# one sampled value held a home-directory user name. ``scripts/monitors/search_logs_field_drift``
-# reports listed fields that no longer exist and unlisted fields that hold data.
+# after a sample of their values (2026-11-20) held no personal data. ``reason`` was added on
+# 2026-11-21 by owner decision: one value in all logs held a model-guessed home-directory path,
+# the same risk that ``path``, ``message`` and ``error`` already carry.
+# ``scripts/monitors/search_logs_field_drift`` reports listed fields that no longer exist and
+# unlisted fields that hold data.
 ALLOWED_FIELDS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         "agent-logs": frozenset(
@@ -101,6 +103,7 @@ ALLOWED_FIELDS: Mapping[str, frozenset[str]] = MappingProxyType(
                 "used_percent",
                 "threshold",
                 "capture_trace_id",
+                "reason",
                 "@timestamp",
                 "level",
                 "event_type",

@@ -966,14 +966,14 @@ Master updates FRE-1532 and FRE-1534 (FRE-1748 AC-3).
 
 Filed in Linear under the project *Artifact Execution Security*, state Needs Approval:
 
-1. **(a) Gateway:** L3, L4, L5, L6 steps 3 and 4, L9 endpoints, L10 guard tests, L11 events. Schema,
+1. **(a) FRE-1782, gateway:** L3, L4, L5, L6 steps 3 and 4, L9 endpoints, L10 guard tests, L11 events. Schema,
    migration, the setting, the create, list, and revoke endpoints, `can_share_link`, the snapshot,
    and the internal resolve endpoint.
-2. **(b) Worker, share hostname, and Access bypass:** L2, L6 steps 1, 2, and 5, L7, L8, and the
+2. **(b) FRE-1783, Worker, share hostname, and Access bypass:** L2, L6 steps 1, 2, and 5, L7, L8, and the
    L11 live checks. The Terraform and Worker change is in the private secrets repo and is applied
    on the owner's go. The public repo gets a share profile in the envelope verifier
    (`observability/artifact_envelope/`). Blocked by (a).
-3. **(c) PWA:** L9 PWA. Blocked by (b), because its live check sends a real link.
+3. **(c) FRE-1784, PWA:** L9 PWA. Blocked by (b), because its live check sends a real link.
 
 ### A1.7 Alternatives considered
 

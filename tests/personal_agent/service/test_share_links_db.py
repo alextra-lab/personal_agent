@@ -357,6 +357,25 @@ async def test_a_refused_expiry_returns_422_and_inserts_no_row(world: World, val
     assert await _count_for(world, "P") == 0
 
 
+async def test_a_creator_sending_a_body_that_is_not_json_gets_422_and_no_row(
+    world: World,
+) -> None:
+    async with _client(world) as c:
+        resp = await c.post(
+            f"/api/v1/artifacts/{world.items['P']}/share-links",
+            headers={**_A, "content-type": "application/json"},
+            content=b"{not json",
+        )
+        as_null = await c.post(
+            f"/api/v1/artifacts/{world.items['P']}/share-links",
+            headers={**_A, "content-type": "application/json"},
+            content=b"null",
+        )
+    assert resp.status_code == 422
+    assert as_null.status_code == 201
+    assert await _count_for(world, "P") == 1
+
+
 @pytest.mark.parametrize("expiry", ["NULL", "now() + INTERVAL '31 days'", "now()"])
 async def test_a_direct_insert_without_a_valid_expiry_fails(world: World, expiry: str) -> None:
     async with world.maker() as db:
@@ -387,10 +406,22 @@ async def test_no_jwt_gets_401_on_all_three_endpoints_even_with_a_bad_body(world
         create = await c.post(
             f"/api/v1/artifacts/{world.items['X']}/share-links", json={"expires_in_days": 99}
         )
+        not_json = await c.post(
+            f"/api/v1/artifacts/{world.items['X']}/share-links",
+            headers={"content-type": "application/json"},
+            content=b"{not json",
+        )
         bad_jwt = await _create(c, world, "X", who={"cf-access-jwt-assertion": "forged"})
         listing = await c.get("/api/v1/share-links")
         revoke = await c.delete(f"/api/v1/share-links/{uuid4()}")
-    assert [create.status_code, bad_jwt.status_code, listing.status_code, revoke.status_code] == [
+    assert [
+        create.status_code,
+        not_json.status_code,
+        bad_jwt.status_code,
+        listing.status_code,
+        revoke.status_code,
+    ] == [
+        401,
         401,
         401,
         401,
@@ -404,7 +435,7 @@ async def test_an_unlisted_user_gets_403_everywhere_also_on_its_own_item(world: 
         own = await _create(c, world, "Z", who=_B)
         bad_body = await c.post(
             f"/api/v1/artifacts/{world.items['Z']}/share-links",
-            headers=_B,
+            headers={**_B, "content-type": "application/json"},
             content=b"{not json",
         )
         others = await _create(c, world, "X", who=_B)
@@ -777,6 +808,72 @@ async def test_an_injected_insert_or_commit_failure_leaves_nothing(world: World,
     assert resp.status_code == 500
     assert await _count_for(world, "X") == 0
     assert world.store.share_objects() == []
+
+
+class _CommitThenFailSession(_FailingSession):
+    """Commits for real, then reports a failure: the commit outcome is unknown to the caller."""
+
+    async def commit(self) -> None:
+        await self._inner.commit()
+        raise IntegrityError("COMMIT", None, Exception("acknowledgement lost"))
+
+
+async def test_a_commit_that_landed_but_reported_failure_keeps_the_object(world: World) -> None:
+    async def _db() -> AsyncIterator[Any]:
+        async with world.maker() as session:
+            yield _CommitThenFailSession(session, fail="none")
+
+    world.app.dependency_overrides[get_db_session] = _db
+    transport = httpx.ASGITransport(app=world.app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await _create(c, world, "X")
+    assert resp.status_code == 500
+    (row,) = await _rows(world, "artifact_id = :a", a=world.items["X"])
+    assert world.store.share_objects() == [row["snapshot_r2_key"]]
+
+
+async def test_a_failed_recheck_after_a_commit_failure_keeps_the_object(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _unknown(_link_id: UUID) -> None:
+        return None
+
+    monkeypatch.setattr(share_links_router, "_link_row_committed", _unknown)
+
+    async def _db() -> AsyncIterator[Any]:
+        async with world.maker() as session:
+            yield _FailingSession(session, fail="commit")
+
+    world.app.dependency_overrides[get_db_session] = _db
+    transport = httpx.ASGITransport(app=world.app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await _create(c, world, "X")
+    assert resp.status_code == 500
+    assert await _count_for(world, "X") == 0
+    assert len(world.store.share_objects()) == 1
+
+
+async def test_a_create_cancelled_during_the_put_leaves_nothing(world: World) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    real_put = world.store.put
+
+    async def _slow_put(**kwargs: Any) -> None:
+        await real_put(**kwargs)
+        started.set()
+        await release.wait()
+
+    world.store.put = _slow_put  # type: ignore[method-assign]
+    async with _client(world) as c:
+        task = asyncio.create_task(_create(c, world, "X"))
+        await asyncio.wait_for(started.wait(), timeout=10)
+        assert len(world.store.share_objects()) == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    await asyncio.sleep(0.1)
+    assert world.store.share_objects() == []
+    assert await _count_for(world, "X") == 0
 
 
 async def test_a_successful_create_keeps_its_snapshot(world: World) -> None:

@@ -25,8 +25,9 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import structlog
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, StrictInt, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError, field_validator
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,12 +123,43 @@ class ShareLinkResolved(BaseModel):
     content_disposition: str
 
 
+def _expiry_days(raw_body: bytes) -> int:
+    """Read the expiry choice from the create body.
+
+    The body is read in the handler, after the dependencies, so a caller who is not
+    authenticated or not a creator gets 401 or 403 even for a body that is not JSON.
+
+    Args:
+        raw_body: The request body, possibly empty.
+
+    Returns:
+        The number of days, 7 when there is no body.
+
+    Raises:
+        RequestValidationError: 422 for a body that is not JSON or not a valid choice.
+    """
+    if not raw_body.strip():
+        return ShareLinkCreateRequest().expires_in_days
+    try:
+        parsed = json.loads(raw_body)
+    except ValueError as exc:
+        raise RequestValidationError(
+            [{"type": "json_invalid", "loc": ("body",), "msg": "JSON decode error"}]
+        ) from exc
+    if parsed is None:
+        return ShareLinkCreateRequest().expires_in_days
+    try:
+        return ShareLinkCreateRequest.model_validate(parsed).expires_in_days
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors(include_url=False)) from exc
+
+
 def require_link_creator(
     user: Annotated[RequestUser, Depends(get_request_user)],
 ) -> RequestUser:
     """FastAPI dependency: the verified caller, who must be a link creator (L9).
 
-    It runs before any lookup and before the body is checked, so a 403 reveals nothing.
+    It runs before any lookup and before the body is read, so a 403 reveals nothing.
 
     Args:
         user: The verified request identity.
@@ -194,7 +226,7 @@ async def _link_row_committed(link_id: UUID) -> bool | None:
                     {"link_id": link_id},
                 )
             ).one_or_none()
-    except SQLAlchemyError:
+    except SQLAlchemyError, OSError:
         return None
     return found is not None
 
@@ -224,7 +256,7 @@ async def _undo_failed_create(
     """
     try:
         await db.rollback()
-    except SQLAlchemyError:
+    except SQLAlchemyError, OSError:
         log.warning("share_link_create_rollback_failed", trace_id=trace_id)
     if snapshot_key is None:
         return
@@ -246,6 +278,12 @@ async def _undo_failed_create(
     response_model=ShareLinkCreated,
     status_code=status.HTTP_201_CREATED,
     tags=["share-links"],
+    openapi_extra={
+        "requestBody": {
+            "required": False,
+            "content": {"application/json": {"schema": ShareLinkCreateRequest.model_json_schema()}},
+        }
+    },
     responses={
         400: {"description": "This item cannot be shared by link."},
         401: {"description": "Not authenticated via CF Access."},
@@ -260,7 +298,7 @@ async def create_share_link(
     artifact_id: UUID,
     user: Annotated[RequestUser, Depends(require_link_creator)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    body: Annotated[ShareLinkCreateRequest | None, Body()] = None,
+    request: Request,
 ) -> ShareLinkCreated:
     """Create a link to one item that the caller owns, and return its URL once (L3, L5, L9).
 
@@ -268,7 +306,7 @@ async def create_share_link(
         artifact_id: The item to share.
         user: The verified caller, a link creator.
         db: Database session.
-        body: The expiry choice. No body means 7 days.
+        request: The request. Its optional JSON body holds the expiry choice; no body means 7 days.
 
     Returns:
         The link id, the URL and the expiry.
@@ -277,7 +315,7 @@ async def create_share_link(
         HTTPException: As listed in ``responses``.
     """
     ctx = SystemTraceContext.new("share_link_create")
-    days = (body or ShareLinkCreateRequest()).expires_in_days
+    days = _expiry_days(await request.body())
 
     row = (
         await db.execute(

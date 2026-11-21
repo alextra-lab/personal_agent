@@ -1041,6 +1041,21 @@ class AppConfig(BaseSettings):
         ),
         json_schema_extra={"secret": True},
     )
+    # ADR-0153 Amendment 1 (FRE-1782): share links for anyone.
+    share_public_base_url: str | None = Field(
+        default=None,
+        description=(
+            "Public base URL of the share hostname, e.g. https://share.example.com. A link URL is "
+            "{base}/s/{token}. Unset: creating a link returns 503 (ADR-0153 L3)."
+        ),
+    )
+    share_link_creator_emails: list[str] = Field(
+        default=[],
+        description=(
+            "Verified emails, besides the owner, that may create, list and revoke their own share "
+            "links (ADR-0153 L9). A JSON list, set in .env only. Empty: only the owner."
+        ),
+    )
     upload_max_size_bytes: int = Field(
         default=52_428_800,  # 50 MiB
         description="Maximum allowed user-upload file size in bytes (FRE-369).",

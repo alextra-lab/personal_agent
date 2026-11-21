@@ -40,6 +40,10 @@ _COMMAND = "this is a process that the gateway starts, so the menu does not edit
 _BUILD = "the image build writes this, and the freshness check compares it with the image"
 _COMPOSE_PORT = "the compose command sets the port that the gateway listens on"
 _CLI_ONLY = "only a command-line tool reads this, in its own process, which holds no override"
+_PUBLISHES = (
+    "this list decides who can publish an artifact to anyone by link, so it is set in .env and "
+    "applies at the next start"
+)
 
 #: ``AppConfig`` fields whose every gateway read runs at call time.
 NEXT_TURN_SETTINGS: frozenset[str] = frozenset(
@@ -210,6 +214,7 @@ NEXT_TURN_SETTINGS: frozenset[str] = frozenset(
         "session_summary_retry_backoff_max_seconds",
         "session_summary_sweep_interval_seconds",
         "session_write_wait_timeout_seconds",
+        "share_public_base_url",
         "signal_priority_clamp",
         "signal_smoothing_prior",
         "signal_suppression_cooldown_days",
@@ -415,6 +420,7 @@ READ_ONLY_SETTINGS: Mapping[str, str] = {
     "service_port": _COMPOSE_PORT,
     "freshness_backfill_confirm": _CLI_ONLY,
     "service_url": _CLI_ONLY,
+    "share_link_creator_emails": _PUBLISHES,
 }
 
 

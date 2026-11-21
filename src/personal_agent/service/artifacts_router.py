@@ -49,6 +49,7 @@ from personal_agent.service.cf_access_jwt import (
 )
 from personal_agent.service.database import get_db_session
 from personal_agent.service.models import ArtifactModel
+from personal_agent.service.share_link_policy import is_link_creator, is_shareable
 from personal_agent.storage import get_artifact_store
 from personal_agent.storage.artifact_export import (
     ArtifactExportError,
@@ -95,6 +96,9 @@ class ArtifactSummary(BaseModel):
     size_bytes: int
     tags: list[str]
     created_at: datetime
+    #: True only for a link creator on its own shareable item (ADR-0153 L9). The PWA shows
+    #: Share only when it is true.
+    can_share_link: bool = False
 
 
 class ArtifactListResponse(BaseModel):
@@ -119,8 +123,16 @@ def _artifacts_public_base_url() -> str | None:
     return base.rstrip("/") if base else None
 
 
-def _row_to_summary(row: object) -> ArtifactSummary:
-    """Convert a SQLAlchemy Row (or SimpleNamespace) to ArtifactSummary."""
+def _row_to_summary(row: object, *, link_creator: bool = False) -> ArtifactSummary:
+    """Convert a SQLAlchemy Row (or SimpleNamespace) to ArtifactSummary.
+
+    Args:
+        row: A row of the caller's own artifacts, not pending.
+        link_creator: Whether the caller is a link creator (ADR-0153 L9).
+
+    Returns:
+        The public summary, with ``can_share_link`` set for a creator on a shareable item.
+    """
     base = _artifacts_public_base_url()
     raw_id = getattr(row, "id", None)
     artifact_id: UUID = raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id))
@@ -135,6 +147,12 @@ def _row_to_summary(row: object) -> ArtifactSummary:
         size_bytes=getattr(row, "size_bytes", 0),
         tags=list(getattr(row, "tags", []) or []),
         created_at=getattr(row, "created_at", datetime.now(timezone.utc)),
+        can_share_link=link_creator
+        and is_shareable(
+            item_type=getattr(row, "type", ""),
+            content_type=getattr(row, "content_type", ""),
+            upload_pending=False,
+        ),
     )
 
 
@@ -265,7 +283,7 @@ async def list_artifacts(
     result = await db.execute(
         text(
             """
-            SELECT id, slug, title, summary, content_type, size_bytes,
+            SELECT id, type, slug, title, summary, content_type, size_bytes,
                    tags, created_at
             FROM artifacts
             WHERE user_id = :user_id
@@ -286,7 +304,8 @@ async def list_artifacts(
         },
     )
     rows = result.all()
-    return ArtifactListResponse(items=[_row_to_summary(r) for r in rows])
+    link_creator = is_link_creator(request_user)
+    return ArtifactListResponse(items=[_row_to_summary(r, link_creator=link_creator) for r in rows])
 
 
 @router.get(
@@ -316,7 +335,7 @@ async def get_artifact_metadata(
     result = await db.execute(
         text(
             """
-            SELECT id, slug, title, summary, content_type, size_bytes,
+            SELECT id, type, slug, title, summary, content_type, size_bytes,
                    tags, created_at
             FROM artifacts
             WHERE id = :artifact_id
@@ -333,7 +352,7 @@ async def get_artifact_metadata(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    return _row_to_summary(row)
+    return _row_to_summary(row, link_creator=is_link_creator(request_user))
 
 
 # ---------------------------------------------------------------------------

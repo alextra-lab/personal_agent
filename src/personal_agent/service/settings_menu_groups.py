@@ -248,6 +248,8 @@ _BY_GROUP: Mapping[str, tuple[str, ...]] = {
         "sandbox_scratch_volume",
         "service_port",
         "service_url",
+        "share_link_creator_emails",
+        "share_public_base_url",
         "slm_base_url",
         "substrate_profile",
         "sysgraph_database_url",

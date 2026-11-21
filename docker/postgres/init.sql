@@ -667,6 +667,31 @@ CREATE TABLE IF NOT EXISTS tool_approval_decisions (
     decided_at   TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Share links for anyone (ADR-0153 Amendment 1 L4 / FRE-1782). Mirrors
+-- docker/postgres/migrations/0042_artifact_share_links.sql. Only the SHA-256 of the token is stored.
+-- No IP, user-agent, referrer or location column (L11). No path deletes a row; DELETE is revoked
+-- from seshat_app below the app-role grants. grafana_ro and seshat_dev_broker get no grant.
+CREATE TABLE IF NOT EXISTS artifact_share_links (
+    id              UUID PRIMARY KEY,
+    artifact_id     UUID NOT NULL REFERENCES artifacts(id) ON DELETE RESTRICT,
+    created_by      UUID NOT NULL REFERENCES users(user_id),
+    token_hash      BYTEA NOT NULL UNIQUE CHECK (octet_length(token_hash) = 32),
+    snapshot_r2_key TEXT NULL UNIQUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at      TIMESTAMPTZ NOT NULL,
+    revoked_at      TIMESTAMPTZ NULL,
+    view_count      BIGINT NOT NULL DEFAULT 0 CHECK (view_count >= 0),
+    last_viewed_at  TIMESTAMPTZ NULL,
+    CONSTRAINT ck_artifact_share_links_expiry
+        CHECK (expires_at > created_at AND expires_at <= created_at + INTERVAL '30 days')
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_share_links_creator_created
+    ON artifact_share_links (created_by, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_share_links_artifact
+    ON artifact_share_links (artifact_id);
+
 -- ===========================================================================
 -- sysgraph schema (ADR-0105 D2/D3 / FRE-714)
 --
@@ -842,6 +867,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO seshat_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
     GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO seshat_app;
+
+-- No path deletes a share link (ADR-0153 Amendment 1 L4); mirrors migration 0042.
+REVOKE DELETE ON artifact_share_links FROM seshat_app;
 
 -- Intentionally NO grant on schema sysgraph: seshat_app is not a superuser and
 -- has no USAGE there, so the app connection is denied — physical isolation now

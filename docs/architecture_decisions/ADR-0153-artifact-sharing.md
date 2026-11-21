@@ -702,7 +702,7 @@ Done) is the only precondition, because the owner-only API (L9) needs a verified
 |---|---|---|
 | `id` | `UUID PRIMARY KEY` | The `link_id` |
 | `artifact_id` | `UUID NOT NULL` | FK `artifacts(id) ON DELETE RESTRICT`, as D1 |
-| `created_by` | `UUID NOT NULL` | FK `users(user_id)`. Always the owner (L9) |
+| `created_by` | `UUID NOT NULL` | FK `users(user_id)`. The link creator (L9), the owner of the item |
 | `token_hash` | `BYTEA NOT NULL UNIQUE` | SHA-256 of the token. `CHECK (octet_length(token_hash) = 32)` |
 | `snapshot_r2_key` | `TEXT NULL UNIQUE` | R2 key of the HTML snapshot (L5). NULL for an upload |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
@@ -734,7 +734,7 @@ Done) is the only precondition, because the owner-only API (L9) needs a verified
   SVG, PDF). Notes, captures, non-HTML artifacts, pending uploads, and text, Markdown, CSV and
   JSON uploads are not shareable. The owner's decision 5 names HTML artifacts, PDF, and images.
 - **HTML: a snapshot made at creation.** The create endpoint runs the existing export transform in
-  `inline` mode on the artifact. It writes the result to R2 at `share/{owner_user_id}/{link_id}.html`
+  `inline` mode on the artifact. It writes the result to R2 at `share/{creator_user_id}/{link_id}.html`
   and stores that key in `snapshot_r2_key`. The snapshot holds the artifact's bytes at link
   creation, and nothing writes it after that, so a link always serves the same bytes.
 - **Self-contained check.** After the export, the create endpoint searches the snapshot for the

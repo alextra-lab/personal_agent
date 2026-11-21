@@ -608,6 +608,12 @@ artifact in a browser. The owner keeps both: links ship first, and the grants ar
   the main-app JWT and takes the email from it (D11, `service/auth.py`). Then
   `settings_edit.is_owner` (`service/settings_edit.py:113`) requires `gateway_auth_enabled` and an
   email equal to `agent_owner_email`. A dev-mode identity never counts.
+- **Link creator:** the owner, or a user whose verified email is in the setting
+  `share_link_creator_emails` (a list, set in `.env`, never in this repo). Owner decision of
+  2026-11-21: the owner and one named second user (names on FRE-1748). That user's email goes in
+  the setting. The same
+  two checks apply: a verified main-app JWT (D11) and `gateway_auth_enabled`. A dev-mode identity
+  never counts.
 
 **Today's behaviour that this amendment builds on** (verified on `main` at `fe06f962`, 2026-11-21):
 
@@ -861,25 +867,29 @@ text reaches a header.
   owner, or creation time.
 - **The artifact host does not change.** It keeps 404 for no access (ADR-0069 D3, D8 above).
 
-#### L9 — Only the owner creates, lists, and revokes links, from the PWA
+#### L9 — Only a link creator creates, lists, and revokes links, from the PWA
 
 **Endpoints.** All three use `get_request_user` (D11, verified main-app JWT) and then
-`settings_edit.is_owner`. A caller who is not the owner gets 403 before any lookup, so a 403
-reveals nothing about an id.
+the link-creator check (the owner through `settings_edit.is_owner`, or an email in
+`share_link_creator_emails`). A caller who is not a link creator gets 403 before any lookup, so a
+403 reveals nothing about an id. A creator shares only artifacts that the creator owns, and lists
+and revokes only the creator's own links. The owner has no access to another creator's links.
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /api/v1/artifacts/{artifact_id}/share-links`, body `{"expires_in_days": 1 \| 7 \| 30}` (default 7) | Checks in this order: the owner (403), then an artifact that the caller owns and that exists (404, the same as an unknown id), then a shareable item (400), then the setting (503). Then it makes the snapshot (502 on failure, 422 when the snapshot is not self-contained, L5), inserts the row, and returns 201 with `link_id`, `url`, and `expires_at`. Any other `expires_in_days` returns 422 |
-| `GET /api/v1/share-links` | The owner's active links, newest first: `link_id`, `artifact_id`, `artifact_title`, `created_at`, `expires_at`, `view_count`, `last_viewed_at`. No URL, token, or hash |
-| `DELETE /api/v1/share-links/{link_id}` | Sets `revoked_at = now()` on the owner's link and returns 204. A second revoke returns 204 and keeps the first time. An unknown id returns 404 |
+| `POST /api/v1/artifacts/{artifact_id}/share-links`, body `{"expires_in_days": 1 \| 7 \| 30}` (default 7) | Checks in this order: a link creator (403), then an artifact that the caller owns and that exists (404, the same as an unknown id), then a shareable item (400), then the setting (503). Then it makes the snapshot (502 on failure, 422 when the snapshot is not self-contained, L5), inserts the row, and returns 201 with `link_id`, `url`, and `expires_at`. Any other `expires_in_days` returns 422 |
+| `GET /api/v1/share-links` | The caller's active links, newest first: `link_id`, `artifact_id`, `artifact_title`, `created_at`, `expires_at`, `view_count`, `last_viewed_at`. No URL, token, or hash |
+| `DELETE /api/v1/share-links/{link_id}` | Sets `revoked_at = now()` on the caller's link and returns 204. A second revoke returns 204 and keeps the first time. An unknown id returns 404 |
 
 The artifact list and metadata responses (`GET /api/v1/artifacts`, `GET /api/v1/artifacts/{id}`)
-gain `can_share_link`. It is true only when the caller is the owner and the item is shareable
+gain `can_share_link`. It is true only when the caller is a link creator, owns the item, and the item is shareable
 (L5). The PWA shows Share only when it is true.
 
-**Other allowlisted users** cannot create links in this version. The owner's decision 6 reads "Only
-the owner makes a link". This amendment reads "owner" as the deployment owner, because a link
-publishes to anyone and the decision is the owner's alone.
+**Other allowlisted users** cannot create links. The owner's decision 6 read "Only the owner makes
+a link". On 2026-11-21 the owner named two creators: the owner and one second user (names on
+FRE-1748). A user becomes a creator only
+when the owner adds the email to `share_link_creator_emails` and the gateway restarts, because a
+link publishes to anyone.
 
 **The PWA.**
 
@@ -1127,8 +1137,10 @@ Access session. Each check runs on the test stack (`tests/CLAUDE.md`, FRE-375) u
   of the Caddy access log for those three tokens finds nothing. · **Check:** an integration test,
   and the post-deploy search. · *Fails if* the token or its hash appears in any of these places,
   other than `token_hash` itself.
-- **V-L9 — Only the owner manages links.** With no JWT, each endpoint returns 401. B gets 403 on
-  create, list, and revoke, also for B's own Z. A's create on Z returns the same 404 as for a random
+- **V-L9 — Only a link creator manages links.** With no JWT, each endpoint returns 401. B (not in
+  `share_link_creator_emails`) gets 403 on create, list, and revoke, also for B's own Z. C (in
+  `share_link_creator_emails`) creates a link on C's own item (201), sees only C's links in the
+  list, gets 404 on A's X, and gets 404 when revoking A's link; A's list does not show C's link. A's create on Z returns the same 404 as for a random
   UUID. A's create on N, K, U, and M returns 400 and inserts no row. A's revoke of an unknown link
   id returns 404. `can_share_link` is true for A on X, P, F, and S, and false for A on N and M and
   for B on Z. · **Check:** API tests. · *Fails if* any outcome differs, or a row exists after a

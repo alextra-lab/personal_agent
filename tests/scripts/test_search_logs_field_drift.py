@@ -34,7 +34,7 @@ _MAPPING = {
         "mappings": {
             "properties": {
                 "@timestamp": {"type": "date"},
-                "reason": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                "unlisted_note": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
                 "probe": {"properties": {"ms": {"type": "long"}, "ok": {"type": "boolean"}}},
                 "empty_object": {"type": "object"},
             }
@@ -48,7 +48,7 @@ def test_leaf_fields_unites_indices_walks_objects_and_skips_multi_fields() -> No
         "@timestamp",
         "event_type",
         "old_only",
-        "reason",
+        "unlisted_note",
         "probe.ms",
         "probe.ok",
     }
@@ -71,24 +71,24 @@ def test_family_drift_reports_both_lists() -> None:
     drift = family_drift(
         "agent-logs",
         frozenset({"@timestamp", "event_type", "gone"}),
-        {"@timestamp", "event_type", "reason", "probe.ms", "quiet"},
-        {"reason": 50, "probe.ms": 7, "quiet": 0},
+        {"@timestamp", "event_type", "unlisted_note", "probe.ms", "quiet"},
+        {"unlisted_note": 50, "probe.ms": 7, "quiet": 0},
         checked=3,
         top=1,
     )
     assert drift.listed_missing == ("gone",)
-    assert drift.unlisted_with_data == (("reason", 50),)
+    assert drift.unlisted_with_data == (("unlisted_note", 50),)
     assert drift.with_data == 2, "the total counts every unlisted field with data, not the top N"
     assert drift.unlisted_mapped == 3
 
 
 def test_render_prints_names_and_counts_only() -> None:
     drift = family_drift(
-        "agent-logs", frozenset({"gone"}), {"reason"}, {"reason": 5}, checked=1, top=5
+        "agent-logs", frozenset({"gone"}), {"unlisted_note"}, {"unlisted_note": 5}, checked=1, top=5
     )
     text = render(drift, since="7d")
     assert "Listed fields that do not exist (1):\n  gone" in text
-    assert "  reason  5" in text
+    assert "  unlisted_note  5" in text
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_measure_sends_one_mapping_read_and_one_search() -> None:
         if request.url.path.endswith("/_mapping"):
             return httpx.Response(200, json=_MAPPING)
         names = json.loads(request.content)["aggs"]["fields"]["filters"]["filters"]
-        buckets = {name: {"doc_count": 3 if name == "reason" else 0} for name in names}
+        buckets = {name: {"doc_count": 3 if name == "unlisted_note" else 0} for name in names}
         return httpx.Response(200, json={"aggregations": {"fields": {"buckets": buckets}}})
 
     async with httpx.AsyncClient(
@@ -114,7 +114,7 @@ async def test_measure_sends_one_mapping_read_and_one_search() -> None:
     ]
     sent = json.loads(requests[1].content)["aggs"]["fields"]["filters"]["filters"]
     assert not set(sent) & ALLOWED_FIELDS["agent-logs"], "only unlisted fields are counted"
-    assert drift.unlisted_with_data == (("reason", 3),)
+    assert drift.unlisted_with_data == (("unlisted_note", 3),)
     assert "@timestamp" not in drift.listed_missing
     assert "event_type" not in drift.listed_missing
 

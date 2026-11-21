@@ -300,6 +300,30 @@ def _check_durability(
     )
 
 
+def is_allowed_pattern_root(resolved: Path, tool_name: str) -> bool:
+    """Return True when *resolved* is the root of an allowed ``<root>/**`` pattern (FRE-1779).
+
+    ``/app`` does not match ``/app/**``, so the path rules refuse it as not allowed, although it
+    is the folder that holds the allowed files. The caller uses this to give a folder refusal
+    instead. It never permits a path: a rules load failure or a missing policy returns False.
+
+    Args:
+        resolved: Fully resolved absolute path that the path rules refused.
+        tool_name: Key to look up in ``governance_config.tools``.
+
+    Returns:
+        True if an allowed pattern is exactly ``str(resolved) + "/**"``.
+    """
+    try:
+        policy = load_governance_config().tools.get(tool_name)
+    except Exception:  # noqa: BLE001 — the original refusal stands
+        return False
+    if policy is None:
+        return False
+    target = f"{resolved}/**"
+    return any(_expand_pattern(p) == target for p in policy.allowed_paths)
+
+
 def _check_path_governance(
     resolved: Path,
     tool_name: str,

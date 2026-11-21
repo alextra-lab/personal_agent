@@ -157,6 +157,68 @@ async def test_read_path_not_in_allowed_paths() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FRE-1779: a folder gets a refusal that says read reads files only
+# ---------------------------------------------------------------------------
+
+_FOLDER_TEXT = "`read` reads files only"
+
+
+def _patched_policy(**kwargs):
+    from personal_agent.governance.models import GovernanceConfig
+
+    mock_config = GovernanceConfig.__new__(GovernanceConfig)
+    object.__setattr__(mock_config, "tools", {"read": _make_policy(**kwargs)})
+    return patch(
+        "personal_agent.tools.primitives._governance.load_governance_config",
+        return_value=mock_config,
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_of_a_folder_says_read_reads_files_only() -> None:
+    """An allowed, existing folder is refused with the files-only text and the /app/src hint."""
+    with TemporaryDirectory() as tmpdir:
+        with pytest.raises(ReadError) as exc_info:
+            await read_executor(tmpdir, ctx=_CTX)
+
+    assert exc_info.value.code == "not_a_file"
+    assert _FOLDER_TEXT in exc_info.value.message
+    assert "/app/src/" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_read_of_the_root_of_an_allowed_pattern_says_read_reads_files_only() -> None:
+    """`/app` fails `/app/**` only because it is the pattern's root: the folder refusal, not a path one."""
+    with _patched_policy(allowed_paths=["/fre1779_root/**"]):
+        with pytest.raises(ReadError) as exc_info:
+            await read_executor("/fre1779_root", ctx=_CTX)
+
+    assert exc_info.value.code == "not_a_file"
+    assert _FOLDER_TEXT in exc_info.value.message
+    assert "/app/src/" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_read_of_a_forbidden_pattern_root_stays_forbidden() -> None:
+    """A forbidden path keeps its refusal even when it is also an allowed pattern's root."""
+    with _patched_policy(allowed_paths=["/fre1779_root/**"], forbidden_paths=["/fre1779_root"]):
+        with pytest.raises(PathRefusalError) as exc_info:
+            await read_executor("/fre1779_root", ctx=_CTX)
+
+    assert exc_info.value.code == "forbidden_path"
+
+
+@pytest.mark.asyncio
+async def test_read_of_a_path_outside_any_pattern_root_keeps_path_not_allowed() -> None:
+    """A prefix that is not a pattern root (e.g. `/fre1779`) is still refused by the path rules."""
+    with _patched_policy(allowed_paths=["/fre1779_root/**"]):
+        with pytest.raises(PathRefusalError) as exc_info:
+            await read_executor("/fre1779", ctx=_CTX)
+
+    assert exc_info.value.code == "path_not_allowed"
+
+
+# ---------------------------------------------------------------------------
 # tail_lines — basic: returns last N lines of a small file
 # ---------------------------------------------------------------------------
 
@@ -518,7 +580,9 @@ async def test_read_open_failure_maps_to_code(raised: OSError, code: str, retrya
         test_file.write_text("secret", encoding="utf-8")
         target = test_file.resolve()
 
-        with patch("personal_agent.tools.primitives.read.open_file_no_symlinks", side_effect=raised):
+        with patch(
+            "personal_agent.tools.primitives.read.open_file_no_symlinks", side_effect=raised
+        ):
             with pytest.raises(ReadError) as exc_info:
                 await read_executor(str(test_file), ctx=_CTX)
 

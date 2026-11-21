@@ -32,11 +32,20 @@ from personal_agent.tools.primitives._governance import (
     PathCode,
     _check_path_governance,
     _expand_path,
+    is_allowed_pattern_root,
     open_file_no_symlinks,
 )
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = structlog.get_logger(__name__)
+
+# FRE-1779: a helper read the folder /app and got only "not in allowed paths". The refusal for
+# a folder says what read does and where the readable code is.
+_FOLDER_MESSAGE = (
+    "Path {path!r} is a folder. `read` reads files only. Seshat's deployed code is readable "
+    "as files under /app/src/..., for example /app/src/personal_agent/orchestrator/executor.py."
+)
+_FOLDER_NEXT = "Read one file by its full path, such as a .py file under /app/src/personal_agent/."
 
 # ---------------------------------------------------------------------------
 # Defaults (FRE-410)
@@ -302,6 +311,23 @@ def _build_read_marker(
     )
 
 
+def _folder_error(resolved: Path) -> ReadError:
+    """Build the refusal for a folder path (FRE-1779).
+
+    Args:
+        resolved: The resolved folder path.
+
+    Returns:
+        The ``not_a_file`` failure to raise.
+    """
+    return ReadError(
+        "not_a_file",
+        _FOLDER_MESSAGE.format(path=str(resolved)),
+        retryable=False,
+        next_action=_FOLDER_NEXT,
+    )
+
+
 def _grant_error(
     exc: ReadGrantRefused, resolved: Path, trace_id: str, session_id: str | None
 ) -> ReadError:
@@ -422,6 +448,8 @@ async def read_executor(
             trace_id=trace_id,
             session_id=session_id,
         )
+        if exc.code == "path_not_allowed" and is_allowed_pattern_root(resolved, "read"):
+            raise _folder_error(resolved) from exc
         raise
 
     # 2b. ADR-0156 D9.4, first check: the real path is a path the task named. This
@@ -435,7 +463,9 @@ async def read_executor(
         except ReadGrantRefused as exc:
             raise _grant_error(exc, resolved, trace_id, session_id) from exc
 
-    # 3. Must be a regular file
+    # 3. Must be a regular file. A folder gets the files-only refusal (FRE-1779).
+    if resolved.is_dir():
+        raise _folder_error(resolved)
     if not resolved.exists() or not resolved.is_file():
         raise ReadError(
             "not_a_file",

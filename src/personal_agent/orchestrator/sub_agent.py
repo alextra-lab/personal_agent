@@ -66,6 +66,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
+from personal_agent.config.env_loader import Environment
 from personal_agent.config.seshat_effort import rounds_for_turn
 from personal_agent.governance.worker_read_grant import ReadGrant
 from personal_agent.grounding.source_registry import RetrievedToolResult
@@ -951,6 +952,11 @@ def _build_sub_agent_system_prompt(spec: SubAgentSpec) -> str:
 # structured read_paths grant a file; this line tells the worker which ones it got.
 _READ_GRANT_LINE_TEMPLATE = "Files you may read with the read tool: {files}."
 
+# FRE-1779: a helper does not hear the primary's deployment context, so it is told where
+# Seshat's code is (any file under /app/src is readable, FRE-1778). Production only, as the
+# executor gates its deployment-context block: only the gateway image has /app/src.
+_DEPLOYED_CODE_LINE = "Seshat's deployed code is at /app/src and is readable with `read`."
+
 
 def _build_task_message(
     spec: SubAgentSpec,
@@ -963,7 +969,8 @@ def _build_task_message(
     Everything per-task lives here rather than in the system prompt, which is
     shared per type: the turn's date (on 2026-09-10 a worker with no date spent
     all five of its rounds searching 2025 events), the sibling line, the
-    task's round budget, and the files the task names (ADR-0156 D9.4).
+    task's round budget, the files the task names (ADR-0156 D9.4), and, in production
+    for a worker that holds ``read``, where Seshat's deployed code is (FRE-1779).
 
     Args:
         spec: The sub-agent specification.
@@ -986,6 +993,8 @@ def _build_task_message(
     if read_grant is not None and read_grant.files:
         files = ", ".join(f.real_path for f in read_grant.files)
         lines.insert(1, _READ_GRANT_LINE_TEMPLATE.format(files=files))
+    if "read" in spec.tools and settings.environment == Environment.PRODUCTION:
+        lines.insert(1, _DEPLOYED_CODE_LINE)
     body = "\n".join(lines)
     if spec.turn_started_at is None:
         # A caller outside a turn. The block is omitted rather than a date being

@@ -150,6 +150,14 @@ _HTML_R = (
     f"var s=document.createElement('script');s.src='{_ORIGIN}/'+'lib/katex@0.18.2/katex.min.js';"
     "document.head.appendChild(s);</script></body></html>"
 )
+_HTML_L = (
+    "<html><body><script>"
+    f"var s=document.createElement('script');s.src='{_ORIGIN}/lib/katex@0.18.2/katex.min.js';"
+    "document.head.appendChild(s);</script></body></html>"
+)
+_HTML_OTHER_PATH = (
+    f'<html><body><img src="{_ORIGIN}/00000000-0000-0000-0000-000000000000"></body></html>'
+)
 _HTML_SRI = f'<html><head><script src="{_ORIGIN}/{_CHART}"></script></head></html>'
 
 # letter -> (owner, type, content_type, pending, title, body)
@@ -165,6 +173,8 @@ _ITEMS: dict[str, tuple[str, str, str, bool, str | None, bytes]] = {
     "M": ("A", "artifact", "text/markdown; charset=utf-8", False, "md", b"# m"),
     "R": ("A", "artifact", "text/html; charset=utf-8", False, "runtime", _HTML_R.encode()),
     "Q": ("A", "artifact", "text/html; charset=utf-8", False, "sri", _HTML_SRI.encode()),
+    "L": ("A", "artifact", "text/html; charset=utf-8", False, "literal", _HTML_L.encode()),
+    "O": ("A", "artifact", "text/html; charset=utf-8", False, "other", _HTML_OTHER_PATH.encode()),
     "H": ("A", "artifact", "text/html", False, 'Q3 "x"; y\r\nZ', b"<html>plain</html>"),
     "Z": ("B", "artifact", "text/html; charset=utf-8", False, "Z", b"<html>z</html>"),
     "CX": ("C", "artifact", "text/html; charset=utf-8", False, "C item", b"<html>c</html>"),
@@ -765,13 +775,30 @@ async def test_an_sri_failure_returns_502_and_leaves_nothing(world: World) -> No
     assert world.store.share_objects() == []
 
 
-async def test_a_snapshot_that_still_loads_from_the_artifact_host_returns_422(world: World) -> None:
+@pytest.mark.parametrize("letter", ["R", "O"])
+async def test_a_snapshot_that_still_needs_the_artifact_host_returns_422(
+    world: World, letter: str
+) -> None:
+    """R assembles the toolkit URL from parts at run time; O points at a non-/lib/ path."""
     async with _client(world) as c:
-        resp = await _create(c, world, "R")
+        resp = await _create(c, world, letter)
     assert resp.status_code == 422
-    assert resp.json()["detail"] == "this artifact loads files that a link cannot carry"
-    assert await _count_for(world, "R") == 0
+    assert resp.json()["detail"] == (
+        "this artifact loads files from the artifact host that a link cannot reach"
+    )
+    assert await _count_for(world, letter) == 0
     assert world.store.share_objects() == []
+
+
+async def test_a_literal_toolkit_url_in_script_moves_to_the_share_host(world: World) -> None:
+    """Owner decision of 2026-11-22: the share hostname serves the toolkit at /lib/."""
+    async with _client(world) as c:
+        resp = await _create(c, world, "L")
+    assert resp.status_code == 201, resp.text
+    (key,) = world.store.share_objects()
+    snapshot = world.store.objects[key].decode()
+    assert f"{_SHARE_BASE}/lib/katex@0.18.2/katex.min.js" in snapshot
+    assert "artifacts.example.com" not in snapshot
 
 
 async def test_a_put_that_wrote_and_then_failed_leaves_nothing(world: World) -> None:

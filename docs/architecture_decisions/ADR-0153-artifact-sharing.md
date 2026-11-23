@@ -573,6 +573,11 @@ all eight of master's recommendations). L1 to L11 below record them, with the de
 amendment adds share links. It does not change D1 to D11, and it does not cancel the grant tickets
 (A1.5).
 
+**Owner decision of 2026-11-22: the toolkit on the share hostname.** The share hostname also
+serves the public toolkit at `/lib/`, so that a page whose script loads a toolkit URL at run time
+works through a link. The artifact hostname stays behind Access. This decision changes L2, L5,
+L6 step 1, L7, L8, V-L5, and V-L13, and it adds one line to A1.7.
+
 ### A1.1 Context
 
 **The owner reverses answer 3.** On 2026-11-06 the owner told cc-explore: "shareable artifacts.
@@ -661,8 +666,9 @@ Done) is the only precondition, because the owner-only API (L9) needs a verified
 
 - **Hostname.** A new hostname, `share.example.com`, with its own DNS record and a new route on
   the existing artifact Worker. The Worker branches on the hostname. On the share hostname it
-  serves only `GET /s/{token}` (L6). Every other path on the share hostname returns the 404 page.
-  The artifact hostname gets no `/s/` path.
+  serves only `GET /s/{token}` (L6) and `GET /lib/<path>` (the public toolkit, L5, owner decision
+  of 2026-11-22). Every other path on the share hostname returns the 404 page. The artifact
+  hostname gets no `/s/` path.
 - **Access.** A new Cloudflare Access application whose primary domain is the share hostname,
   with one policy: decision `bypass`, include `everyone`. The bypass makes the public state an
   explicit, reviewed line of Terraform. The share hostname is not added to the `destinations` of
@@ -737,27 +743,39 @@ Done) is the only precondition, because the owner-only API (L9) needs a verified
   `inline` mode on the artifact. It writes the result to R2 at `share/{creator_user_id}/{link_id}.html`
   and stores that key in `snapshot_r2_key`. The snapshot holds the artifact's bytes at link
   creation, and nothing writes it after that, so a link always serves the same bytes.
-- **Self-contained check.** After the export, the create endpoint searches the snapshot for the
-  artifact host origin (`artifacts_public_base_url`). If the origin remains anywhere, for example
-  in a toolkit URL that script builds, the endpoint returns 422 with "this artifact loads files
-  that a link cannot carry", and writes nothing. So every snapshot that a link serves needs nothing
-  from the artifact host, and it renders for a recipient. This check decides only whether a link
-  works. It is not a security check, so ADR-0089 D1 still holds: the CSP is the boundary.
+- **Toolkit URLs move to the share hostname** (owner decision of 2026-11-22). After the export,
+  the create endpoint replaces every `{artifacts_public_base_url}/lib/` in the snapshot text with
+  `{share_public_base_url}/lib/`. This is a plain string replace, so a literal toolkit URL in a
+  script string is covered too. The share hostname serves those files (L2, and "Nothing else in
+  Seshat" below).
+- **"Needs nothing from the artifact host" check.** After the replace, the create endpoint
+  searches the snapshot for the artifact host origin (`artifacts_public_base_url`). If the origin
+  remains anywhere, for example in a URL that script assembles from parts, or in a path other than
+  `/lib/`, the endpoint returns 422 with "this artifact loads files from the artifact host that a
+  link cannot reach", and writes nothing. So every snapshot that a link serves needs nothing from
+  the artifact host, and it renders for a recipient. This check decides only whether a link works.
+  It is not a security check, so ADR-0089 D1 still holds: the CSP is the boundary.
 - **Failure cleanup.** If the export fails, the create endpoint returns 502 and writes nothing. If
   the INSERT or its commit fails after the R2 write, the endpoint deletes the snapshot object
   before it returns the error. So a failed create leaves no row and no R2 object.
 - **Uploads: the original bytes.** The Worker serves the artifact's own `r2_key`. No snapshot is
   made.
-- **Nothing else in Seshat.** The share hostname serves only `/s/{token}`. It serves no artifact by
-  id, no `/lib/` file, and no API. A page cannot reach the network (`connect-src 'none'`, L7). A
-  part of an HTML artifact that points to another URL on the artifact host does not load for a
-  recipient. This is correct, because a link opens exactly one artifact.
+- **Nothing else in Seshat.** The share hostname serves only `GET /s/{token}` and `GET /lib/<path>`.
+  Every other path returns the 404 page. It serves no artifact by id and no API. `/lib/` on the
+  share hostname serves the same pinned bytes as `/lib/` on the artifact host, with the same
+  controls (ADR-0089 D2a): executable JavaScript only under `/lib/`,
+  `X-Content-Type-Options: nosniff`, and the CORS header that an opaque-origin page needs to load
+  a toolkit file. A `/lib/` request takes no token, makes no gateway call, and counts no view. A
+  page cannot reach the network (`connect-src 'none'`, L7). A part of an HTML artifact that points
+  to another URL on the artifact host does not load for a recipient. This is correct, because a
+  link opens exactly one artifact.
 
 #### L6 — The open path: the Worker asks the gateway on every request
 
 1. **The Worker checks the request shape.** On the share hostname, the Worker accepts only `GET`
-   with a path that matches `^/s/[A-Za-z0-9_-]{43}$`. Another method returns 405. Another path
-   returns the 404 page. Neither calls the gateway.
+   with a path that matches `^/s/[A-Za-z0-9_-]{43}$`, or a `/lib/` toolkit path, which it serves
+   without the gateway (L5). Another method returns 405. Another path returns the 404 page.
+   Neither calls the gateway.
 2. **The Worker calls the gateway.** It sends `POST /internal/share-links/resolve` over the same
    route that it uses today for `/internal/artifacts/{id}`. The request carries `X-Internal-Token`
    (the existing `artifact_resolve_internal_token`) and the JSON body `{"token": "<token>"}`. The
@@ -803,16 +821,18 @@ protection.
 
 **Content-Security-Policy, by kind:**
 
-- **HTML snapshot, SVG upload, and the fixed error pages** get the **share sandbox CSP**. It is the
-  ADR-0089 D2 policy with two changes, and both make it stricter. The host-sources go, because the
-  snapshot is self-contained. `frame-ancestors` becomes `'none'`, because nothing embeds a link.
+- **HTML snapshot and the fixed error pages** get the **share sandbox CSP**. It is the ADR-0089 D2
+  policy shape with the share hostname in place of the artifact hostname, and with
+  `frame-ancestors 'none'`, because nothing embeds a link (owner decision of 2026-11-22). The
+  host-source is path-scoped to `/lib/`, so it admits only the toolkit. `connect-src` stays
+  `'none'`.
 
   ```
   default-src 'none';
-  script-src 'unsafe-inline';
-  style-src 'unsafe-inline';
-  img-src data:;
-  font-src data:;
+  script-src https://share.example.com/lib/ 'unsafe-inline';
+  style-src https://share.example.com/lib/ 'unsafe-inline';
+  img-src https://share.example.com/lib/ data:;
+  font-src https://share.example.com/lib/ data:;
   connect-src 'none';
   worker-src 'none';
   form-action 'none';
@@ -821,6 +841,10 @@ protection.
   webrtc 'block';
   sandbox allow-scripts;
   ```
+
+  An **SVG upload** gets the same policy with no host-source: `script-src 'unsafe-inline'`,
+  `style-src 'unsafe-inline'`, `img-src data:`, and `font-src data:`. Every other directive is the
+  same.
 
   `sandbox allow-scripts` without `allow-same-origin` gives the page an opaque origin, as on the
   artifact host (ADR-0089 D2 tier 1). The ADR-0089 D2 residuals (self-navigation, and WebRTC on a
@@ -837,7 +861,7 @@ protection.
 - **PNG, JPEG, GIF, WebP, and PDF** get `default-src 'none'; frame-ancestors 'none'; form-action
   'none'; base-uri 'none'`, with no `sandbox` directive. Chromium does not show a PDF in its
   built-in viewer inside a sandboxed document. These types run no page script, and SVG, the one
-  script-capable upload type, gets the sandbox CSP above. Ticket (b) confirms that each type renders
+  script-capable upload type, gets the sandbox CSP above, with no host-source. Ticket (b) confirms that each type renders
   in Chromium, Firefox, and Safari on a real iOS device with this policy. If one does not, ticket (b) records the
   smallest change and the reason here, as an implementation note.
 
@@ -853,7 +877,7 @@ text reaches a header.
 
 | Case | Status | Body |
 |---|---|---|
-| Any path other than `/s/{token}`, or a malformed token | 404 | The one "not found" page |
+| Any path other than `/s/{token}` and `/lib/<path>`, or a malformed token | 404 | The one "not found" page |
 | A well-formed token with no row | 404 | The same page |
 | An expired link | 410 | The one "this link is no longer active" page |
 | A revoked link | 410 | The same page |
@@ -877,7 +901,7 @@ and revokes only the creator's own links. The owner has no access to another cre
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /api/v1/artifacts/{artifact_id}/share-links`, body `{"expires_in_days": 1 \| 7 \| 30}` (default 7) | Checks in this order: a link creator (403), then an artifact that the caller owns and that exists (404, the same as an unknown id), then a shareable item (400), then the setting (503). Then it makes the snapshot (502 on failure, 422 when the snapshot is not self-contained, L5), inserts the row, and returns 201 with `link_id`, `url`, and `expires_at`. Any other `expires_in_days` returns 422 |
+| `POST /api/v1/artifacts/{artifact_id}/share-links`, body `{"expires_in_days": 1 \| 7 \| 30}` (default 7) | Checks in this order: a link creator (403), then an artifact that the caller owns and that exists (404, the same as an unknown id), then a shareable item (400), then the setting (503). Then it makes the snapshot (502 on failure, 422 when the snapshot still loads files from the artifact host after the toolkit replace, L5), inserts the row, and returns 201 with `link_id`, `url`, and `expires_at`. Any other `expires_in_days` returns 422 |
 | `GET /api/v1/share-links` | The caller's active links, newest first: `link_id`, `artifact_id`, `artifact_title`, `created_at`, `expires_at`, `view_count`, `last_viewed_at`. No URL, token, or hash |
 | `DELETE /api/v1/share-links/{link_id}` | Sets `revoked_at = now()` on the caller's link and returns 204. A second revoke returns 204 and keeps the first time. An unknown id returns 404 |
 
@@ -1020,11 +1044,13 @@ Filed in Linear under the project *Artifact Execution Security*, state Needs App
 **The toolkit problem for HTML**
 
 - **Make `/lib/` on the artifact host public with a path-scoped bypass.** *Why rejected:* the owner
-  keeps the artifact hostname behind Access (decision 2).
+  keeps the artifact hostname behind Access (decision 2). Serving the toolkit on the share
+  hostname (owner decision of 2026-11-22) gives the same result without opening the artifact host.
 - **The Worker rewrites `/lib/` URLs in each response (HTMLRewriter).** *Cons:* toolkit URLs
   appear in attributes, in CSS `url()`, and in strings that script builds, so a rewrite misses
   cases. It parses artifact content on every request, which ADR-0089 D1 avoids. *Why rejected:* the
-  export transform runs once, checks SRI, and the L5 self-contained check refuses what it misses.
+  export transform runs once, checks SRI, and the L5 "needs nothing from the artifact host" check
+  refuses what it misses.
 - **Run the export on every open.** *Cons:* every anonymous request makes the VPS fetch and inline
   the toolkit. *Why rejected:* the snapshot does that work once, at creation.
 
@@ -1068,7 +1094,7 @@ Filed in Linear under the project *Artifact Execution Security*, state Needs App
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| A Worker branch serves private content on the share hostname | High | L2: only `/s/{token}` exists there. V-L5 checks the other paths |
+| A Worker branch serves private content on the share hostname | High | L2: only `/s/{token}` and the public `/lib/` toolkit exist there. V-L5 checks the other paths |
 | A link outlives the owner's intent | Medium | Mandatory expiry of at most 30 days (L4), immediate revoke (L6), the Shared links view (L9) |
 | The token leaks through a log | Medium | Token in the request body, no path logging, no token in events (L3, L6). V-L8 |
 | A recipient's IP address is stored | Medium | No column, no forwarded header (L6, L11). V-L7 checks the live path |
@@ -1114,10 +1140,12 @@ Access session. Each check runs on the test stack (`tests/CLAUDE.md`, FRE-375) u
 - **V-L5 — The Access boundary holds.** From a fresh browser: the share hostname serves X's link
   with no Access cookie set. `https://artifacts.example.com/{X}` (the real host) still returns the
   302 to the Access login, as ADR-0069 Verification item 2 states. The agent hostname also
-  redirects to Access. On the share hostname, `/{X}`, `/lib/katex@0.18.2/katex.min.js`, `/`, and
+  redirects to Access. On the share hostname, `/lib/katex@0.18.2/katex.min.js` returns 200 with
+  the pinned bytes (its SRI hash matches the substitution map). `/{X}`, `/`, and
   `/internal/artifacts/{X}` each return the 404 page. · **Check:** post-deploy requests, and a
   Worker routing test for the paths. · *Fails if* the artifact or agent hostname serves content
-  without Access, or any listed share path returns other than 404.
+  without Access, the toolkit file differs from the pinned bytes, or any other listed share path
+  returns other than 404.
 - **V-L6 — Pages hide what they do not need to show.** A malformed token and an unknown
   well-formed token return identical 404 status and body. An expired and a revoked link return
   identical 410 status and body. No 404, 410, or 503 body or header holds X's id, X's title, A's
@@ -1169,10 +1197,12 @@ Access session. Each check runs on the test stack (`tests/CLAUDE.md`, FRE-375) u
   parsed `filename` parameter holds a character outside `[A-Za-z0-9._-]`, has the wrong extension,
   or the header holds a carriage return or line feed.
 - **V-L13 — A failed create leaves nothing.** Four cases: a fixture whose `/lib/` asset fails its
-  SRI check (502), a fixture whose script builds a `/lib/` URL at run time (422), an injected
-  INSERT failure, and an injected commit failure. In each case no row
-  and no `share/` R2 object exist afterwards. · **Check:** an integration test per case. · *Fails
-  if* a row or an object exists after any case.
+  SRI check (502), a fixture whose script assembles the artifact-host URL from parts at run time
+  (422), an injected INSERT failure, and an injected commit failure. In each case no row and no
+  `share/` R2 object exist afterwards. A fixture whose script holds a literal artifact-host `/lib/`
+  URL succeeds (201), and its stored snapshot holds the share-host `/lib/` URL and not the
+  artifact host. · **Check:** an integration test per case. · *Fails if* a row or an object exists
+  after any failure case, or the literal-URL fixture fails or keeps the artifact host.
 - **V-L14 — A hostile page cannot reach the network.** A hostile HTML fixture and a hostile SVG
   fixture, each opened by link, try `fetch`, XHR, `WebSocket`, `sendBeacon`, an external `<img>`, an
   external font, an external `<script>`, a form POST, `window.open`, and an iframe of a foreign
@@ -1217,3 +1247,8 @@ the design choices on 2026-10-01.
 **Changed By:** adr worktree agent (Opus), for master
 **Reason:** Amendment 1 (FRE-1748). The owner reversed answer 3 on 2026-11-06 and decided the
 eight link items on 2026-11-21. Option 3 is adopted for links. D1 to D11 do not change.
+
+### 2026-11-22 - Proposed, amended
+**Changed By:** build worktree agent (Opus), for master
+**Reason:** Owner decision of 2026-11-22 (FRE-1782): the share hostname also serves the public
+toolkit at `/lib/`. L2, L5, L6 step 1, L7, L8, V-L5, and V-L13 change, and A1.7 gains one line.

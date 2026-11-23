@@ -59,7 +59,7 @@ router = APIRouter(tags=["share-links"])
 
 _EXPIRY_CHOICES: frozenset[int] = frozenset({1, 7, 30})
 _NO_STORE = {"Cache-Control": "private, no-store"}
-_NOT_SELF_CONTAINED = "this artifact loads files that a link cannot carry"
+_NEEDS_ARTIFACT_HOST = "this artifact loads files from the artifact host that a link cannot reach"
 #: Fixed bodies, so a response names nothing about the link (L8).
 _NOT_FOUND_BODY = "not found"
 _INACTIVE_BODY = "this link is no longer active"
@@ -176,11 +176,18 @@ def require_link_creator(
     return user
 
 
-async def _html_snapshot(*, r2_key: str, trace_id: str) -> str:
-    """Run the export in ``inline`` mode and check that the result is self-contained (L5).
+async def _html_snapshot(*, r2_key: str, share_base_url: str, trace_id: str) -> str:
+    """Run the export in ``inline`` mode, move toolkit URLs to the share hostname, and check (L5).
+
+    After the export, every ``{artifact origin}/lib/`` becomes ``{share base}/lib/``: the share
+    hostname serves the same pinned toolkit (owner decision of 2026-11-22). A plain string replace
+    also covers a literal URL in a script string. If the artifact host still appears after that,
+    for example in a URL that script assembles from parts, the snapshot needs the artifact host,
+    which a recipient cannot reach.
 
     Args:
         r2_key: R2 key of the artifact's HTML.
+        share_base_url: The share hostname's base URL (``share_public_base_url``).
         trace_id: Trace id for the store's failure logs.
 
     Returns:
@@ -209,10 +216,13 @@ async def _html_snapshot(*, r2_key: str, trace_id: str) -> str:
             trace_id=trace_id,
         )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY) from exc
+    snapshot = snapshot.replace(
+        f"{sub_map.origin.rstrip('/')}/lib/", f"{share_base_url.rstrip('/')}/lib/"
+    )
     artifact_host = urlparse(sub_map.origin).netloc.lower()
     if artifact_host and artifact_host in snapshot.lower():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_NOT_SELF_CONTAINED
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_NEEDS_ARTIFACT_HOST
         )
     return snapshot
 
@@ -281,7 +291,7 @@ async def _remove_orphan_snapshot(
         401: {"description": "Not authenticated via CF Access."},
         403: {"description": "The caller is not a link creator."},
         404: {"description": "Artifact not found or not owned by the caller."},
-        422: {"description": "Invalid expiry, or a snapshot that is not self-contained."},
+        422: {"description": "Invalid expiry, or a snapshot that still needs the artifact host."},
         502: {"description": "The snapshot could not be made."},
         503: {"description": "Share links are not configured on this deployment."},
     },
@@ -338,7 +348,9 @@ async def create_share_link(
     token = new_token()
     snapshot: str | None = None
     if row.type == "artifact":
-        snapshot = await _html_snapshot(r2_key=row.r2_key, trace_id=ctx.trace_id)
+        snapshot = await _html_snapshot(
+            r2_key=row.r2_key, share_base_url=base_url, trace_id=ctx.trace_id
+        )
     # The key is fixed before the put, so every failure after this line can remove the object,
     # including a put that wrote the object and then failed or was cancelled.
     snapshot_key = f"share/{user.user_id}/{link_id}.html" if snapshot is not None else None

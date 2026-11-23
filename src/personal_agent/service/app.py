@@ -1960,6 +1960,11 @@ from personal_agent.service.artifacts_router import router as artifacts_router  
 
 app.include_router(artifacts_router)
 
+# ADR-0153 Amendment 1 (FRE-1782) — share links: creator endpoints + the Worker's resolve call.
+from personal_agent.service.share_links_router import router as share_links_router  # noqa: E402
+
+app.include_router(share_links_router)
+
 # FRE-369 — user upload presign/complete endpoints.
 from personal_agent.service.uploads_router import router as uploads_router  # noqa: E402
 

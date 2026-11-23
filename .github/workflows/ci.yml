@@ -189,10 +189,10 @@ jobs:
                 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO agent;
                 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO agent;"
 
-      - name: Run integration tests (transport + schema parity)
+      - name: Run integration tests (transport + schema parity + share links)
         run: |
           PERSONAL_AGENT_INTEGRATION=1 uv run python -m pytest -m integration \
-            -k "transport or init_sql or dev_broker" \
+            -k "transport or init_sql or dev_broker or share_link" \
             -v --tb=short
         env:
           APP_ENV: test

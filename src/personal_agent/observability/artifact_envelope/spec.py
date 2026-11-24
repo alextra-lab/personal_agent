@@ -206,15 +206,9 @@ SHARE_REQUIRED_HEADERS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     }
 )
 
-#: The headers a share ``/lib/`` 200 carries instead (master, 2026-11-24, agreed
-#: with the session that builds the Worker): no-store and nosniff, the CORS grant
-#: below, and no CSP.
-SHARE_LIB_REQUIRED_HEADERS: Mapping[str, tuple[str, ...]] = MappingProxyType(
-    {
-        "cache-control": ("private", "no-store"),
-        "x-content-type-options": ("nosniff",),
-    }
-)
+#: The headers a share ``/lib/`` 200 carries (master, 2026-11-24): the same four
+#: share headers as every share response (L7), the CORS grant below, and no CSP.
+SHARE_LIB_REQUIRED_HEADERS: Mapping[str, tuple[str, ...]] = SHARE_REQUIRED_HEADERS
 
 #: The one CORS header a share ``/lib/`` 200 carries, with exactly this value. Any
 #: other ``Access-Control-*`` header (``-Allow-Credentials`` above all) fails.

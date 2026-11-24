@@ -1,6 +1,17 @@
 {
   "description": "Share-hostname responses as ADR-0153 Amendment 1 L7 and L8 specify them (FRE-1783). No share hostname exists yet, so these header sets are written from the ADR text, not captured from a live host. Re-record them from the live share hostname after the private-repo share-links change is applied. Placeholder host only (FRE-895).",
   "share_origin": "https://share.example.com",
+  "lib_200": {
+    "description": "GET /lib/katex@0.18.2/katex.min.js on the share hostname (master, 2026-11-24): the four share headers, ACAO * and no other CORS header, no CSP.",
+    "headers": [
+      ["Content-Type", "application/javascript; charset=utf-8"],
+      ["Access-Control-Allow-Origin", "*"],
+      ["X-Robots-Tag", "noindex, nofollow"],
+      ["Referrer-Policy", "no-referrer"],
+      ["Cache-Control", "private, no-store"],
+      ["X-Content-Type-Options", "nosniff"]
+    ]
+  },
   "responses": {
     "html_200": {
       "kind": "html",

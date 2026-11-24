@@ -625,9 +625,9 @@ def verify_share_lib_response(
     """Verify the share hostname's ``/lib/`` toolkit file (V-L5).
 
     The bytes must match the pinned SRI value from the substitution map. The
-    headers are the share ``/lib/`` set: ``Access-Control-Allow-Origin: *`` and
-    no other CORS header, ``Cache-Control: private, no-store``, ``nosniff``, an
-    executable script MIME, no CSP, and no cookie.
+    headers are the share ``/lib/`` set: the four share headers of L7,
+    ``Access-Control-Allow-Origin: *`` and no other CORS header, an executable
+    script MIME, no CSP, and no cookie.
 
     Args:
         status_code: The served HTTP status.

@@ -36,12 +36,7 @@ def _headers(name: str) -> list[tuple[str, str]]:
 
 
 def _lib_headers() -> list[tuple[str, str]]:
-    return [
-        ("Content-Type", "application/javascript; charset=utf-8"),
-        ("Access-Control-Allow-Origin", "*"),
-        ("Cache-Control", "private, no-store"),
-        ("X-Content-Type-Options", "nosniff"),
-    ]
+    return [(n, v) for n, v in _FIXTURES["lib_200"]["headers"]]
 
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -221,6 +216,14 @@ class TestBoundary:
     def test_404_without_error_page_csp_fails(self) -> None:
         bare = [(n, v) for n, v in _headers("not_found_404") if n != "Content-Security-Policy"]
         handler, _ = _share_host({"/": httpx.Response(404, headers=bare)})
+        assert _boundary(handler) == 1
+
+    @pytest.mark.parametrize("header", ["X-Robots-Tag", "Referrer-Policy"])
+    def test_toolkit_without_robots_or_referrer_fails(self, header: str) -> None:
+        headers = [(n, v) for n, v in _lib_headers() if n != header]
+        handler, _ = _share_host(
+            {f"/{SHARE_LIB_PROBE_PATH}": httpx.Response(200, headers=headers, content=KATEX)}
+        )
         assert _boundary(handler) == 1
 
     def test_lib_behind_access_is_named(self, capsys: pytest.CaptureFixture[str]) -> None:

@@ -303,13 +303,8 @@ _LIB_BODY = b"/* katex */"
 
 
 def _lib_headers() -> Pairs:
-    """The share /lib/ 200 header set (master, 2026-11-24, agreed with the Worker session)."""
-    return [
-        ("Content-Type", "application/javascript; charset=utf-8"),
-        ("Access-Control-Allow-Origin", "*"),
-        ("Cache-Control", "private, no-store"),
-        ("X-Content-Type-Options", "nosniff"),
-    ]
+    """The share /lib/ 200 header set from the fixture file (master, 2026-11-24)."""
+    return [(str(n), str(v)) for n, v in _FIXTURES["lib_200"]["headers"]]
 
 
 def _verify_lib(
@@ -367,9 +362,20 @@ class TestLibResponse:
         headers = _replace(_lib_headers(), header, value)
         assert "wrong_share_header" in _verify_lib(headers).failures
 
-    def test_missing_nosniff_fails(self) -> None:
-        headers = _drop(_lib_headers(), "X-Content-Type-Options")
-        assert "missing_share_header" in _verify_lib(headers).failures
+    @pytest.mark.parametrize("header", sorted(SHARE_REQUIRED_HEADERS))
+    def test_each_missing_share_header_fails(self, header: str) -> None:
+        """L7: every share response, /lib/ included, carries the four share headers."""
+        report = _verify_lib(_drop(_lib_headers(), header))
+        assert "missing_share_header" in report.failures
+        assert report.lib_ok is False
+
+    @pytest.mark.parametrize(
+        ("header", "value"),
+        [("X-Robots-Tag", "noindex"), ("Referrer-Policy", "strict-origin-when-cross-origin")],
+    )
+    def test_wrong_robots_or_referrer_fails(self, header: str, value: str) -> None:
+        headers = _replace(_lib_headers(), header, value)
+        assert "wrong_share_header" in _verify_lib(headers).failures
 
     def test_non_executable_mime_fails(self) -> None:
         headers = _replace(_lib_headers(), "Content-Type", "text/plain")

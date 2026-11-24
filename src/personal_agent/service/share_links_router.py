@@ -40,8 +40,8 @@ from personal_agent.service.database import AsyncSessionLocal, get_db_session
 from personal_agent.service.share_link_policy import (
     is_link_creator,
     is_shareable,
-    link_creator_emails,
     new_token,
+    resolve_creators,
     safe_filename,
     served_content_type,
     token_hash_of,
@@ -575,8 +575,8 @@ async def _open_link(db: AsyncSession, token_hash: bytes) -> _OpenedLink | UUID 
     """Count an open of an active link in one statement, and commit (L6 step 3).
 
     Active includes that the creator is still a link creator (L9, owner decision of 2026-11-24):
-    the statement joins ``users`` and compares the creator's email with the creator emails bound
-    as one array, so no race opens between the check and the count.
+    the statement joins ``users`` and compares the creator's email with the owner email and the
+    listed emails, both bound, so no race opens between the check and the count.
 
     Args:
         db: Database session.
@@ -588,6 +588,7 @@ async def _open_link(db: AsyncSession, token_hash: bytes) -> _OpenedLink | UUID 
     Raises:
         SQLAlchemyError: On a database failure. The caller hides its text.
     """
+    creators = resolve_creators()
     opened = (
         await db.execute(
             text(
@@ -602,12 +603,17 @@ async def _open_link(db: AsyncSession, token_hash: bytes) -> _OpenedLink | UUID 
                    AND a.id = l.artifact_id
                    AND a.upload_pending = FALSE
                    AND u.user_id = l.created_by
-                   AND lower(btrim(u.email)) = ANY(CAST(:creator_emails AS TEXT[]))
+                   AND (lower(u.email) = CAST(:owner_email AS TEXT)
+                        OR lower(btrim(u.email)) = ANY(CAST(:listed_emails AS TEXT[])))
                 RETURNING l.id, l.artifact_id, l.snapshot_r2_key,
                           a.r2_key, a.content_type, a.slug, a.title
                 """
             ),
-            {"token_hash": token_hash, "creator_emails": list(link_creator_emails())},
+            {
+                "token_hash": token_hash,
+                "owner_email": creators.owner_email,
+                "listed_emails": list(creators.listed_emails),
+            },
         )
     ).one_or_none()
     if opened is None:
@@ -668,7 +674,11 @@ def _refused(
     responses={
         401: {"description": "Missing or wrong X-Internal-Token."},
         404: {"description": "No link has this token."},
-        410: {"description": "The link expired or was revoked."},
+        410: {
+            "description": (
+                "The link expired or was revoked, or its creator is no longer a link creator."
+            )
+        },
     },
 )
 async def resolve_share_link(
@@ -693,7 +703,8 @@ async def resolve_share_link(
         The R2 key, the content type and the safe filename.
 
     Raises:
-        HTTPException: 404 for an unknown or malformed token, 410 for an expired or revoked link.
+        HTTPException: 404 for an unknown or malformed token, 410 for an expired or revoked
+            link, or a link whose creator is no longer a link creator.
     """
     ctx = SystemTraceContext.new("share_link_resolve")
     token_hash = _presented_token_hash(await request.body())

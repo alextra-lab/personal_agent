@@ -101,21 +101,40 @@ def _normalised_email(email: str) -> str:
     return email.strip().lower()
 
 
-def link_creator_emails() -> tuple[str, ...]:
-    """Return the emails of every link creator, normalised, for the resolve statement (L9).
+@dataclass(frozen=True)
+class ResolveCreators:
+    """The link creators that the resolve statement binds (L9, owner decision of 2026-11-24).
 
-    The owner (``agent_owner_email``) and each email in ``share_link_creator_emails``. Empty when
-    ``gateway_auth_enabled`` is off, because a dev-mode deployment has no link creator, as for
-    :func:`is_link_creator`. The resolve binds this tuple as one array parameter, so a link stops
-    when its creator stops being a creator (owner decision of 2026-11-24).
+    Each half uses the comparison of its create-path check, so a creator is a creator in both
+    places for the same settings and email:
+
+    Attributes:
+        owner_email: ``agent_owner_email`` lowercased, as ``settings_edit.is_owner`` compares it;
+            the statement matches it against ``lower(users.email)``. ``None`` when unset.
+        listed_emails: ``share_link_creator_emails`` trimmed and lowercased, as
+            :func:`is_link_creator` compares them; the statement matches them against
+            ``lower(btrim(users.email))``.
+    """
+
+    owner_email: str | None
+    listed_emails: tuple[str, ...]
+
+
+def resolve_creators() -> ResolveCreators:
+    """Return the creators for the resolve statement. None in dev mode, as for the create path.
 
     Returns:
-        The normalised creator emails, sorted, without duplicates or empty values.
+        The owner email and the listed emails, both empty when ``gateway_auth_enabled`` is off.
     """
     if not settings.gateway_auth_enabled:
-        return ()
-    candidates = [settings.agent_owner_email or "", *settings.share_link_creator_emails]
-    return tuple(sorted({_normalised_email(e) for e in candidates if e.strip()}))
+        return ResolveCreators(owner_email=None, listed_emails=())
+    owner = settings.agent_owner_email
+    listed = {
+        _normalised_email(email) for email in settings.share_link_creator_emails if email.strip()
+    }
+    return ResolveCreators(
+        owner_email=owner.lower() if owner else None, listed_emails=tuple(sorted(listed))
+    )
 
 
 def offers_share_links(user: RequestUser) -> bool:

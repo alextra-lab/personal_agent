@@ -796,9 +796,9 @@ Done) is the only precondition, because the owner-only API (L9) needs a verified
    the 32 bytes, then runs one `UPDATE artifact_share_links ... SET view_count = view_count + 1,
    last_viewed_at = now() ... RETURNING ...`. The statement matches only an active link whose
    artifact is not pending. The same statement checks that the link's creator is still a link
-   creator: it joins `users` on `created_by` and compares the email with the creator emails that
-   the gateway holds, bound as one array parameter (L9). So no race opens between the check and
-   the count. A revoke that commits before this statement wins, so the next open after a revoke
+   creator: it joins `users` on `created_by` and compares the email with the owner email (one
+   bound parameter) and with the listed creator emails (one bound array parameter) that the
+   gateway holds (L9). So no race opens between the check and the count. A revoke that commits before this statement wins, so the next open after a revoke
    fails.
 4. **The gateway answers.** On a match: 200 with the R2 key (the snapshot key, or the artifact's
    key for an upload), the content type, and the safe filename (L7), with
@@ -938,10 +938,11 @@ link creator: the owner, or a user whose email is in `share_link_creator_emails`
 that the gateway holds when the request runs. A change in `.env` applies at the next gateway
 start. A link whose creator is no longer a creator gets the same 410 as a revoked link, and its
 view is not counted. Nothing writes the row, so when the email is added again, the link works
-again until it expires or is revoked. The creator check uses the same email comparison as the
-create path: case-insensitive, after the surrounding whitespace is removed. As for the create
-path, a dev-mode deployment (`gateway_auth_enabled` off) has no link creator, so no link resolves
-there. The list and `can_share_link` do not change: a removed creator gets 403 and false.
+again until it expires or is revoked. The creator check uses the same email comparisons as the
+create path: the owner email is compared case-insensitively, as `settings_edit.is_owner` does, and
+a listed email is compared case-insensitively after the surrounding whitespace is removed, as the
+list check does. As for the create path, a dev-mode deployment (`gateway_auth_enabled` off) has no
+link creator, so no link resolves there. The list and `can_share_link` do not change: a removed creator gets 403 and false.
 
 **The PWA.**
 

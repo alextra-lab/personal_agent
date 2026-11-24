@@ -1097,6 +1097,11 @@ export interface ArtifactSummary {
   size_bytes: number;
   tags: string[];
   created_at: string;
+  /**
+   * True only when the caller is a link creator, owns the item, and the item is shareable
+   * (ADR-0153 L9). The PWA shows Share only when it is true; a missing value counts as false.
+   */
+  can_share_link?: boolean;
 }
 
 export interface ListArtifactsOptions {
@@ -1241,4 +1246,119 @@ export async function fetchArtifactExport(
     );
   }
   return resp.blob();
+}
+
+// --------------------------------------------------------------------------
+// FRE-1784 — Share links for anyone (ADR-0153 Amendment 1 L9)
+// --------------------------------------------------------------------------
+
+/** The expiry choices that the create endpoint accepts (ADR-0153 L4). */
+export type ShareLinkExpiryDays = 1 | 7 | 30;
+
+/**
+ * The create response. `url` holds the link's token: the PWA shows it once and never stores it.
+ */
+export interface ShareLinkCreated {
+  link_id: string;
+  url: string;
+  expires_at: string;
+}
+
+/** One active link in the caller's list. It has no URL and no token. */
+export interface ShareLinkSummary {
+  link_id: string;
+  artifact_id: string;
+  artifact_title: string | null;
+  created_at: string;
+  expires_at: string;
+  view_count: number;
+  last_viewed_at: string | null;
+}
+
+/** Raised by the share-link helpers on a non-2xx response, with the API's error text. */
+export class ShareLinkError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ShareLinkError';
+    this.status = status;
+  }
+}
+
+/** Return the `msg` of one validation error entry, or an empty string. */
+function validationMessage(entry: unknown): string {
+  const msg = (entry as { msg?: unknown } | null)?.msg;
+  return typeof msg === 'string' ? msg : '';
+}
+
+/**
+ * Build a {@link ShareLinkError} from a failed response.
+ *
+ * The message is the API's `detail` when it is a string, the joined `msg` fields of a
+ * validation error list, or else a text that names the status.
+ */
+async function shareLinkError(resp: Response): Promise<ShareLinkError> {
+  const body = (await resp.json().catch(() => null)) as { detail?: unknown } | null;
+  const detail = body?.detail;
+  let text = '';
+  if (typeof detail === 'string') {
+    text = detail;
+  } else if (Array.isArray(detail)) {
+    text = detail.map(validationMessage).filter(Boolean).join('; ');
+  }
+  return new ShareLinkError(resp.status, text || `share link request failed: ${resp.status}`);
+}
+
+/**
+ * Create a link to one item that anyone who gets it can open (ADR-0153 L9).
+ *
+ * @param artifactId - The item to share.
+ * @param expiresInDays - 1, 7 or 30.
+ * @returns The link id, the URL (shown once) and the expiry.
+ * @throws ShareLinkError with the API's text on any non-2xx response.
+ */
+export async function createShareLink(
+  artifactId: string,
+  expiresInDays: ShareLinkExpiryDays,
+): Promise<ShareLinkCreated> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/artifacts/${encodeURIComponent(artifactId)}/share-links`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ expires_in_days: expiresInDays }),
+      cache: 'no-store',
+    },
+  );
+  if (!resp.ok) throw await shareLinkError(resp);
+  return resp.json() as Promise<ShareLinkCreated>;
+}
+
+/**
+ * List the caller's active links, newest first.
+ *
+ * @throws ShareLinkError on any non-2xx response (403 when the caller is not a link creator).
+ */
+export async function listShareLinks(): Promise<ShareLinkSummary[]> {
+  const resp = await fetch(`${SESHAT_API}/api/v1/share-links`, {
+    headers: authHeaders(),
+    cache: 'no-store',
+  });
+  if (!resp.ok) throw await shareLinkError(resp);
+  const body = (await resp.json()) as { items: ShareLinkSummary[] };
+  return body.items;
+}
+
+/**
+ * Revoke one of the caller's links. The gateway answers 204, also for a second revoke.
+ *
+ * @throws ShareLinkError on any non-2xx response (404 for an unknown id).
+ */
+export async function revokeShareLink(linkId: string): Promise<void> {
+  const resp = await fetch(`${SESHAT_API}/api/v1/share-links/${encodeURIComponent(linkId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw await shareLinkError(resp);
 }

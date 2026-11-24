@@ -27,9 +27,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
-import { listArtifacts } from '@/lib/agui-client';
+import { listArtifacts, listShareLinks } from '@/lib/agui-client';
 import type { ArtifactSummary } from '@/lib/agui-client';
 import { ArtifactViewer } from './ArtifactViewer';
+import { ShareSheet } from './ShareSheet';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,6 +86,26 @@ export function ArtifactsIndex() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<ArtifactSummary | null>(null);
+  const [sharing, setSharing] = useState<ArtifactSummary | null>(null);
+  // ADR-0153 L9: the view of links is for link creators. The list endpoint answers 403 for any
+  // other caller, so a successful read is the signal. This page lists HTML artifacts only, so a
+  // creator whose shareable items are uploads still finds the view.
+  const [isLinkCreator, setIsLinkCreator] = useState(false);
+  const showSharedLinks = isLinkCreator || items.some((item) => item.can_share_link === true);
+
+  useEffect(() => {
+    let cancelled = false;
+    listShareLinks()
+      .then(() => {
+        if (!cancelled) setIsLinkCreator(true);
+      })
+      .catch(() => {
+        // 403 (not a link creator) or a network failure: the link stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     listArtifacts({ type: 'artifact', k: 50 })
@@ -106,6 +127,14 @@ export function ArtifactsIndex() {
         />
       )}
 
+      {sharing && (
+        <ShareSheet
+          artifactId={sharing.artifact_id}
+          title={sharing.title ?? sharing.slug}
+          onClose={() => setSharing(null)}
+        />
+      )}
+
       {/* Header */}
       <header className="flex items-center gap-3 px-4 border-b border-line bg-bg/80 backdrop-blur-sm flex-shrink-0"
         style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)', paddingBottom: '0.75rem' }}
@@ -118,6 +147,14 @@ export function ArtifactsIndex() {
         </Link>
         <span className="text-line" aria-hidden="true">|</span>
         <h1 className="text-sm font-semibold text-ink">Artifacts</h1>
+        {showSharedLinks && (
+          <Link
+            href="/shared-links"
+            className="ml-auto text-sm text-ink-muted hover:text-ink transition-colors"
+          >
+            Shared links
+          </Link>
+        )}
       </header>
 
       {/* List */}
@@ -178,6 +215,14 @@ export function ArtifactsIndex() {
                     >
                       Open ↗
                     </a>
+                    {item.can_share_link === true && (
+                      <button
+                        onClick={() => setSharing(item)}
+                        className="text-xs text-ink-muted hover:text-accent transition-colors"
+                      >
+                        Share
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

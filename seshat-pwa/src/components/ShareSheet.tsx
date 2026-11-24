@@ -62,6 +62,7 @@ export function ShareSheet({ artifactId, title, onClose }: ShareSheetProps) {
   const [days, setDays] = useState<ShareLinkExpiryDays>(7);
   const [link, setLink] = useState<LinkState>({ phase: 'choose' });
   const [send, setSend] = useState<SendState>({ kind: 'idle' });
+  const [shareFailed, setShareFailed] = useState(false);
   // A ref, not state: two taps in the same frame both see the state before the first render.
   const pending = useRef(false);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -108,6 +109,7 @@ export function ShareSheet({ artifactId, title, onClose }: ShareSheetProps) {
     } catch (err) {
       // The owner closed the phone's share sheet: not an error.
       if (err instanceof DOMException && err.name === 'AbortError') return;
+      setShareFailed(true);
       setSend({ kind: 'failed', message: 'Could not open the share sheet. Copy the link instead.' });
     }
   };
@@ -126,7 +128,13 @@ export function ShareSheet({ artifactId, title, onClose }: ShareSheetProps) {
 
   return (
     <>
-      <div className="fixed inset-0 z-[60] bg-black/60" aria-hidden="true" onClick={close} />
+      {/* Once the link exists, a stray tap outside the sheet must not drop the only copy of its
+          URL: only Close and Escape close the sheet then. */}
+      <div
+        className="fixed inset-0 z-[60] bg-black/60"
+        aria-hidden="true"
+        onClick={created ? undefined : close}
+      />
 
       <div
         role="dialog"
@@ -211,21 +219,25 @@ export function ShareSheet({ artifactId, title, onClose }: ShareSheetProps) {
               />
               <p className="text-xs text-ink-muted">Expires {formatExpiry(created.expiresAt)}</p>
 
-              {canWebShare() ? (
-                <button
-                  onClick={() => handleSend(created.url)}
-                  className="self-start px-4 py-2 rounded-lg text-sm font-semibold bg-accent text-white hover:bg-accent-hover transition-colors"
-                >
-                  Send
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleCopy(created.url)}
-                  className="self-start px-4 py-2 rounded-lg text-sm font-semibold bg-accent text-white hover:bg-accent-hover transition-colors"
-                >
-                  Copy link
-                </button>
-              )}
+              <div className="flex gap-2">
+                {canWebShare() && (
+                  <button
+                    onClick={() => handleSend(created.url)}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold bg-accent text-white hover:bg-accent-hover transition-colors"
+                  >
+                    Send
+                  </button>
+                )}
+                {/* Copy link without the Web Share API, or after it failed. */}
+                {(!canWebShare() || shareFailed) && (
+                  <button
+                    onClick={() => handleCopy(created.url)}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold bg-accent text-white hover:bg-accent-hover transition-colors"
+                  >
+                    Copy link
+                  </button>
+                )}
+              </div>
 
               {send.kind === 'copied' && <p className="text-xs text-ink-muted">Copied</p>}
               {send.kind === 'failed' && (

@@ -82,6 +82,16 @@ describe('SharedLinksView', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 
+  it('a 404 on revoke drops the stale row', async () => {
+    listShareLinks.mockResolvedValue(LINKS);
+    revokeShareLink.mockRejectedValue(new ShareLinkError(404, 'Not Found'));
+    render(<SharedLinksView />);
+    const rows = await screen.findAllByRole('listitem');
+    fireEvent.click(within(rows[0]).getByRole('button', { name: 'Revoke' }));
+    await vi.waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('says so when there is no active link', async () => {
     listShareLinks.mockResolvedValue([]);
     render(<SharedLinksView />);

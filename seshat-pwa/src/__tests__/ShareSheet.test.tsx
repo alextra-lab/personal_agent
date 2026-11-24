@@ -165,6 +165,32 @@ describe('ShareSheet', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('a failed share keeps the link and offers Copy link', async () => {
+    setShare(vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError')));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    setClipboard(writeText);
+    createShareLink.mockResolvedValue({ link_id: 'l-1', url: URL_, expires_at: '2026-12-01T00:00:00Z' });
+    renderSheet();
+    fireEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Send' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByDisplayValue(URL_)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+    expect(writeText).toHaveBeenCalledWith(URL_);
+  });
+
+  it('the backdrop closes the sheet before a link exists, but not after', async () => {
+    createShareLink.mockResolvedValue({ link_id: 'l-1', url: URL_, expires_at: '2026-12-01T00:00:00Z' });
+    const onClose = renderSheet();
+    const backdrop = document.querySelector('div.fixed[aria-hidden="true"]') as HTMLElement;
+    fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    await screen.findByDisplayValue(URL_);
+    fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('Escape and Close call onClose', () => {
     const onClose = renderSheet();
     fireEvent.keyDown(document, { key: 'Escape' });

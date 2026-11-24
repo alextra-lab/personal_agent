@@ -55,7 +55,12 @@ export function SharedLinksView() {
     setRevoking((prev) => new Set(prev).add(linkId));
     setRowErrors(({ [linkId]: _dropped, ...rest }) => rest);
     try {
-      await revokeShareLink(linkId);
+      try {
+        await revokeShareLink(linkId);
+      } catch (err) {
+        // 404: the caller has no link with this id any more, so the row is stale. Drop it.
+        if (!(err instanceof ShareLinkError && err.status === 404)) throw err;
+      }
       setState((prev) =>
         prev.phase === 'loaded'
           ? { phase: 'loaded', links: prev.links.filter((l) => l.link_id !== linkId) }

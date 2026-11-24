@@ -56,7 +56,7 @@ endif
         sandbox-build dev-agent-build dev-agent-toolkit dev-agent-verify dev-broker-verify prompt-show \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
-        verify-envelope verify-lib verify-artifact-e2e \
+        verify-envelope verify-lib verify-share verify-share-boundary verify-artifact-e2e \
         mypy ruff-check ruff-format \
         eval-recovery-survey eval-recovery \
         test-infra-up test-infra-down test-infra-reset test-infra-ps \
@@ -158,6 +158,21 @@ verify-envelope:
 # into the verify-envelope deploy gate once the Worker hosts /lib/ (master, post-hosting).
 verify-lib:
 	@uv run python scripts/verify_artifact_envelope.py --lib $(if $(MANIFEST),--manifest $(MANIFEST),) $(if $(ORIGIN),--origin $(ORIGIN),)
+
+# Share hostname envelope (FRE-1783 / ADR-0153 Amendment 1 L7, V-L4): one share response
+# carries the four share headers, no Set-Cookie, and the exact CSP of its KIND
+# (html = snapshot or error page, svg, media = PNG/JPEG/GIF/WebP/PDF). STATUS defaults
+# to 200, or to 405 with METHOD=POST (the 405 page). Sends no Access token. Post-deploy,
+# with the owner's OK.
+verify-share:
+	@[ -n "$(URL)" ] && [ -n "$(KIND)" ] || { echo "Usage: make verify-share URL=https://share.example.com/s/<token> KIND=html|svg|media [STATUS=404] [METHOD=POST]"; exit 1; }
+	@uv run python scripts/verify_share_envelope.py '$(URL)' --kind $(KIND) $(if $(STATUS),--status $(STATUS),) $(if $(METHOD),--method $(METHOD),)
+
+# Share hostname boundary (V-L5, share part): /lib/katex@0.18.2/katex.min.js is 200 with
+# the pinned bytes; /, /{X}, /internal/artifacts/{X} and an unknown /lib/ path are 404.
+verify-share-boundary:
+	@[ -n "$(ORIGIN)" ] && [ -n "$(ARTIFACT_ID)" ] || { echo "Usage: make verify-share-boundary ORIGIN=https://share.example.com ARTIFACT_ID=<X>"; exit 1; }
+	@uv run python scripts/verify_share_envelope.py --boundary '$(ORIGIN)' --artifact-id '$(ARTIFACT_ID)'
 
 # Hermetic E2E render harness (FRE-531 / ADR-0089 Addendum A · A7): builds real
 # SRI-pinned /lib/ fixtures (KaTeX + Chart.js, fetched from the substitution-map

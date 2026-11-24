@@ -182,3 +182,97 @@ def load_lib_manifest(
             )
         )
     return origin, tuple(assets)
+
+
+# ── Share hostname (ADR-0153 Amendment 1 L7 · FRE-1783) ───────────────────────
+#
+# CROSS-REPO SEAM, as above: the share-hostname branch of the same Worker
+# (``personal_agent_secrets``, change ``share-links``) is the authoritative
+# policy. The share origin is always a parameter, never a constant here, so no
+# real hostname lands in tracked source (FRE-895).
+
+#: ``html`` covers the HTML snapshot and every fixed error page (404, 405, 410,
+#: 503). ``svg`` is an SVG upload. ``media`` is PNG, JPEG, GIF, WebP and PDF.
+ShareCspKind = Literal["html", "svg", "media"]
+
+#: The four headers on every share response, as token lists compared without
+#: order (L7). A repeated or extra token fails.
+SHARE_REQUIRED_HEADERS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "x-robots-tag": ("noindex", "nofollow"),
+        "referrer-policy": ("no-referrer",),
+        "cache-control": ("private", "no-store"),
+        "x-content-type-options": ("nosniff",),
+    }
+)
+
+#: The headers a share ``/lib/`` 200 carries (master, 2026-11-24): the same four
+#: share headers as every share response (L7), the CORS grant below, and no CSP.
+SHARE_LIB_REQUIRED_HEADERS: Mapping[str, tuple[str, ...]] = SHARE_REQUIRED_HEADERS
+
+#: The one CORS header a share ``/lib/`` 200 carries, with exactly this value. Any
+#: other ``Access-Control-*`` header (``-Allow-Credentials`` above all) fails.
+SHARE_LIB_CORS_ORIGIN = "*"
+
+#: The served media types of each kind, mapped to the filename extension that
+#: ``Content-Disposition`` carries for each (L7).
+SHARE_MIME_EXTENSIONS: Mapping[ShareCspKind, Mapping[str, str]] = MappingProxyType(
+    {
+        "html": MappingProxyType({"text/html": "html"}),
+        "svg": MappingProxyType({"image/svg+xml": "svg"}),
+        "media": MappingProxyType(
+            {
+                "image/png": "png",
+                "image/jpeg": "jpg",
+                "image/gif": "gif",
+                "image/webp": "webp",
+                "application/pdf": "pdf",
+            }
+        ),
+    }
+)
+
+#: The toolkit file V-L5 fetches on the share hostname, keyed as in the
+#: substitution map (``config/artifact_lib_substitution_map.json``).
+SHARE_LIB_PROBE_PATH = "lib/katex@0.18.2/katex.min.js"
+
+
+def expected_share_csp_directives(
+    kind: ShareCspKind, share_origin: str
+) -> Mapping[str, frozenset[str]]:
+    """Exact ADR-0153 L7 share policy for one kind: directive → value tokens.
+
+    Args:
+        kind: ``html`` (snapshot and error pages), ``svg``, or ``media``.
+        share_origin: The share hostname origin, e.g. ``https://share.example.com``.
+
+    Returns:
+        The expected directive set. For ``html`` the host-source is path-scoped to
+        ``<share_origin>/lib/``; ``svg`` has no host-source; ``media`` has no sandbox.
+    """
+    if kind == "media":
+        return MappingProxyType(
+            {
+                "default-src": frozenset({"'none'"}),
+                "frame-ancestors": frozenset({"'none'"}),
+                "form-action": frozenset({"'none'"}),
+                "base-uri": frozenset({"'none'"}),
+            }
+        )
+    host = (f"{share_origin.rstrip('/')}/lib/",) if kind == "html" else ()
+    return MappingProxyType(
+        {
+            "default-src": frozenset({"'none'"}),
+            "script-src": frozenset({*host, "'unsafe-inline'"}),
+            "style-src": frozenset({*host, "'unsafe-inline'"}),
+            "img-src": frozenset({*host, "data:"}),
+            "font-src": frozenset({*host, "data:"}),
+            "connect-src": frozenset({"'none'"}),
+            "worker-src": frozenset({"'none'"}),
+            "form-action": frozenset({"'none'"}),
+            "base-uri": frozenset({"'none'"}),
+            "frame-ancestors": frozenset({"'none'"}),
+            "webrtc": frozenset({"'block'"}),
+            "sandbox": frozenset({"allow-scripts"}),
+        }
+    )

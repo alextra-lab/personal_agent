@@ -1,0 +1,157 @@
+{
+  "description": "Share-hostname responses as ADR-0153 Amendment 1 L7 and L8 specify them (FRE-1783). No share hostname exists yet, so these header sets are written from the ADR text, not captured from a live host. Re-record them from the live share hostname after the private-repo share-links change is applied. Placeholder host only (FRE-895).",
+  "share_origin": "https://share.example.com",
+  "lib_200": {
+    "description": "GET /lib/katex@0.18.2/katex.min.js on the share hostname (master, 2026-11-24): the four share headers, ACAO * and no other CORS header, no CSP.",
+    "headers": [
+      ["Content-Type", "application/javascript; charset=utf-8"],
+      ["Access-Control-Allow-Origin", "*"],
+      ["X-Robots-Tag", "noindex, nofollow"],
+      ["Referrer-Policy", "no-referrer"],
+      ["Cache-Control", "private, no-store"],
+      ["X-Content-Type-Options", "nosniff"]
+    ]
+  },
+  "responses": {
+    "html_200": {
+      "kind": "html",
+      "status": 200,
+      "headers": [
+        ["Content-Type", "text/html; charset=utf-8"],
+        ["Content-Security-Policy", "default-src 'none'; script-src https://share.example.com/lib/ 'unsafe-inline'; style-src https://share.example.com/lib/ 'unsafe-inline'; img-src https://share.example.com/lib/ data:; font-src https://share.example.com/lib/ data:; connect-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; webrtc 'block'; sandbox allow-scripts"],
+        ["Content-Disposition", "inline; filename=\"quarterly-report.html\""],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "svg_200": {
+      "kind": "svg",
+      "status": 200,
+      "headers": [
+        ["Content-Type", "image/svg+xml"],
+        ["Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; webrtc 'block'; sandbox allow-scripts"],
+        ["Content-Disposition", "inline; filename=\"diagram.svg\""],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "png_200": {
+      "kind": "media",
+      "status": 200,
+      "headers": [
+        ["Content-Type", "image/png"],
+        ["Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'"],
+        ["Content-Disposition", "inline; filename=\"photo.png\""],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "pdf_200": {
+      "kind": "media",
+      "status": 200,
+      "headers": [
+        ["Content-Type", "application/pdf"],
+        ["Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'"],
+        ["Content-Disposition", "inline; filename=\"artifact.pdf\""],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "jpeg_200": {
+      "kind": "media",
+      "status": 200,
+      "headers": [
+        ["Content-Type", "image/jpeg"],
+        ["Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'"],
+        ["Content-Disposition", "inline; filename=\"holiday.2026.jpg\""],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "gif_200": {
+      "kind": "media",
+      "status": 200,
+      "headers": [
+        ["Content-Type", "image/gif"],
+        ["Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'"],
+        ["Content-Disposition", "inline; filename=\"loop.gif\""],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "webp_200": {
+      "kind": "media",
+      "status": 200,
+      "headers": [
+        ["Content-Type", "image/webp"],
+        ["Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'"],
+        ["Content-Disposition", "inline; filename=\"Screenshot_1.webp\""],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "unavailable_503": {
+      "kind": "html",
+      "status": 503,
+      "headers": [
+        ["Content-Type", "text/html; charset=utf-8"],
+        ["Content-Security-Policy", "default-src 'none'; script-src https://share.example.com/lib/ 'unsafe-inline'; style-src https://share.example.com/lib/ 'unsafe-inline'; img-src https://share.example.com/lib/ data:; font-src https://share.example.com/lib/ data:; connect-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; webrtc 'block'; sandbox allow-scripts"],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "not_found_404": {
+      "kind": "html",
+      "status": 404,
+      "headers": [
+        ["Content-Type", "text/html; charset=utf-8"],
+        ["Content-Security-Policy", "default-src 'none'; script-src https://share.example.com/lib/ 'unsafe-inline'; style-src https://share.example.com/lib/ 'unsafe-inline'; img-src https://share.example.com/lib/ data:; font-src https://share.example.com/lib/ data:; connect-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; webrtc 'block'; sandbox allow-scripts"],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "method_405": {
+      "kind": "html",
+      "status": 405,
+      "headers": [
+        ["Content-Type", "text/html; charset=utf-8"],
+        ["Content-Security-Policy", "default-src 'none'; script-src https://share.example.com/lib/ 'unsafe-inline'; style-src https://share.example.com/lib/ 'unsafe-inline'; img-src https://share.example.com/lib/ data:; font-src https://share.example.com/lib/ data:; connect-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; webrtc 'block'; sandbox allow-scripts"],
+        ["Allow", "GET"],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    },
+    "gone_410": {
+      "kind": "html",
+      "status": 410,
+      "headers": [
+        ["Content-Type", "text/html; charset=utf-8"],
+        ["Content-Security-Policy", "default-src 'none'; script-src https://share.example.com/lib/ 'unsafe-inline'; style-src https://share.example.com/lib/ 'unsafe-inline'; img-src https://share.example.com/lib/ data:; font-src https://share.example.com/lib/ data:; connect-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'; webrtc 'block'; sandbox allow-scripts"],
+        ["X-Robots-Tag", "noindex, nofollow"],
+        ["Referrer-Policy", "no-referrer"],
+        ["Cache-Control", "private, no-store"],
+        ["X-Content-Type-Options", "nosniff"]
+      ]
+    }
+  }
+}

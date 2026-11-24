@@ -24,6 +24,11 @@ vi.mock('@/lib/agui-client', async () => {
 import { ShareLinkError } from '@/lib/agui-client';
 import { ArtifactCard } from '@/components/ArtifactCard';
 import { ArtifactsIndex } from '@/components/ArtifactsIndex';
+import { ShareSheetProvider } from '@/components/ShareSheetProvider';
+
+function withProvider(node: React.ReactNode) {
+  return <ShareSheetProvider>{node}</ShareSheetProvider>;
+}
 
 function meta(id: string, extra: Partial<ArtifactSummary>): ArtifactSummary {
   return {
@@ -50,7 +55,7 @@ beforeEach(() => {
 describe('ArtifactCard Share button', () => {
   it('shows Share when can_share_link is true, and opens the sheet', async () => {
     getArtifactMetadata.mockResolvedValue(meta('a-1', { can_share_link: true }));
-    render(<ArtifactCard artifactId="a-1" fallbackHref="https://artifacts.example.com/a-1" />);
+    render(withProvider(<ArtifactCard artifactId="a-1" fallbackHref="https://artifacts.example.com/a-1" />));
     fireEvent.click(await screen.findByRole('button', { name: 'Share' }));
     expect(screen.getByRole('dialog', { name: 'Share Title a-1' })).toBeInTheDocument();
   });
@@ -60,7 +65,29 @@ describe('ArtifactCard Share button', () => {
     ['missing', {}],
   ])('shows no Share when can_share_link is %s', async (_label, extra) => {
     getArtifactMetadata.mockResolvedValue(meta('a-2', extra));
-    render(<ArtifactCard artifactId="a-2" fallbackHref="https://artifacts.example.com/a-2" />);
+    render(withProvider(<ArtifactCard artifactId="a-2" fallbackHref="https://artifacts.example.com/a-2" />));
+    await screen.findByRole('button', { name: 'Expand' });
+    expect(screen.queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ShareSheetProvider', () => {
+  it('keeps the open sheet when the card that opened it remounts (history rehydrate)', async () => {
+    getArtifactMetadata.mockResolvedValue(meta('a-1', { can_share_link: true }));
+    const card = (key: string) => (
+      <ArtifactCard key={key} artifactId="a-1" fallbackHref="https://artifacts.example.com/a-1" />
+    );
+    const { rerender } = render(withProvider(card('first')));
+    fireEvent.click(await screen.findByRole('button', { name: 'Share' }));
+    // A new key unmounts the card and mounts a fresh one, as a rehydrate does.
+    rerender(withProvider(card('second')));
+    await screen.findByRole('button', { name: 'Share' });
+    expect(screen.getByRole('dialog', { name: 'Share Title a-1' })).toBeInTheDocument();
+  });
+
+  it('shows no Share without a provider', async () => {
+    getArtifactMetadata.mockResolvedValue(meta('a-1', { can_share_link: true }));
+    render(<ArtifactCard artifactId="a-1" fallbackHref="https://artifacts.example.com/a-1" />);
     await screen.findByRole('button', { name: 'Expand' });
     expect(screen.queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
   });
@@ -72,7 +99,7 @@ describe('ArtifactsIndex Share button and Shared links link', () => {
       meta('a-1', { can_share_link: true }),
       meta('a-2', { can_share_link: false }),
     ]);
-    render(<ArtifactsIndex />);
+    render(withProvider(<ArtifactsIndex />));
     expect(await screen.findAllByRole('button', { name: 'Share' })).toHaveLength(1);
     expect(screen.getByRole('link', { name: 'Shared links' })).toHaveAttribute(
       'href',
@@ -83,17 +110,24 @@ describe('ArtifactsIndex Share button and Shared links link', () => {
   it('shows no Shared links link for a caller whom the list endpoint refuses', async () => {
     listArtifacts.mockResolvedValue([meta('a-2', { can_share_link: false })]);
     listShareLinks.mockRejectedValue(new ShareLinkError(403, 'Forbidden'));
-    render(<ArtifactsIndex />);
+    render(withProvider(<ArtifactsIndex />));
     await screen.findByText('Title a-2');
     await vi.waitFor(() => expect(listShareLinks).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Shared links' })).not.toBeInTheDocument();
   });
 
+  it('shows Share on a row without a public_url', async () => {
+    listArtifacts.mockResolvedValue([meta('a-3', { can_share_link: true, public_url: null })]);
+    render(withProvider(<ArtifactsIndex />));
+    expect(await screen.findByRole('button', { name: 'Share' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand' })).not.toBeInTheDocument();
+  });
+
   it('shows the Shared links link to a creator with no shareable item on this page', async () => {
     listArtifacts.mockResolvedValue([meta('a-2', { can_share_link: false })]);
     listShareLinks.mockResolvedValue([]);
-    render(<ArtifactsIndex />);
+    render(withProvider(<ArtifactsIndex />));
     expect(await screen.findByRole('link', { name: 'Shared links' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
   });

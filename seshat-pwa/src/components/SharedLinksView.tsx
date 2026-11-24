@@ -8,7 +8,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
 import { ShareLinkError, listShareLinks, revokeShareLink } from '@/lib/agui-client';
@@ -35,6 +35,7 @@ export function SharedLinksView() {
   const [state, setState] = useState<ListState>({ phase: 'loading' });
   const [revoking, setRevoking] = useState<ReadonlySet<string>>(new Set());
   const [rowErrors, setRowErrors] = useState<Readonly<Record<string, string>>>({});
+  const inFlight = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +52,9 @@ export function SharedLinksView() {
   }, []);
 
   const handleRevoke = async (linkId: string) => {
-    if (revoking.has(linkId)) return;
+    // A ref, not state: two taps in the same frame both see the state before the first render.
+    if (inFlight.current.has(linkId)) return;
+    inFlight.current.add(linkId);
     setRevoking((prev) => new Set(prev).add(linkId));
     setRowErrors(({ [linkId]: _dropped, ...rest }) => rest);
     try {
@@ -72,6 +75,7 @@ export function SharedLinksView() {
         [linkId]: err instanceof Error ? err.message : 'Could not revoke the link.',
       }));
     } finally {
+      inFlight.current.delete(linkId);
       setRevoking((prev) => {
         const next = new Set(prev);
         next.delete(linkId);

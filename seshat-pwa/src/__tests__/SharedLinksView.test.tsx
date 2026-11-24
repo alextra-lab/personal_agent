@@ -72,6 +72,18 @@ describe('SharedLinksView', () => {
     expect(revokeShareLink).toHaveBeenCalledWith('l-1');
   });
 
+  it('a double tap on Revoke sends one DELETE', async () => {
+    listShareLinks.mockResolvedValue(LINKS);
+    revokeShareLink.mockResolvedValue(undefined);
+    render(<SharedLinksView />);
+    const rows = await screen.findAllByRole('listitem');
+    const revoke = within(rows[0]).getByRole('button', { name: 'Revoke' });
+    fireEvent.click(revoke);
+    fireEvent.click(revoke);
+    await vi.waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
+    expect(revokeShareLink).toHaveBeenCalledTimes(1);
+  });
+
   it('a failed revoke keeps the row and shows the API text', async () => {
     listShareLinks.mockResolvedValue(LINKS);
     revokeShareLink.mockRejectedValue(new ShareLinkError(503, 'Service Unavailable'));

@@ -30,7 +30,7 @@ import Link from 'next/link';
 import { listArtifacts, listShareLinks } from '@/lib/agui-client';
 import type { ArtifactSummary } from '@/lib/agui-client';
 import { ArtifactViewer } from './ArtifactViewer';
-import { ShareSheet } from './ShareSheet';
+import { useShareSheet } from './ShareSheetProvider';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,7 +86,7 @@ export function ArtifactsIndex() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<ArtifactSummary | null>(null);
-  const [sharing, setSharing] = useState<ArtifactSummary | null>(null);
+  const shareSheet = useShareSheet();
   // ADR-0153 L9: the view of links is for link creators. The list endpoint answers 403 for any
   // other caller, so a successful read is the signal. This page lists HTML artifacts only, so a
   // creator whose shareable items are uploads still finds the view.
@@ -124,14 +124,6 @@ export function ArtifactsIndex() {
           title={viewing.title}
           contentType={viewing.content_type}
           onClose={() => setViewing(null)}
-        />
-      )}
-
-      {sharing && (
-        <ShareSheet
-          artifactId={sharing.artifact_id}
-          title={sharing.title ?? sharing.slug}
-          onClose={() => setSharing(null)}
         />
       )}
 
@@ -215,15 +207,16 @@ export function ArtifactsIndex() {
                     >
                       Open ↗
                     </a>
-                    {item.can_share_link === true && (
-                      <button
-                        onClick={() => setSharing(item)}
-                        className="text-xs text-ink-muted hover:text-accent transition-colors"
-                      >
-                        Share
-                      </button>
-                    )}
                   </div>
+                )}
+                {/* A share link does not need the artifact host, so Share does not need public_url. */}
+                {shareSheet && item.can_share_link === true && (
+                  <button
+                    onClick={() => shareSheet.openShareSheet(item.artifact_id, item.title ?? item.slug)}
+                    className="text-xs text-ink-muted hover:text-accent transition-colors flex-shrink-0"
+                  >
+                    Share
+                  </button>
                 )}
               </div>
             ))}

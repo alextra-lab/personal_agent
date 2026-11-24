@@ -23,11 +23,12 @@ function mockFetchOnce(status: number, body: unknown = null) {
       return body;
     }),
   });
-  global.fetch = fn as unknown as typeof fetch;
+  vi.stubGlobal('fetch', fn);
   return fn;
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 

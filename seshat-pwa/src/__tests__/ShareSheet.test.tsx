@@ -40,8 +40,12 @@ beforeEach(() => {
   createShareLink.mockReset();
 });
 
+const ORIGINAL_CLIPBOARD = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+
 afterEach(() => {
   setShare(undefined);
+  if (ORIGINAL_CLIPBOARD) Object.defineProperty(navigator, 'clipboard', ORIGINAL_CLIPBOARD);
+  else delete (navigator as { clipboard?: unknown }).clipboard;
 });
 
 describe('ShareSheet', () => {

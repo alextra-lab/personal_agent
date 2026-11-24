@@ -5,6 +5,7 @@ import './globals.css';
 import { RegisterSW } from '@/components/RegisterSW';
 import { RuntimeConfigProvider } from '@/components/RuntimeConfigProvider';
 import { SafeAreaDebugOverlay } from '@/components/SafeAreaDebugOverlay';
+import { ShareSheetProvider } from '@/components/ShareSheetProvider';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 // Curated artifact toolkit alignment (FRE-532): bundle our own pinned copies of
 // the toolkit's chat-render stylesheets, ordered after Tailwind layers.
@@ -100,7 +101,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
           gatewayToken={gatewayToken}
           observeUrl={observeUrl}
         >
-          {children}
+          <ShareSheetProvider>{children}</ShareSheetProvider>
         </RuntimeConfigProvider>
       </body>
     </html>

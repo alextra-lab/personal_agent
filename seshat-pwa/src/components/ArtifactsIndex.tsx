@@ -27,9 +27,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
-import { listArtifacts } from '@/lib/agui-client';
+import { listArtifacts, listShareLinks } from '@/lib/agui-client';
 import type { ArtifactSummary } from '@/lib/agui-client';
 import { ArtifactViewer } from './ArtifactViewer';
+import { useShareSheet } from './ShareSheetProvider';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,6 +86,26 @@ export function ArtifactsIndex() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<ArtifactSummary | null>(null);
+  const shareSheet = useShareSheet();
+  // ADR-0153 L9: the view of links is for link creators. The list endpoint answers 403 for any
+  // other caller, so a successful read is the signal. This page lists HTML artifacts only, so a
+  // creator whose shareable items are uploads still finds the view.
+  const [isLinkCreator, setIsLinkCreator] = useState(false);
+  const showSharedLinks = isLinkCreator || items.some((item) => item.can_share_link === true);
+
+  useEffect(() => {
+    let cancelled = false;
+    listShareLinks()
+      .then(() => {
+        if (!cancelled) setIsLinkCreator(true);
+      })
+      .catch(() => {
+        // 403 (not a link creator) or a network failure: the link stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     listArtifacts({ type: 'artifact', k: 50 })
@@ -118,6 +139,14 @@ export function ArtifactsIndex() {
         </Link>
         <span className="text-line" aria-hidden="true">|</span>
         <h1 className="text-sm font-semibold text-ink">Artifacts</h1>
+        {showSharedLinks && (
+          <Link
+            href="/shared-links"
+            className="ml-auto text-sm text-ink-muted hover:text-ink transition-colors"
+          >
+            Shared links
+          </Link>
+        )}
       </header>
 
       {/* List */}
@@ -179,6 +208,15 @@ export function ArtifactsIndex() {
                       Open ↗
                     </a>
                   </div>
+                )}
+                {/* A share link does not need the artifact host, so Share does not need public_url. */}
+                {shareSheet && item.can_share_link === true && (
+                  <button
+                    onClick={() => shareSheet.openShareSheet(item.artifact_id, item.title ?? item.slug)}
+                    className="text-xs text-ink-muted hover:text-accent transition-colors flex-shrink-0"
+                  >
+                    Share
+                  </button>
                 )}
               </div>
             ))}

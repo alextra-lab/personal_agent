@@ -51,6 +51,7 @@ import { useEffect, useState } from 'react';
 import { getArtifactMetadata, postCardClick } from '@/lib/agui-client';
 import type { ArtifactSummary } from '@/lib/agui-client';
 import { ArtifactViewer } from './ArtifactViewer';
+import { useShareSheet } from './ShareSheetProvider';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -109,6 +110,7 @@ export function ArtifactCard({ artifactId, fallbackHref, sessionId }: ArtifactCa
   const [meta, setMeta] = useState<ArtifactSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [viewerOpen, setViewerOpen] = useState(false);
+  const shareSheet = useShareSheet();
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -193,6 +195,15 @@ export function ArtifactCard({ artifactId, fallbackHref, sessionId }: ArtifactCa
           >
             Open ↗
           </a>
+          {/* ADR-0153 L9: Share only where the gateway says a link works. */}
+          {shareSheet && meta.can_share_link === true && (
+            <button
+              onClick={() => shareSheet.openShareSheet(artifactId, meta.title ?? meta.slug)}
+              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:text-accent hover:bg-line/40 text-ink-muted transition-colors"
+            >
+              Share
+            </button>
+          )}
         </div>
       </div>
 

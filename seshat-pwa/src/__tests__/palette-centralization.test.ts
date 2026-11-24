@@ -52,6 +52,9 @@ const CONVERTED_FILES = [
   'components/ArtifactsIndex.tsx',
   'components/ObserveView.tsx',
   'components/MermaidBlock.tsx',
+  // FRE-1784 — the share sheet and the Shared links view.
+  'components/ShareSheet.tsx',
+  'components/SharedLinksView.tsx',
 ];
 
 // Matches bg-/text-/border-/ring-/divide-/from-/to- slate or blue utilities,

@@ -291,6 +291,13 @@ class TestSeededNegatives:
     def test_error_page_needs_no_content_disposition(self) -> None:
         assert _verify("gone_410").envelope_ok is True
 
+    @pytest.mark.parametrize("name", ["not_found_404", "gone_410", "unavailable_503"])
+    def test_error_page_with_a_filename_fails(self, name: str) -> None:
+        """A filename on an error page names the artifact (L8)."""
+        _, _, headers = _fixture(name)
+        headers = [*headers, ("Content-Disposition", 'inline; filename="q3-plan.html"')]
+        assert "unexpected_content_disposition" in _verify(name, headers).failures
+
 
 _LIB_BODY = b"/* katex */"
 

@@ -48,16 +48,30 @@ _KINDS: tuple[ShareCspKind, ...] = ("html", "svg", "media")
 _UNKNOWN_LIB_PATH = "lib/katex@0.18.2/not-in-the-toolkit.js"
 
 
+_DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
 def _origin_of(url: str) -> str:
-    """Return ``scheme://host[:port]`` of ``url``."""
+    """Return the serialized origin of ``url``: lowercase, no default port.
+
+    Raises:
+        ValueError: If ``url`` has no scheme or host, or a malformed port.
+    """
     parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}"
+    scheme = parts.scheme.lower()
+    host = parts.hostname
+    if not scheme or not host:
+        raise ValueError("URL needs a scheme and a host")
+    port = parts.port
+    suffix = f":{port}" if port is not None and port != _DEFAULT_PORTS.get(scheme) else ""
+    return f"{scheme}://{host}{suffix}"
 
 
 def _check_one(
     client: httpx.Client,
     url: str,
     *,
+    origin: str,
     kind: ShareCspKind,
     expected_status: int,
     method: str,
@@ -80,7 +94,7 @@ def _check_one(
         status_code,
         header_pairs,
         kind=kind,
-        share_origin=_origin_of(url),
+        share_origin=origin,
         expected_status=expected_status,
     )
     if report.envelope_ok:
@@ -107,6 +121,9 @@ def _check_lib(client: httpx.Client, origin: str) -> bool:
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
         print(f"  FAIL  {label}  (request failed: {type(exc).__name__})")
         return False
+    if classify_access_denied(int(response.status_code), list(response.headers.multi_items())):
+        print(f"  FAIL  {label}  (Cloudflare Access intercepted it, HTTP {response.status_code})")
+        return False
     report = verify_share_lib_response(
         int(response.status_code),
         list(response.headers.multi_items()),
@@ -132,7 +149,15 @@ def _check_boundary(client: httpx.Client, origin: str, artifact_id: str) -> bool
     results = [_check_lib(client, origin)]
     for label, url in not_found.items():
         results.append(
-            _check_one(client, url, kind="html", expected_status=404, method="GET", label=label)
+            _check_one(
+                client,
+                url,
+                origin=origin,
+                kind="html",
+                expected_status=404,
+                method="GET",
+                label=label,
+            )
         )
     return all(results)
 
@@ -155,24 +180,41 @@ def run(argv: Sequence[str] | None = None, *, client: httpx.Client | None = None
     )
     parser.add_argument("--kind", choices=_KINDS, help="html (snapshot or error page), svg, media")
     parser.add_argument(
-        "--status", type=int, default=200, help="Expected HTTP status (default 200)"
+        "--status",
+        type=int,
+        default=None,
+        help="Expected HTTP status (default 200, or 405 with --method POST)",
     )
-    parser.add_argument("--method", choices=("GET", "POST"), default="GET")
+    parser.add_argument("--method", choices=("GET", "POST"), default=None)
     parser.add_argument("--boundary", metavar="ORIGIN", help="Run the V-L5 path checks on ORIGIN")
     parser.add_argument("--artifact-id", help="The artifact id X used by --boundary")
     args = parser.parse_args(argv)
 
     if args.boundary:
+        if args.url or args.kind or args.status is not None or args.method is not None:
+            parser.error("--boundary takes no share URL, --kind, --status or --method")
         if not args.artifact_id:
             parser.error("--boundary needs --artifact-id")
-        origin = args.boundary.rstrip("/")
+        if urlsplit(args.boundary).path not in ("", "/") or urlsplit(args.boundary).query:
+            parser.error("--boundary takes an origin, e.g. https://share.example.com")
+        target = args.boundary
     else:
         if not args.url or not args.kind:
             parser.error("a share URL and --kind are required unless --boundary is given")
-        origin = _origin_of(args.url)
+        method: str = args.method or "GET"
+        expected_status: int = (
+            args.status if args.status is not None else (405 if method == "POST" else 200)
+        )
+        if expected_status != 200 and args.kind != "html":
+            parser.error("an error page is always --kind html (ADR-0153 L7)")
+        target = args.url
+    try:
+        origin = _origin_of(target)
+    except ValueError:
+        parser.error("not a valid http(s) URL")
 
     own_client = client is None
-    http = client or httpx.Client(timeout=10.0, follow_redirects=False)
+    http = client or httpx.Client(timeout=10.0, follow_redirects=False, trust_env=False)
     try:
         print(f"share origin: {origin}")
         if args.boundary:
@@ -181,10 +223,11 @@ def run(argv: Sequence[str] | None = None, *, client: httpx.Client | None = None
             ok = _check_one(
                 http,
                 args.url,
+                origin=origin,
                 kind=cast(ShareCspKind, args.kind),
-                expected_status=args.status,
-                method=args.method,
-                label=f"{args.method} share URL",
+                expected_status=expected_status,
+                method=method,
+                label=f"{method} share URL",
             )
     finally:
         if own_client:

@@ -162,7 +162,8 @@ verify-lib:
 # Share hostname envelope (FRE-1783 / ADR-0153 Amendment 1 L7, V-L4): one share response
 # carries the four share headers, no Set-Cookie, and the exact CSP of its KIND
 # (html = snapshot or error page, svg, media = PNG/JPEG/GIF/WebP/PDF). STATUS defaults
-# to 200; METHOD=POST checks the 405 page. Sends no Access token. Post-deploy, owner's OK.
+# to 200, or to 405 with METHOD=POST (the 405 page). Sends no Access token. Post-deploy,
+# with the owner's OK.
 verify-share:
 	@[ -n "$(URL)" ] && [ -n "$(KIND)" ] || { echo "Usage: make verify-share URL=https://share.example.com/s/<token> KIND=html|svg|media [STATUS=404] [METHOD=POST]"; exit 1; }
 	@uv run python scripts/verify_share_envelope.py '$(URL)' --kind $(KIND) $(if $(STATUS),--status $(STATUS),) $(if $(METHOD),--method $(METHOD),)

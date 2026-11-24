@@ -98,11 +98,21 @@ class TestOneResponse:
         handler, _ = _share_host()
         assert _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"], handler) == 0
 
-    def test_post_gets_the_405_page(self) -> None:
+    def test_post_expects_the_405_page_by_default(self) -> None:
         handler, seen = _share_host()
-        argv = [f"{ORIGIN}/s/{TOKEN}", "--kind", "html", "--status", "405", "--method", "POST"]
-        assert _run(argv, handler) == 0
+        assert _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html", "--method", "POST"], handler) == 0
         assert seen[0].method == "POST"
+
+    def test_error_status_needs_html_kind(self) -> None:
+        handler, _ = _share_host()
+        with pytest.raises(SystemExit):
+            _run([f"{ORIGIN}/s/bad", "--kind", "media", "--status", "404"], handler)
+
+    def test_origin_is_normalized(self) -> None:
+        """Host case and a default port do not change the expected host-source."""
+        handler, _ = _share_host()
+        url = f"https://Share.Example.com:443/s/{TOKEN}"
+        assert _run([url, "--kind", "html"], handler) == 0
 
     def test_wrong_kind_fails(self) -> None:
         handler, _ = _share_host()
@@ -145,7 +155,7 @@ class TestOneResponse:
 
         monkeypatch.setattr(verify_share_envelope.httpx, "Client", client_factory)
         assert verify_share_envelope.run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"]) == 0
-        assert made == [{"timeout": 10.0, "follow_redirects": False}]
+        assert made == [{"timeout": 10.0, "follow_redirects": False, "trust_env": False}]
         assert not any(name.lower().startswith("cf-access") for name in seen[0].headers)
 
     @pytest.mark.parametrize("status", [200, 500])
@@ -156,9 +166,18 @@ class TestOneResponse:
         _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"], handler)
         assert TOKEN not in capsys.readouterr().out
 
-    def test_malformed_url_fails_without_traceback(self) -> None:
+    @pytest.mark.parametrize("url", ["https://share.example.com:abc/s/x", "share.example.com/s/x"])
+    def test_malformed_url_is_a_usage_error(self, url: str) -> None:
         handler, _ = _share_host()
-        assert _run(["https://share.example.com:abc/s/x", "--kind", "html"], handler) == 1
+        with pytest.raises(SystemExit) as exc:
+            _run([url, "--kind", "html"], handler)
+        assert exc.value.code == 2
+
+    def test_invalid_url_at_request_time_fails_cleanly(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.InvalidURL("bad")
+
+        assert _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"], handler) == 1
 
 
 class TestBoundary:
@@ -204,7 +223,25 @@ class TestBoundary:
         handler, _ = _share_host({"/": httpx.Response(404, headers=bare)})
         assert _boundary(handler) == 1
 
-    def test_boundary_needs_artifact_id(self) -> None:
-        handler, _ = _share_host()
+    def test_lib_behind_access_is_named(self, capsys: pytest.CaptureFixture[str]) -> None:
+        redirect = httpx.Response(
+            302, headers={"Location": "https://team.cloudflareaccess.com/login"}
+        )
+        handler, _ = _share_host({f"/{SHARE_LIB_PROBE_PATH}": redirect})
+        assert _boundary(handler) == 1
+        assert "Cloudflare Access intercepted it" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--boundary", ORIGIN],
+            ["--boundary", f"{ORIGIN}/s", "--artifact-id", ARTIFACT_ID],
+            [f"{ORIGIN}/s/{TOKEN}", "--kind", "svg", "--boundary", ORIGIN, "--artifact-id", "x"],
+            ["--boundary", ORIGIN, "--artifact-id", ARTIFACT_ID, "--status", "404"],
+        ],
+    )
+    def test_bad_boundary_arguments_are_usage_errors(self, argv: list[str]) -> None:
+        handler, seen = _share_host()
         with pytest.raises(SystemExit):
-            _run(["--boundary", ORIGIN], handler)
+            _run(argv, handler)
+        assert seen == []

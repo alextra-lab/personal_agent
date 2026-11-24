@@ -580,13 +580,16 @@ def verify_share_response(
     else:
         mime_ok = True
 
-    # ── Content-Disposition (a served link only) ─────────────────────────────
+    # ── Content-Disposition: a served link has one; an error page has none,
+    # since a filename names the artifact (L8) ────────────────────────────────
     disposition = _single(pairs, "content-disposition")
     if expected_status == 200:
         match = _SHARE_DISPOSITION_RE.fullmatch(disposition or "")
         expected_ext = allowed.get(parsed[0]) if parsed is not None else None
         if match is None or match.group("ext") != expected_ext:
             failures.append("bad_content_disposition")
+    elif disposition is not None:
+        failures.append("unexpected_content_disposition")
 
     return ShareEnvelopeReport(
         envelope_ok=not failures,

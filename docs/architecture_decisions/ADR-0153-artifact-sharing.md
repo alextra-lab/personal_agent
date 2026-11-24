@@ -578,6 +578,12 @@ serves the public toolkit at `/lib/`, so that a page whose script loads a toolki
 works through a link. The artifact hostname stays behind Access. This decision changes L2, L5,
 L6 step 1, L7, L8, V-L5, and V-L13, and it adds one line to A1.7.
 
+**Owner decision of 2026-11-24: a link stops when its creator stops being a creator ("Stop").**
+A link works only while its creator is still a link creator. When an email is removed from
+`share_link_creator_emails`, every link that this user created stops at once. Nothing writes the
+row, so when the email is added again, the links work again until they expire or are revoked. This
+decision changes the "Active link" term, L6 step 3, L8, and L9, and it adds V-L16 (FRE-1785).
+
 ### A1.1 Context
 
 **The owner reverses answer 3.** On 2026-11-06 the owner told cc-explore: "shareable artifacts.
@@ -606,7 +612,8 @@ artifact in a browser. The owner keeps both: links ship first, and the grants ar
 - **Link:** one row of `artifact_share_links` and its URL. A link opens exactly one artifact.
 - **Token:** the random secret in the link URL.
 - **Recipient:** anyone who opens a link. A recipient has no Seshat identity.
-- **Active link:** a link with `revoked_at IS NULL` and `expires_at > now()`.
+- **Active link:** a link with `revoked_at IS NULL` and `expires_at > now()`, whose creator is
+  still a link creator (L9, owner decision of 2026-11-24).
 - **Share hostname:** the new public hostname that serves links. This ADR writes it as
   `share.example.com`. The real name lives only in the private secrets repo and in `.env`.
 - **The owner:** the deployment owner. Two checks decide it together. `get_request_user` verifies
@@ -762,10 +769,12 @@ Done) is the only precondition, because the owner-only API (L9) needs a verified
   made.
 - **Nothing else in Seshat.** The share hostname serves only `GET /s/{token}` and `GET /lib/<path>`.
   Every other path returns the 404 page. It serves no artifact by id and no API. `/lib/` on the
-  share hostname serves the same pinned bytes as `/lib/` on the artifact host, with the same
-  controls (ADR-0089 D2a): executable JavaScript only under `/lib/`,
-  `X-Content-Type-Options: nosniff`, and the CORS header that an opaque-origin page needs to load
-  a toolkit file. A `/lib/` request takes no token, makes no gateway call, and counts no view. A
+  share hostname serves the same pinned bytes as `/lib/` on the artifact host, with executable
+  JavaScript only under `/lib/` and `X-Content-Type-Options: nosniff` (ADR-0089 D2a). Its 200
+  responses also carry `Access-Control-Allow-Origin: *`, with no credentials header and no other
+  CORS header, because an opaque-origin page loads fonts and `integrity` scripts in CORS mode. The
+  artifact host does not change. A `/lib/` request takes no token, makes no gateway call, and
+  counts no view. A
   page cannot reach the network (`connect-src 'none'`, L7). A part of an HTML artifact that points
   to another URL on the artifact host does not load for a recipient. This is correct, because a
   link opens exactly one artifact.
@@ -786,8 +795,11 @@ Done) is the only precondition, because the owner-only API (L9) needs a verified
    failure). It takes no JWT and does not call `get_request_user`. It decodes the token and hashes
    the 32 bytes, then runs one `UPDATE artifact_share_links ... SET view_count = view_count + 1,
    last_viewed_at = now() ... RETURNING ...`. The statement matches only an active link whose
-   artifact is not pending. A revoke that commits before this statement wins, so the next open
-   after a revoke fails.
+   artifact is not pending. The same statement checks that the link's creator is still a link
+   creator: it joins `users` on `created_by` and compares the email with the creator emails that
+   the gateway holds, bound as one array parameter (L9). So no race opens between the check and
+   the count. A revoke that commits before this statement wins, so the next open after a revoke
+   fails.
 4. **The gateway answers.** On a match: 200 with the R2 key (the snapshot key, or the artifact's
    key for an upload), the content type, and the safe filename (L7), with
    `Cache-Control: private, no-store`. With no match, a second lookup by `token_hash` decides the
@@ -818,6 +830,10 @@ protection.
 - `X-Content-Type-Options: nosniff`
 - no `Set-Cookie` from the Worker. If a zone feature adds a cookie at the edge, ticket (b) records
   which one, and the owner decides.
+
+These headers apply to the share `/lib/` responses too, so `Cache-Control: private, no-store` is
+on every toolkit file. A share `/lib/` 200 response carries no Content-Security-Policy. A bad
+`/lib/` path gets the 404 page with the error-page CSP below.
 
 **Content-Security-Policy, by kind:**
 
@@ -881,6 +897,7 @@ text reaches a header.
 | A well-formed token with no row | 404 | The same page |
 | An expired link | 410 | The one "this link is no longer active" page |
 | A revoked link | 410 | The same page |
+| A link whose creator is no longer a link creator (L9) | 410 | The same page |
 | A gateway or R2 failure | 503 | The one "try again later" page |
 
 - **Existence hiding where it matters.** A guessed token is an unknown token, so a scan gets only
@@ -914,6 +931,17 @@ a link". On 2026-11-21 the owner named two creators: the owner and one second us
 FRE-1748). A user becomes a creator only
 when the owner adds the email to `share_link_creator_emails` and the gateway restarts, because a
 link publishes to anyone.
+
+**A link stops when its creator stops being a creator** (owner decision of 2026-11-24, "Stop").
+The resolve (L6 step 3) treats a link as active only while its creator (`created_by`) is still a
+link creator: the owner, or a user whose email is in `share_link_creator_emails` in the settings
+that the gateway holds when the request runs. A change in `.env` applies at the next gateway
+start. A link whose creator is no longer a creator gets the same 410 as a revoked link, and its
+view is not counted. Nothing writes the row, so when the email is added again, the link works
+again until it expires or is revoked. The creator check uses the same email comparison as the
+create path: case-insensitive, after the surrounding whitespace is removed. As for the create
+path, a dev-mode deployment (`gateway_auth_enabled` off) has no link creator, so no link resolves
+there. The list and `can_share_link` do not change: a removed creator gets 403 and false.
 
 **The PWA.**
 
@@ -1218,6 +1246,15 @@ Access session. Each check runs on the test stack (`tests/CLAUDE.md`, FRE-375) u
   shows the inactive page. · **Check:** the owner, with master watching the events. · *Fails if* any
   step fails.
 
+- **V-L16 — A link stops when its creator stops being a creator** (owner decision of
+  2026-11-24). Creator C creates a link to C's item (201), and a resolve returns 200. With C's
+  email removed from `share_link_creator_emails`, the next resolve returns 410 with a body
+  byte-identical to that of a revoked link, and `view_count` does not change. A link that the owner
+  created resolves 200 with any value of the setting, including an empty list. With C's email back
+  in the setting, the same link resolves 200 again. A seeded negative, the resolve without the
+  creator check, makes the first part fail. · **Check:** resolve tests on the test stack, and the
+  seeded negative. · *Fails if* any status, body, or count differs.
+
 V-L7 part 3 checks the address on Seshat's own path only. Cloudflare's edge sees every request,
 and this amendment does not change that (A1.2).
 
@@ -1252,3 +1289,13 @@ eight link items on 2026-11-21. Option 3 is adopted for links. D1 to D11 do not 
 **Changed By:** build worktree agent (Opus), for master
 **Reason:** Owner decision of 2026-11-22 (FRE-1782): the share hostname also serves the public
 toolkit at `/lib/`. L2, L5, L6 step 1, L7, L8, V-L5, and V-L13 change, and A1.7 gains one line.
+
+### 2026-11-24 - Proposed, amended
+**Changed By:** build worktree agent (Opus), for master
+**Reason:** Owner decision of 2026-11-24 ("Stop", FRE-1785): a link stops when its creator stops
+being a link creator. The "Active link" term, L6 step 3, L8, and L9 change, and V-L16 is added.
+Two text fixes from master with the FRE-1783 Worker session, the same day: L5 now states that a
+share `/lib/` 200 response carries `Access-Control-Allow-Origin: *` and no other CORS header,
+while the artifact host does not change; L7 now states that the share headers, with
+`Cache-Control: private, no-store`, apply to share `/lib/` responses, and that a share `/lib/` 200
+response carries no CSP.

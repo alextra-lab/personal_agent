@@ -40,6 +40,7 @@ from personal_agent.service.database import AsyncSessionLocal, get_db_session
 from personal_agent.service.share_link_policy import (
     is_link_creator,
     is_shareable,
+    link_creator_emails,
     new_token,
     safe_filename,
     served_content_type,
@@ -573,6 +574,10 @@ class _OpenedLink:
 async def _open_link(db: AsyncSession, token_hash: bytes) -> _OpenedLink | UUID | None:
     """Count an open of an active link in one statement, and commit (L6 step 3).
 
+    Active includes that the creator is still a link creator (L9, owner decision of 2026-11-24):
+    the statement joins ``users`` and compares the creator's email with the creator emails bound
+    as one array, so no race opens between the check and the count.
+
     Args:
         db: Database session.
         token_hash: SHA-256 of the presented token.
@@ -590,17 +595,19 @@ async def _open_link(db: AsyncSession, token_hash: bytes) -> _OpenedLink | UUID 
                 UPDATE artifact_share_links AS l
                    SET view_count = l.view_count + 1,
                        last_viewed_at = now()
-                  FROM artifacts AS a
+                  FROM artifacts AS a, users AS u
                  WHERE l.token_hash = :token_hash
                    AND l.revoked_at IS NULL
                    AND l.expires_at > now()
                    AND a.id = l.artifact_id
                    AND a.upload_pending = FALSE
+                   AND u.user_id = l.created_by
+                   AND lower(btrim(u.email)) = ANY(CAST(:creator_emails AS TEXT[]))
                 RETURNING l.id, l.artifact_id, l.snapshot_r2_key,
                           a.r2_key, a.content_type, a.slug, a.title
                 """
             ),
-            {"token_hash": token_hash},
+            {"token_hash": token_hash, "creator_emails": list(link_creator_emails())},
         )
     ).one_or_none()
     if opened is None:

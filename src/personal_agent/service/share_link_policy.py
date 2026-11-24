@@ -91,9 +91,31 @@ def is_link_creator(user: RequestUser) -> bool:
     if not settings.gateway_auth_enabled:
         return False
     creators = {
-        email.strip().lower() for email in settings.share_link_creator_emails if email.strip()
+        _normalised_email(email) for email in settings.share_link_creator_emails if email.strip()
     }
-    return user.email.strip().lower() in creators
+    return _normalised_email(user.email) in creators
+
+
+def _normalised_email(email: str) -> str:
+    """The email form that every creator comparison uses: no surrounding whitespace, lowercase."""
+    return email.strip().lower()
+
+
+def link_creator_emails() -> tuple[str, ...]:
+    """Return the emails of every link creator, normalised, for the resolve statement (L9).
+
+    The owner (``agent_owner_email``) and each email in ``share_link_creator_emails``. Empty when
+    ``gateway_auth_enabled`` is off, because a dev-mode deployment has no link creator, as for
+    :func:`is_link_creator`. The resolve binds this tuple as one array parameter, so a link stops
+    when its creator stops being a creator (owner decision of 2026-11-24).
+
+    Returns:
+        The normalised creator emails, sorted, without duplicates or empty values.
+    """
+    if not settings.gateway_auth_enabled:
+        return ()
+    candidates = [settings.agent_owner_email or "", *settings.share_link_creator_emails]
+    return tuple(sorted({_normalised_email(e) for e in candidates if e.strip()}))
 
 
 def offers_share_links(user: RequestUser) -> bool:

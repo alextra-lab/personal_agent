@@ -17,6 +17,7 @@ from personal_agent.config import settings
 from personal_agent.service.auth import RequestUser
 from personal_agent.service.share_link_policy import (
     is_link_creator,
+    link_creator_emails,
     is_shareable,
     new_token,
     safe_filename,
@@ -195,3 +196,31 @@ def test_the_default_list_is_empty_so_only_the_owner_creates(
     assert not is_link_creator(_user(_CREATOR))
     monkeypatch.setattr(settings, "share_link_creator_emails", ["", "  "])
     assert not is_link_creator(_user(""))
+
+
+# --- FRE-1785: the creator emails that the resolve binds -----------------------------------
+
+
+def test_the_resolve_creator_emails_are_the_owner_and_the_list_normalised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "gateway_auth_enabled", True)
+    monkeypatch.setattr(settings, "agent_owner_email", f" {_OWNER.upper()} ")
+    monkeypatch.setattr(settings, "share_link_creator_emails", [_CREATOR.upper(), "", " "])
+    assert link_creator_emails() == tuple(sorted({_OWNER, _CREATOR}))
+
+
+def test_the_resolve_creator_emails_hold_the_owner_with_an_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "gateway_auth_enabled", True)
+    monkeypatch.setattr(settings, "agent_owner_email", _OWNER)
+    monkeypatch.setattr(settings, "share_link_creator_emails", [])
+    assert link_creator_emails() == (_OWNER,)
+
+
+def test_dev_mode_has_no_resolve_creator_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "gateway_auth_enabled", False)
+    monkeypatch.setattr(settings, "agent_owner_email", _OWNER)
+    monkeypatch.setattr(settings, "share_link_creator_emails", [_CREATOR])
+    assert link_creator_emails() == ()

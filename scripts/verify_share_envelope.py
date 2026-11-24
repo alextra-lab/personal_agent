@@ -68,7 +68,7 @@ def _check_one(
         with client.stream(method, url) as response:
             status_code = int(response.status_code)
             header_pairs = list(response.headers.multi_items())
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         print(f"  FAIL  {label}  (request failed: {type(exc).__name__})")
         return False
 
@@ -104,7 +104,7 @@ def _check_lib(client: httpx.Client, origin: str) -> bool:
     label = f"/{SHARE_LIB_PROBE_PATH}"
     try:
         response = client.get(f"{origin}/{SHARE_LIB_PROBE_PATH}")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         print(f"  FAIL  {label}  (request failed: {type(exc).__name__})")
         return False
     report = verify_share_lib_response(

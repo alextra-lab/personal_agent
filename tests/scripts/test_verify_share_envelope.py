@@ -121,22 +121,44 @@ class TestOneResponse:
         handler, _ = _share_host({f"/s/{TOKEN}": httpx.Response(200, headers=headers)})
         assert _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"], handler) == 1
 
-    def test_access_redirect_fails(self) -> None:
+    def test_access_redirect_fails(self, capsys: pytest.CaptureFixture[str]) -> None:
         redirect = httpx.Response(
             302, headers={"Location": "https://team.cloudflareaccess.com/login"}
         )
         handler, _ = _share_host({f"/s/{TOKEN}": redirect})
         assert _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"], handler) == 1
+        assert "Cloudflare Access intercepted it" in capsys.readouterr().out
 
-    def test_no_access_token_and_no_token_in_output(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_default_client_sends_no_access_token_and_follows_no_redirect(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """The script's own client, not an injected one, even with Access creds in the env."""
         monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "id")
         monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "secret")
         handler, seen = _share_host()
-        assert _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"], handler) == 0
+        made: list[dict[str, object]] = []
+        real_client = httpx.Client
+
+        def client_factory(**kwargs: object) -> httpx.Client:
+            made.append(kwargs)
+            return real_client(transport=httpx.MockTransport(handler), **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(verify_share_envelope.httpx, "Client", client_factory)
+        assert verify_share_envelope.run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"]) == 0
+        assert made == [{"timeout": 10.0, "follow_redirects": False}]
         assert not any(name.lower().startswith("cf-access") for name in seen[0].headers)
+
+    @pytest.mark.parametrize("status", [200, 500])
+    def test_token_never_printed(self, status: int, capsys: pytest.CaptureFixture[str]) -> None:
+        response = httpx.Response(status, headers=[("Location", f"{ORIGIN}/s/{TOKEN}")])
+        overrides = {} if status == 200 else {f"/s/{TOKEN}": response}
+        handler, _ = _share_host(overrides)
+        _run([f"{ORIGIN}/s/{TOKEN}", "--kind", "html"], handler)
         assert TOKEN not in capsys.readouterr().out
+
+    def test_malformed_url_fails_without_traceback(self) -> None:
+        handler, _ = _share_host()
+        assert _run(["https://share.example.com:abc/s/x", "--kind", "html"], handler) == 1
 
 
 class TestBoundary:

@@ -19,6 +19,8 @@ from personal_agent.observability.artifact_envelope.spec import (
     expected_share_csp_directives,
 )
 from personal_agent.observability.artifact_envelope.verifier import (
+    ShareEnvelopeReport,
+    ShareLibReport,
     verify_share_lib_response,
     verify_share_response,
 )
@@ -51,7 +53,9 @@ def _csp(headers: Pairs) -> str:
     return next(v for n, v in headers if n.lower() == "content-security-policy")
 
 
-def _verify(name: str, headers: Pairs | None = None, *, kind: ShareCspKind | None = None):  # noqa: ANN202
+def _verify(
+    name: str, headers: Pairs | None = None, *, kind: ShareCspKind | None = None
+) -> ShareEnvelopeReport:
     fixture_kind, status, fixture_headers = _fixture(name)
     return verify_share_response(
         status,
@@ -301,9 +305,9 @@ def _lib_headers() -> Pairs:
     ]
 
 
-def _verify_lib(  # noqa: ANN202
+def _verify_lib(
     headers: Pairs | None = None, body: bytes = _LIB_BODY, status: int = 200
-):
+) -> ShareLibReport:
     return verify_share_lib_response(
         status,
         _lib_headers() if headers is None else headers,

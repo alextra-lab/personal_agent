@@ -831,9 +831,17 @@ protection.
 - no `Set-Cookie` from the Worker. If a zone feature adds a cookie at the edge, ticket (b) records
   which one, and the owner decides.
 
-These headers apply to the share `/lib/` responses too, so `Cache-Control: private, no-store` is
-on every toolkit file. A share `/lib/` 200 response carries no Content-Security-Policy. A bad
-`/lib/` path gets the 404 page with the error-page CSP below.
+**On a share `/lib/` 200 response** (a toolkit file), the security, cache, and CORS headers are:
+
+- `X-Robots-Tag: noindex, nofollow`
+- `Referrer-Policy: no-referrer`
+- `Cache-Control: private, no-store`
+- `X-Content-Type-Options: nosniff`
+- `Access-Control-Allow-Origin: *`
+- no `Content-Security-Policy`
+- no `Set-Cookie`
+
+A bad `/lib/` path gets the 404 page with the error-page CSP below.
 
 **Content-Security-Policy, by kind:**
 
@@ -1297,6 +1305,6 @@ toolkit at `/lib/`. L2, L5, L6 step 1, L7, L8, V-L5, and V-L13 change, and A1.7 
 being a link creator. The "Active link" term, L6 step 3, L8, and L9 change, and V-L16 is added.
 Two text fixes from master with the FRE-1783 Worker session, the same day: L5 now states that a
 share `/lib/` 200 response carries `Access-Control-Allow-Origin: *` and no other CORS header,
-while the artifact host does not change; L7 now states that the share headers, with
-`Cache-Control: private, no-store`, apply to share `/lib/` responses, and that a share `/lib/` 200
-response carries no CSP.
+while the artifact host does not change; L7 now lists, as one explicit list, the headers of a
+share `/lib/` 200 response: the four share headers, `Access-Control-Allow-Origin: *`, no CSP, and
+no `Set-Cookie`.

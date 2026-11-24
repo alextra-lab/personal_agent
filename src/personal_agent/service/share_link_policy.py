@@ -91,9 +91,50 @@ def is_link_creator(user: RequestUser) -> bool:
     if not settings.gateway_auth_enabled:
         return False
     creators = {
-        email.strip().lower() for email in settings.share_link_creator_emails if email.strip()
+        _normalised_email(email) for email in settings.share_link_creator_emails if email.strip()
     }
-    return user.email.strip().lower() in creators
+    return _normalised_email(user.email) in creators
+
+
+def _normalised_email(email: str) -> str:
+    """The email form that every creator comparison uses: no surrounding whitespace, lowercase."""
+    return email.strip().lower()
+
+
+@dataclass(frozen=True)
+class ResolveCreators:
+    """The link creators that the resolve statement binds (L9, owner decision of 2026-11-24).
+
+    Each half uses the comparison of its create-path check, so a creator is a creator in both
+    places for the same settings and email:
+
+    Attributes:
+        owner_email: ``agent_owner_email`` lowercased, as ``settings_edit.is_owner`` compares it;
+            the statement matches it against ``lower(users.email)``. ``None`` when unset.
+        listed_emails: ``share_link_creator_emails`` trimmed and lowercased, as
+            :func:`is_link_creator` compares them; the statement matches them against
+            ``lower(btrim(users.email))``.
+    """
+
+    owner_email: str | None
+    listed_emails: tuple[str, ...]
+
+
+def resolve_creators() -> ResolveCreators:
+    """Return the creators for the resolve statement. None in dev mode, as for the create path.
+
+    Returns:
+        The owner email and the listed emails, both empty when ``gateway_auth_enabled`` is off.
+    """
+    if not settings.gateway_auth_enabled:
+        return ResolveCreators(owner_email=None, listed_emails=())
+    owner = settings.agent_owner_email
+    listed = {
+        _normalised_email(email) for email in settings.share_link_creator_emails if email.strip()
+    }
+    return ResolveCreators(
+        owner_email=owner.lower() if owner else None, listed_emails=tuple(sorted(listed))
+    )
 
 
 def offers_share_links(user: RequestUser) -> bool:

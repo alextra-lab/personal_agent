@@ -643,6 +643,67 @@ async def test_a_resolve_blocked_behind_an_uncommitted_revoke_sees_the_revoke(wo
     assert row["view_count"] == 0
 
 
+# --- FRE-1785 / V-L16: a link stops when its creator stops being a creator -------------------
+
+
+async def _view_count(w: World, link_id: str) -> int:
+    (row,) = await _rows(w, "id = :i", i=UUID(link_id))
+    return int(row["view_count"])
+
+
+async def test_removing_the_creator_email_stops_the_link_and_adding_it_restores_it(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-1 and AC-3: 410 byte-identical to a revoked link, no count; 200 again when restored."""
+    async with _client(world) as c:
+        link = await _create(c, world, "CX", who=_C)
+        assert link.status_code == 201
+        token = _token(link)
+        assert (await _resolve(c, token)).status_code == 200
+        revoked = await _create(c, world, "P")
+        await c.delete(f"/api/v1/share-links/{revoked.json()['link_id']}", headers=_A)
+        revoked_body = (await _resolve(c, _token(revoked))).content
+
+        monkeypatch.setattr(settings, "share_link_creator_emails", [])
+        stopped = await _resolve(c, token)
+        count_after_stop = await _view_count(world, link.json()["link_id"])
+
+        monkeypatch.setattr(settings, "share_link_creator_emails", [f"  {_CREATOR.upper()} "])
+        restored = await _resolve(c, token)
+
+    assert stopped.status_code == 410
+    assert stopped.content == revoked_body
+    assert stopped.headers["cache-control"] == "private, no-store"
+    assert count_after_stop == 1
+    assert restored.status_code == 200
+    assert await _view_count(world, link.json()["link_id"]) == 2
+    (row,) = await _rows(world, "id = :i", i=UUID(link.json()["link_id"]))
+    assert row["revoked_at"] is None
+
+
+@pytest.mark.parametrize("creators", [[], [_CREATOR], ["fre1782-other@example.com"]])
+async def test_the_owners_links_resolve_with_any_creator_list(
+    world: World, monkeypatch: pytest.MonkeyPatch, creators: list[str]
+) -> None:
+    """AC-2: the owner is a creator through agent_owner_email, whatever the list holds."""
+    async with _client(world) as c:
+        token = _token(await _create(c, world, "X"))
+        monkeypatch.setattr(settings, "share_link_creator_emails", creators)
+        resp = await _resolve(c, token)
+    assert resp.status_code == 200
+
+
+async def test_with_gateway_auth_off_no_link_resolves(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As for the create path, a dev-mode deployment has no link creator."""
+    async with _client(world) as c:
+        token = _token(await _create(c, world, "X"))
+        monkeypatch.setattr(settings, "gateway_auth_enabled", False)
+        resp = await _resolve(c, token)
+    assert resp.status_code == 410
+
+
 # --- AC-4 / V-L11: views ---------------------------------------------------------------------
 
 

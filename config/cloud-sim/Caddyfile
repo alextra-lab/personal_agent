@@ -32,7 +32,13 @@
 			mode 644
 			roll_uncompressed
 		}
-		format json
+		format filter {
+			# Credential headers (FRE-1786). Caddy already redacts Cookie and Authorization.
+			request>headers>Cf-Access-Jwt-Assertion delete
+			request>headers>X-Cf-Access-Jwt-Assertion delete
+			request>headers>X-Internal-Token delete
+			wrap json
+		}
 	}
 	handle_errors {
 		@4xx expression `{http.error.status_code} >= 400 && {http.error.status_code} < 500`
@@ -115,7 +121,13 @@ localhost {
 			mode 644
 			roll_uncompressed
 		}
-		format json
+		format filter {
+			# Credential headers (FRE-1786). Caddy already redacts Cookie and Authorization.
+			request>headers>Cf-Access-Jwt-Assertion delete
+			request>headers>X-Cf-Access-Jwt-Assertion delete
+			request>headers>X-Internal-Token delete
+			wrap json
+		}
 	}
 }
 
@@ -156,7 +168,13 @@ http://{$ES_HOST:es.example.com}:80 {
 			mode 644
 			roll_uncompressed
 		}
-		format json
+		format filter {
+			# Credential headers (FRE-1786). Caddy already redacts Cookie and Authorization.
+			request>headers>Cf-Access-Jwt-Assertion delete
+			request>headers>X-Cf-Access-Jwt-Assertion delete
+			request>headers>X-Internal-Token delete
+			wrap json
+		}
 	}
 }
 
@@ -195,6 +213,8 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 			request>headers>Cf-Access-Jwt-Assertion delete
 			request>headers>Cf-Access-Client-Id delete
 			request>headers>Cf-Access-Client-Secret delete
+			request>headers>X-Cf-Access-Jwt-Assertion delete
+			request>headers>X-Internal-Token delete
 			wrap json
 		}
 	}
@@ -220,7 +240,13 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 			mode 644
 			roll_uncompressed
 		}
-		format json
+		format filter {
+			# Credential headers (FRE-1786). Caddy already redacts Cookie and Authorization.
+			request>headers>Cf-Access-Jwt-Assertion delete
+			request>headers>X-Cf-Access-Jwt-Assertion delete
+			request>headers>X-Internal-Token delete
+			wrap json
+		}
 	}
 	handle_errors {
 		@4xx expression `{http.error.status_code} >= 400 && {http.error.status_code} < 500`
